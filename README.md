@@ -110,8 +110,10 @@ with the system code page and stay garbled; for those, DynaRunFix runs DynaRun t
 - Put LE in a `le` folder next to `DynaRunFix.exe` (the release zip already has it; to fetch it yourself run
   `tools\fetch-le.ps1 -OutDir <folder>\le`). It is not installed: no context menu, nothing in the GAC.
   `le\LEConfig.xml` holds DynaRunFix's zh-TW profile.
-- When the system code page is UTF-8 and `le\LEProc.exe` exists, `DynaRunFix.exe` starts DynaRun through
-  LE and attaches the flicker fix right away. Otherwise it starts DynaRun directly, as before.
+- When the system code page is UTF-8, the system locale is Traditional Chinese (legacy code page 950) and
+  `le\LEProc.exe` exists, `DynaRunFix.exe` starts DynaRun through LE and attaches the flicker fix right
+  away. Otherwise (no UTF-8 option, or another locale, which gets just the manifest) it starts DynaRun
+  directly, as before.
 - Keep the manifest as well: only the combination shows all text correctly (manifest alone: labels
   garbled; LE alone: menus and message boxes garbled).
 - Under LE fonts are created with the Big5 charset, so Windows draws Arial and similar faces with MingLiU.
@@ -228,7 +230,8 @@ DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維�
 
 - 把 LE 放在 `DynaRunFix.exe` 旁邊的 `le` 資料夾(release zip 已附;要自己下載就執行 `tools\fetch-le.ps1 -OutDir <資料夾>\le`)。
   不需要安裝:不加右鍵選單、不寫入 GAC。`le\LEConfig.xml` 是 DynaRunFix 的 zh-TW 設定。
-- 系統字碼頁是 UTF-8 且有 `le\LEProc.exe` 時,`DynaRunFix.exe` 會透過 LE 啟動 DynaRun,並立刻掛上防閃爍修正;否則照舊直接啟動。
+- 系統字碼頁是 UTF-8、系統地區是繁體中文(舊字碼頁 950),且有 `le\LEProc.exe` 時,`DynaRunFix.exe` 會透過 LE 啟動 DynaRun,並立刻掛上防閃爍修正;
+  否則(沒開 UTF-8,或其他地區,只用 manifest)照舊直接啟動。
 - manifest 也要保留:兩者一起才會全部正常(只有 manifest:標籤亂碼;只有 LE:選單和訊息框亂碼)。
 - 透過 LE 時字型會以 Big5 字元集建立,Arial 等字型會被 Windows 換成細明體。啟動器會設定
   `DYNAFIX_FONT=Microsoft JhengHei UI`,`dynafix.dll` 在 DynaRun、OCX 元件和圖表裡把 Arial、Times New Roman、

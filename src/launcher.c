@@ -48,7 +48,10 @@ void WinMainCRTStartup(void)
         // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
         // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
         lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
-        if (GetACP() == CP_UTF8 && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
+        // Only for a Traditional Chinese system locale (legacy code page 950): the LE profile is zh-TW.
+        // Other locales get just the manifest, which selects their own legacy code page.
+        if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
+        if (GetACP() == CP_UTF8 && !lstrcmpA(ev, "950") && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
             // dynafix swaps Arial/MingLiU for this face (inherited by DynaRun through LEProc)
             if (!GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
             wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
