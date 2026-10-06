@@ -104,6 +104,19 @@ system code page and can stay garbled while the UTF-8 option is on, and files in
 may fail to open. Switching the option off (or running DynaRun through a locale emulator) fixes those too.
 On systems without the UTF-8 option none of this is needed.
 
+### Some .Dpr files will not open (empty File Run Properties, no curves)
+
+Files stored in OneDrive and marked *Always keep on this device* carry the attribute `0x80000`
+(`FILE_ATTRIBUTE_PINNED`), which does not exist on Windows 7/XP. DynaRun checks the selected file with VB's
+`GetAttr`, does not recognise the value as a normal file and silently gives up; Process Monitor shows it
+querying the attributes but never opening the file for reading. The file's contents (e.g. the `#2025-05-01#`
+date written by older versions) are not the cause: a byte-identical copy without the attribute opens fine.
+
+`dynafix.dll` fixes this in memory: the file-attribute APIs imported by `MSVBVM60.DLL` and `scrrun.dll`
+return the attributes without the cloud bits (pinned, unpinned, recall-on-open, recall-on-data-access).
+Files and OneDrive settings are not changed. The log shows `cleared cloud attributes 00080020 in
+GetFileAttributesA` when it applies. Verified on Windows 11 with DynaRun 3.26.0.
+
 ## Building
 
 Requires Visual Studio 2019 or newer with the C++ desktop workload. Run:
@@ -155,7 +168,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 修正方式
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
-除了 `%TEMP%\dynafix.log` 不寫任何檔案。
+除了 `%TEMP%\dynafix.log` 不寫任何檔案。同一個 dll 也修正 OneDrive 檔案打不開的問題(見下方)。
 
 ### 使用方式
 1. 用原廠 setup 正常安裝 DynaRun V3。
@@ -192,6 +205,16 @@ DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維�
 之後 `%TEMP%\dynafix.log` 會顯示 `ansi-codepage=950`。選單、文字框、圖表都會正常;
 部分視窗標題、核取方塊、按鈕和標籤是由 Windows 用系統字碼頁轉換的,開著 UTF-8 時仍會亂碼,含中文的資料夾路徑也可能無法開啟檔案;關閉該選項(或用 Locale Emulator 類工具啟動 DynaRun)即可完全正常。
 沒開 UTF-8 選項的電腦完全不需要這一步。
+
+### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
+放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
+DynaRun 會用 VB 的 `GetAttr` 檢查選取的檔案,不認得這個值就當成「不是一般檔案」,而且不顯示錯誤;
+Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案內容無關(例如舊版寫入的 `#2025-05-01#` 日期):
+內容完全相同、只是沒有這個屬性的副本就能正常開啟。
+
+`dynafix.dll` 只在記憶體中處理:`MSVBVM60.DLL` 和 `scrrun.dll` 匯入的檔案屬性 API 回傳時,會去掉雲端相關位元
+(pinned、unpinned、recall-on-open、recall-on-data-access)。不修改任何檔案,也不改 OneDrive 設定。
+生效時 log 會出現 `cleared cloud attributes 00080020 in GetFileAttributesA`。已在 Win11 + DynaRun 3.26.0 驗證。
 
 ### 建置
 安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`。32 位元、不依賴 C 執行階段、XP 以上皆可執行。
