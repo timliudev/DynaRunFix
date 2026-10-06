@@ -1,5 +1,7 @@
 # DynaRunFix
 
+[![build](https://github.com/timliudev/DynaRunFix/actions/workflows/build.yml/badge.svg)](https://github.com/timliudev/DynaRunFix/actions/workflows/build.yml)
+
 A small compatibility shim that stops the **main-screen flicker** of the *DynaRun V3* dynamometer
 software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively on Windows 10 / 11**.
 
@@ -41,7 +43,8 @@ log in `%TEMP%\dynafix.log`.
 ## Usage
 
 1. Install DynaRun V3 normally (use the original setup so its data files are in place).
-2. Build (see below) or download `DynaRunFix.exe` and `dynafix.dll`, and keep them **in the same folder**
+2. Download the zip from [Releases](https://github.com/timliudev/DynaRunFix/releases) (or build, see below)
+   and keep `DynaRunFix.exe` and `dynafix.dll` **in the same folder**
    (for example `%LOCALAPPDATA%\DynaRunFix`).
 3. Start DynaRun through `DynaRunFix.exe` (create a desktop shortcut to it).
    - Default target: `C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe`
@@ -172,7 +175,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 
 ### 使用方式
 1. 用原廠 setup 正常安裝 DynaRun V3。
-2. 把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**(例如 `%LOCALAPPDATA%\DynaRunFix`)。
+2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 zip(或自行建置),把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**(例如 `%LOCALAPPDATA%\DynaRunFix`)。
 3. 以後都從 `DynaRunFix.exe` 啟動(可建桌面捷徑);DynaRun 若已在執行,會直接套用修正。
    安裝在其他路徑:`DynaRunFix.exe "D:\路徑\DynaRun V3.exe"`。
 4. 若要**以系統管理員身分**執行 DynaRun,`DynaRunFix.exe` 也要以系統管理員身分執行。

@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: cmd
+        run: call build.cmd
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "DynaRunFix-$env:GITHUB_REF_NAME" } else { "DynaRunFix-$($env:GITHUB_SHA.Substring(0,7))" }
+          $pkg = "dist\$name"
+          New-Item -ItemType Directory -Force $pkg, "$pkg\tools" | Out-Null
+          Copy-Item build\DynaRunFix.exe, build\dynafix.dll, README.md, LICENSE $pkg
+          Copy-Item 'manifest\DynaRun V3.exe.manifest' $pkg
+          Copy-Item tools\register-machine-wide.ps1, build\msgspy.exe, build\msgspy.dll "$pkg\tools"
+          Compress-Archive -Path "$pkg\*" -DestinationPath "dist\$name.zip"
+          "PKG=$name" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: dist/${{ env.PKG }}.zip
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME "dist\$env:PKG.zip" --title $env:GITHUB_REF_NAME --generate-notes
