@@ -65,32 +65,56 @@ if ($FromExe) {
 }
 $Files = $Files | ForEach-Object { $_.ToLower() }
 
-function Get-Default([string]$path) { (Get-ItemProperty $path -ErrorAction SilentlyContinue).'(default)' }
+# Registry access goes through the .NET API: the PowerShell registry provider can take seconds per
+# missing HKLM key on some machines, which made the scan look hung.
+$hkcuClasses = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes')
+$hklmClasses = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Classes')
+
+function Get-Default($root, [string]$path) {
+    $k = $root.OpenSubKey($path)
+    if (-not $k) { return $null }
+    try { $k.GetValue('') } finally { $k.Close() }
+}
+function Test-Key($root, [string]$path) {
+    $k = $root.OpenSubKey($path)
+    if ($k) { $k.Close(); $true } else { $false }
+}
+function Test-TypeLibComplete([string]$tlb) {   # some version\lcid\win32 has a path
+    $t = $hklmClasses.OpenSubKey("TypeLib\$tlb")
+    if (-not $t) { return $false }
+    try {
+        foreach ($ver in $t.GetSubKeyNames()) {
+            $v = $t.OpenSubKey($ver)
+            foreach ($lcid in $v.GetSubKeyNames()) { if (Get-Default $v "$lcid\win32") { $v.Close(); return $true } }
+            $v.Close()
+        }
+        $false
+    } finally { $t.Close() }
+}
 
 # keys (relative to Software\Classes) that need copying
 $keys = [System.Collections.Generic.List[string]]::new()
 foreach ($view in 'WOW6432Node\CLSID', 'CLSID') {
-    foreach ($clsid in Get-ChildItem "HKCU:\Software\Classes\$view" -ErrorAction SilentlyContinue) {
-        $server = Get-Default "$($clsid.PSPath)\InprocServer32"
-        if (-not $server -or $Files -notcontains [IO.Path]::GetFileName($server).ToLower()) { continue }
-        $rel = "$view\$($clsid.PSChildName)"
-        if (-not (Get-Default "HKLM:\SOFTWARE\Classes\$rel\InprocServer32")) { $keys.Add($rel) }
+    $list = $hkcuClasses.OpenSubKey($view)
+    if (-not $list) { continue }
+    $names = $list.GetSubKeyNames(); $list.Close()
+    Write-Host "Scanning $($names.Count) per-user classes under $view ..."
+    foreach ($id in $names) {
+        $rel = "$view\$id"
+        $server = Get-Default $hkcuClasses "$rel\InprocServer32"
+        if (-not $server -or $Files -notcontains [IO.Path]::GetFileName([string]$server).ToLower()) { continue }
+        if (-not (Get-Default $hklmClasses "$rel\InprocServer32")) { $keys.Add($rel) }
 
-        $progId = Get-Default "$($clsid.PSPath)\ProgID"
+        $progId = Get-Default $hkcuClasses "$rel\ProgID"
         foreach ($p in @($progId, ($progId -replace '\.\d+$', '')) | Select-Object -Unique) {
-            if ($p -and (Test-Path "HKCU:\Software\Classes\$p") -and -not (Get-Default "HKLM:\SOFTWARE\Classes\$p\CLSID")) {
-                $keys.Add($p)
-            }
+            if ($p -and (Test-Key $hkcuClasses $p) -and -not (Get-Default $hklmClasses "$p\CLSID")) { $keys.Add($p) }
         }
 
-        $tlb = Get-Default "$($clsid.PSPath)\TypeLib"
-        if ($tlb -and (Test-Path "HKCU:\Software\Classes\TypeLib\$tlb")) {
-            $complete = Get-ChildItem "HKLM:\SOFTWARE\Classes\TypeLib\$tlb" -ErrorAction SilentlyContinue |
-                Get-ChildItem -ErrorAction SilentlyContinue | Where-Object { Get-Default "$($_.PSPath)\win32" }
-            if (-not $complete) { $keys.Add("TypeLib\$tlb") }
-        }
+        $tlb = Get-Default $hkcuClasses "$rel\TypeLib"
+        if ($tlb -and (Test-Key $hkcuClasses "TypeLib\$tlb") -and -not (Test-TypeLibComplete $tlb)) { $keys.Add("TypeLib\$tlb") }
     }
 }
+Write-Host "Keys to copy: $(@($keys | Select-Object -Unique).Count)"
 $keys = $keys | Select-Object -Unique
 if (-not $keys) { Write-Host 'Nothing to do: all selected classes are registered machine-wide.'; return }
 
@@ -99,7 +123,7 @@ $backup = Join-Path $BackupDir "hklm-classes-backup-$stamp.reg"
 $log = Join-Path $BackupDir "hklm-classes-copied-$stamp.txt"
 foreach ($k in $keys) {
     if (-not $PSCmdlet.ShouldProcess("HKLM\SOFTWARE\Classes\$k", 'copy from HKCU')) { continue }
-    if (Test-Path "HKLM:\SOFTWARE\Classes\$k") {          # keep what was there before
+    if (Test-Key $hklmClasses $k) {                        # keep what was there before
         $tmp = [IO.Path]::GetTempFileName()
         & reg.exe export "HKLM\SOFTWARE\Classes\$k" $tmp /y | Out-Null
         Get-Content $tmp | Add-Content $backup

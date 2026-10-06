@@ -74,6 +74,15 @@ under HKCU, writes through HKCR land in HKCU again.
 To get both the flicker fix and administrator rights, start `DynaRunFix.exe` as administrator (for
 example a shortcut with *Advanced → Run as administrator* ticked).
 
+### First-time setup hangs after "OK" (system selection window stays, one CPU core at 100%)
+
+On the first start DynaRun runs `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<nnn>.exe`
+(e.g. `Setup_114.exe` for the S68). These helpers have no manifest and "Setup" in their name and description,
+so Windows' installer detection requires elevation for them; a non-elevated DynaRun cannot start the helper
+and keeps waiting for it. Do the first-time setup **as administrator** (after running
+`tools\register-machine-wide.ps1`, otherwise the elevated start stops at 115). Afterwards DynaRun can be
+used without elevation. Verified on Windows 11 with DynaRun 3.26.0; the same happens on Windows 7 with UAC.
+
 ### Garbled Chinese (or other DBCS) text with Windows' UTF-8 option
 
 With *Region → Administrative → Change system locale → "Beta: Use Unicode UTF-8 for worldwide language
@@ -166,6 +175,13 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 它會把相關的 CLSID/ProgID 複製到 HKLM。只跑 `regsvr32` 沒用,因為機碼已經存在於 HKCU 時,寫入會落回 HKCU。
 要同時有防閃爍修正和系統管理員權限,請以系統管理員身分執行 `DynaRunFix.exe`
 (捷徑 → 內容 → 進階 → 勾選「以系統管理員身分執行」)。
+
+### 首次設定按「OK」後卡住(系統選擇視窗不消失、CPU 一核 100%)
+首次啟動時,DynaRun 會執行 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`(S68 是 `Setup_114.exe`)。
+這些程式沒有 manifest,檔名和描述又含「Setup」,Windows 的安裝程式偵測會要求它們以系統管理員執行;
+一般權限的 DynaRun 叫不起它,就一直空等。請**以系統管理員身分完成首次設定**
+(先跑 `tools\register-machine-wide.ps1`,否則系統管理員模式會卡在 115),之後平常用一般權限即可。
+已在 Win11 + DynaRun 3.26.0 驗證;Win7 開 UAC 時也一樣。
 
 ### 開啟系統 UTF-8 選項時中文亂碼
 「地區 → 系統管理 → 變更系統地區設定 → Beta:使用 Unicode UTF-8 提供全球語言支援」開啟時,系統 ANSI 字碼頁是 65001,VB6 程式的中文會變亂碼。
