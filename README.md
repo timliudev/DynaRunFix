@@ -192,6 +192,14 @@ return the attributes without the cloud bits (pinned, unpinned, recall-on-open, 
 Files and OneDrive settings are not changed. The log shows `cleared cloud attributes 00080020 in
 GetFileAttributesA` when it applies. Verified on Windows 11 with DynaRun 3.26.0.
 
+### Setup warns "This setup uses VBScript custom actions" (Windows 11 25H2)
+
+Only the setup wizard's **Next**/**Back** buttons use VBScript (two Wise custom actions); DynaRun itself and
+everything the setup installs do not. Once Windows disables VBScript by default (planned for about 2027) the
+interactive setup is expected to stop at the first **Next**, while `msiexec /i Setup.msi /qb` keeps working.
+[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) turns your own
+`Setup.msi` into a transform (`Setup-novbs.mst`) and a patched copy that install without VBScript and without
+the warning. Details, timeline and test results: [docs/VBSCRIPT.md](docs/VBSCRIPT.md).
 ## Building
 
 Requires Visual Studio 2019 or newer with the C++ desktop workload. Run:
@@ -341,5 +349,10 @@ Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案
 (pinned、unpinned、recall-on-open、recall-on-data-access)。不修改任何檔案,也不改 OneDrive 設定。
 生效時 log 會出現 `cleared cloud attributes 00080020 in GetFileAttributesA`。已在 Win11 + DynaRun 3.26.0 驗證。
 
+### 安裝程式出現「此安裝程式使用 VBScript 自訂動作」警告(Win11 25H2)
+只有安裝精靈的「Next/Back」換頁用到 VBScript(Wise 的兩個自訂動作),DynaRun 本身和安裝的內容都沒有。
+微軟預計約 2027 年預設停用 VBScript,屆時直接點兩下安裝,預期會在第一次按 Next 就失敗;`msiexec /i Setup.msi /qb`(不顯示精靈)仍可安裝。
+[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) 會用你自己的 `Setup.msi`
+產生轉換檔(`Setup-novbs.mst`)和修改版副本,兩者都不需要 VBScript,也不會再出現警告。時程、細節與測試結果見 [docs/VBSCRIPT.md](docs/VBSCRIPT.md)。
 ### 建置
 安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定;解開 DynaRun 安裝檔用的是 [miniz](https://github.com/richgel999/miniz) 3.1.2,MIT 授權,在 `third_party/miniz`)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。
