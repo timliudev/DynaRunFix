@@ -90,8 +90,9 @@ locale's legacy code page (950 for zh-TW) while the rest of the system stays UTF
 
 `%TEMP%\dynafix.log` then shows `ansi-codepage=950`. This fixes text converted inside the process (menus,
 text boxes, charts). Some window captions, check boxes and labels are converted by Windows itself with the
-system code page and can stay garbled while the UTF-8 option is on; switching the option off fixes those
-too. On systems without the UTF-8 option none of this is needed.
+system code page and can stay garbled while the UTF-8 option is on, and files in folders with non-ASCII names
+may fail to open. Switching the option off (or running DynaRun through a locale emulator) fixes those too.
+On systems without the UTF-8 option none of this is needed.
 
 ## Building
 
@@ -172,7 +173,7 @@ DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維�
 複製完要用系統管理員 PowerShell 更新一次 exe 的修改時間:
 `(Get-Item 'C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe').LastWriteTime = Get-Date`。
 之後 `%TEMP%\dynafix.log` 會顯示 `ansi-codepage=950`。選單、文字框、圖表都會正常;
-部分視窗標題、核取方塊和標籤是由 Windows 用系統字碼頁轉換的,開著 UTF-8 時可能仍有亂碼,關閉該選項即可完全正常。
+部分視窗標題、核取方塊、按鈕和標籤是由 Windows 用系統字碼頁轉換的,開著 UTF-8 時仍會亂碼,含中文的資料夾路徑也可能無法開啟檔案;關閉該選項(或用 Locale Emulator 類工具啟動 DynaRun)即可完全正常。
 沒開 UTF-8 選項的電腦完全不需要這一步。
 
 ### 建置
