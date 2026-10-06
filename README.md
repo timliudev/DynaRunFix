@@ -45,7 +45,8 @@ log in `%TEMP%\dynafix.log`.
 1. Install DynaRun V3 normally (use the original setup so its data files are in place).
 2. Download the zip from [Releases](https://github.com/timliudev/DynaRunFix/releases) (or build, see below)
    and keep `DynaRunFix.exe` and `dynafix.dll` **in the same folder**
-   (for example `%LOCALAPPDATA%\DynaRunFix`).
+   (for example `%LOCALAPPDATA%\DynaRunFix`), together with the `le` folder if Windows' UTF-8 option is on
+   (see [Garbled Chinese](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option)).
 3. Start DynaRun through `DynaRunFix.exe` (create a desktop shortcut to it).
    - Default target: `C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe`
    - Other location: `DynaRunFix.exe "D:\path\to\DynaRun V3.exe"`
@@ -102,10 +103,26 @@ locale's legacy code page (950 for zh-TW) while the rest of the system stays UTF
 ```
 
 `%TEMP%\dynafix.log` then shows `ansi-codepage=950`. This fixes text converted inside the process (menus,
-text boxes, charts). Some window captions, check boxes and labels are converted by Windows itself with the
-system code page and can stay garbled while the UTF-8 option is on, and files in folders with non-ASCII names
-may fail to open. Switching the option off (or running DynaRun through a locale emulator) fixes those too.
-On systems without the UTF-8 option none of this is needed.
+text boxes, message boxes, charts). Labels, graphic buttons and some captions are drawn through Windows
+with the system code page and stay garbled; for those, DynaRunFix runs DynaRun through
+[Locale Emulator](https://github.com/xupefei/Locale-Emulator) (LGPL-3.0):
+
+- Put LE in a `le` folder next to `DynaRunFix.exe` (the release zip already has it; to fetch it yourself run
+  `tools\fetch-le.ps1 -OutDir <folder>\le`). It is not installed: no context menu, nothing in the GAC.
+  `le\LEConfig.xml` holds DynaRunFix's zh-TW profile.
+- When the system code page is UTF-8 and `le\LEProc.exe` exists, `DynaRunFix.exe` starts DynaRun through
+  LE and attaches the flicker fix right away. Otherwise it starts DynaRun directly, as before.
+- Keep the manifest as well: only the combination shows all text correctly (manifest alone: labels
+  garbled; LE alone: menus and message boxes garbled).
+- Under LE fonts are created with the Big5 charset, so Windows draws Arial and similar faces with MingLiU.
+  The launcher sets `DYNAFIX_FONT=Microsoft JhengHei UI` and `dynafix.dll` swaps Arial, Times New Roman,
+  MS Sans Serif and MingLiU for it in DynaRun, its OCX controls and the chart. JhengHei's line height is 1.27
+  em versus MingLiU's 1.0, so text of 16 px and up is scaled to 90 % to keep two-line labels fitting
+  (`DYNAFIX_FONT_SCALE`, 50-150). Set `DYNAFIX_FONT` yourself to pick another face.
+
+Verified on Windows 11 (UTF-8 option on) with DynaRun 3.26.0: menus, dialogs, labels, buttons, the
+viewer and files in folders with Chinese names all work. Switching the UTF-8 option off also fixes
+everything without LE. On systems without the UTF-8 option none of this is needed.
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
@@ -175,7 +192,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 
 ### 使用方式
 1. 用原廠 setup 正常安裝 DynaRun V3。
-2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 zip(或自行建置),把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**(例如 `%LOCALAPPDATA%\DynaRunFix`)。
+2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 zip(或自行建置),把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**(例如 `%LOCALAPPDATA%\DynaRunFix`);開著系統 UTF-8 選項時連同 `le` 資料夾一起放(見下方「開啟系統 UTF-8 選項時中文亂碼」)。
 3. 以後都從 `DynaRunFix.exe` 啟動(可建桌面捷徑);DynaRun 若已在執行,會直接套用修正。
    安裝在其他路徑:`DynaRunFix.exe "D:\路徑\DynaRun V3.exe"`。
 4. 若要**以系統管理員身分**執行 DynaRun,`DynaRunFix.exe` 也要以系統管理員身分執行。
@@ -205,9 +222,21 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維持 UTF-8。Windows 會快取「這支 exe 沒有 manifest」的判斷,
 複製完要用系統管理員 PowerShell 更新一次 exe 的修改時間:
 `(Get-Item 'C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe').LastWriteTime = Get-Date`。
-之後 `%TEMP%\dynafix.log` 會顯示 `ansi-codepage=950`。選單、文字框、圖表都會正常;
-部分視窗標題、核取方塊、按鈕和標籤是由 Windows 用系統字碼頁轉換的,開著 UTF-8 時仍會亂碼,含中文的資料夾路徑也可能無法開啟檔案;關閉該選項(或用 Locale Emulator 類工具啟動 DynaRun)即可完全正常。
-沒開 UTF-8 選項的電腦完全不需要這一步。
+之後 `%TEMP%\dynafix.log` 會顯示 `ansi-codepage=950`。選單、文字框、訊息框、圖表都會正常;
+標籤、圖形按鈕和部分標題是經由 Windows 用系統字碼頁繪製的,仍會亂碼,這部分由 DynaRunFix 透過
+[Locale Emulator](https://github.com/xupefei/Locale-Emulator)(LGPL-3.0)啟動 DynaRun 來解決:
+
+- 把 LE 放在 `DynaRunFix.exe` 旁邊的 `le` 資料夾(release zip 已附;要自己下載就執行 `tools\fetch-le.ps1 -OutDir <資料夾>\le`)。
+  不需要安裝:不加右鍵選單、不寫入 GAC。`le\LEConfig.xml` 是 DynaRunFix 的 zh-TW 設定。
+- 系統字碼頁是 UTF-8 且有 `le\LEProc.exe` 時,`DynaRunFix.exe` 會透過 LE 啟動 DynaRun,並立刻掛上防閃爍修正;否則照舊直接啟動。
+- manifest 也要保留:兩者一起才會全部正常(只有 manifest:標籤亂碼;只有 LE:選單和訊息框亂碼)。
+- 透過 LE 時字型會以 Big5 字元集建立,Arial 等字型會被 Windows 換成細明體。啟動器會設定
+  `DYNAFIX_FONT=Microsoft JhengHei UI`,`dynafix.dll` 在 DynaRun、OCX 元件和圖表裡把 Arial、Times New Roman、
+  MS Sans Serif、細明體換成它。正黑體行高是 1.27 em(細明體 1.0),所以 16 px 以上的字縮為 90%,兩行的標籤才放得下
+  (`DYNAFIX_FONT_SCALE`,50–150)。要用別的字型可以自行設定 `DYNAFIX_FONT`。
+
+已在 Win11(開啟 UTF-8 選項)+ DynaRun 3.26.0 驗證:選單、對話框、標籤、按鈕、看圖程式、中文資料夾裡的檔案都正常。
+關閉 UTF-8 選項也能全部正常,不需要 LE。沒開 UTF-8 選項的電腦完全不需要這一步。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。

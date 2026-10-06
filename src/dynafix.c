@@ -124,6 +124,107 @@ static BOOL WINAPI H_FindNextFileW(HANDLE h, LPWIN32_FIND_DATAW d)
 // *real = kernel32 export, alt = kernelbase export (api-ms-win-* imports bind there)
 typedef struct { const char *name; FARPROC *real; FARPROC hook; FARPROC alt; } hook_t;
 
+// ---- font face ----
+// Under Locale Emulator (started by the launcher when Windows' UTF-8 option is on) fonts are created
+// with the Big5 charset, so faces without CJK glyphs (DynaRun's forms mostly use Arial) are mapped to
+// MingLiU. The launcher sets DYNAFIX_FONT (e.g. "Microsoft JhengHei"); those faces are swapped for it
+// in the CreateFont* calls made by MSVBVM60, ole32 (VB's StdFont), MFC42 (OCX controls) and
+// the ProEssentials chart (Pesgo32e.ocx / PEGRP32E.dll).
+// MingLiU's line height is 1.0 em, JhengHei's 1.27 em, and DynaRun's multi-line labels are sized for
+// MingLiU, so the em height of large fonts (16 px and up) is scaled by DYNAFIX_FONT_SCALE percent
+// (default 90) to keep them fitting.
+
+static FARPROC r_cfiA, r_cfiW, r_cfA, r_cfW;
+static WCHAR g_fontW[LF_FACESIZE];
+static char g_fontA[LF_FACESIZE];
+static LONG g_fontlog;
+static int g_fontscale = 90;   // % of the requested em height (DYNAFIX_FONT_SCALE)
+
+static const WCHAR *g_swap[] = {
+    L"Arial", L"Times New Roman", L"MS Sans Serif", L"Microsoft Sans Serif", L"MS Shell Dlg", L"MS Shell Dlg 2",
+    L"\x65B0\x7D30\x660E\x9AD4", L"\x7D30\x660E\x9AD4", L"PMingLiU", L"MingLiU", 0   // 新細明體 細明體
+};
+
+// Shrink only large text (small text gets hard to read), and draw the new face with ClearType.
+static void fit(LONG *height, BYTE *quality)
+{
+    if (*height <= -16) *height = MulDiv(*height, g_fontscale, 100);
+    *quality = CLEARTYPE_QUALITY;
+}
+
+static BOOL swap_face(const WCHAR *face)
+{
+    const WCHAR **s;
+    for (s = g_swap; *s; s++) if (!lstrcmpiW(face, *s)) return TRUE;
+    return FALSE;
+}
+
+static void log_face(const WCHAR *face, BOOL swapped)
+{
+    char a[LF_FACESIZE * 2];
+    if (InterlockedIncrement(&g_fontlog) > 200) return;
+    WideCharToMultiByte(CP_UTF8, 0, face, -1, a, sizeof(a), NULL, NULL);
+    logf("font '%s' %s %u\r\n", (DWORD)(UINT_PTR)a, (DWORD)(UINT_PTR)(swapped ? "-> swapped" : "kept"), 0);
+}
+
+static HFONT WINAPI H_CreateFontIndirectW(const LOGFONTW *lf)
+{
+    LOGFONTW f;
+    BOOL sw = lf && swap_face(lf->lfFaceName);
+    if (lf) log_face(lf->lfFaceName, sw);
+    if (!sw) return ((HFONT (WINAPI *)(const LOGFONTW *))r_cfiW)(lf);
+    f = *lf;
+    lstrcpynW(f.lfFaceName, g_fontW, LF_FACESIZE);
+    fit(&f.lfHeight, &f.lfQuality);
+    return ((HFONT (WINAPI *)(const LOGFONTW *))r_cfiW)(&f);
+}
+
+static HFONT WINAPI H_CreateFontIndirectA(const LOGFONTA *lf)
+{
+    LOGFONTA f; WCHAR w[LF_FACESIZE];
+    BOOL sw;
+    if (!lf) return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(lf);
+    MultiByteToWideChar(CP_ACP, 0, lf->lfFaceName, -1, w, LF_FACESIZE);
+    sw = swap_face(w);
+    log_face(w, sw);
+    if (!sw) return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(lf);
+    f = *lf;
+    lstrcpynA(f.lfFaceName, g_fontA, LF_FACESIZE);
+    fit(&f.lfHeight, &f.lfQuality);
+    return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(&f);
+}
+
+typedef HFONT (WINAPI *CreateFontW_t)(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, LPCWSTR);
+typedef HFONT (WINAPI *CreateFontA_t)(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, LPCSTR);
+
+static HFONT WINAPI H_CreateFontW(int h, int w, int esc, int ori, int wt, DWORD it, DWORD ul, DWORD so, DWORD cs,
+                                  DWORD op, DWORD cp, DWORD q, DWORD pf, LPCWSTR face)
+{
+    LONG hh = h; BYTE qq = (BYTE)q;
+    BOOL sw = face && swap_face(face);
+    if (face) log_face(face, sw);
+    if (sw) { fit(&hh, &qq); face = g_fontW; }
+    return ((CreateFontW_t)r_cfW)(hh, w, esc, ori, wt, it, ul, so, cs, op, cp, qq, pf, face);
+}
+
+static HFONT WINAPI H_CreateFontA(int h, int w, int esc, int ori, int wt, DWORD it, DWORD ul, DWORD so, DWORD cs,
+                                  DWORD op, DWORD cp, DWORD q, DWORD pf, LPCSTR face)
+{
+    LONG hh = h; BYTE qq = (BYTE)q; WCHAR fw[LF_FACESIZE];
+    BOOL sw = FALSE;
+    if (face) { MultiByteToWideChar(CP_ACP, 0, face, -1, fw, LF_FACESIZE); sw = swap_face(fw); log_face(fw, sw); }
+    if (sw) { fit(&hh, &qq); face = g_fontA; }
+    return ((CreateFontA_t)r_cfA)(hh, w, esc, ori, wt, it, ul, so, cs, op, cp, qq, pf, face);
+}
+
+static hook_t g_font_hooks[] = {
+    { "CreateFontA",         &r_cfA,  (FARPROC)H_CreateFontA },
+    { "CreateFontW",         &r_cfW,  (FARPROC)H_CreateFontW },
+    { "CreateFontIndirectA", &r_cfiA, (FARPROC)H_CreateFontIndirectA },
+    { "CreateFontIndirectW", &r_cfiW, (FARPROC)H_CreateFontIndirectW },
+    { 0 }
+};
+
 static hook_t g_attr_hooks[] = {
     { "GetFileAttributesA",   &r_gfaA,  (FARPROC)H_GetFileAttributesA },
     { "GetFileAttributesW",   &r_gfaW,  (FARPROC)H_GetFileAttributesW },
@@ -198,6 +299,32 @@ static void patch_attr(void)
     }
 }
 
+// Modules whose CreateFont* imports get the face swap; some (the chart) load later, so each
+// one is retried until it is present.
+static const char *g_fontmods[] = { "MSVBVM60.DLL", "ole32.dll", "MFC42.DLL", "Pesgo32e.ocx", "PEGRP32E.dll", 0 };
+static BOOL g_fontmodpatched[5], g_fontpatched;
+
+static void patch_font(void)
+{
+    HMODULE g, gf;
+    hook_t *h;
+    int i, left = 0;
+    if (!g_fontW[0] || !GetModuleHandleA("MSVBVM60.DLL")) return;
+    if (!r_cfiW) {
+        g = GetModuleHandleA("gdi32.dll"); gf = GetModuleHandleA("gdi32full.dll");
+        for (h = g_font_hooks; h->name; h++) {
+            *h->real = GetProcAddress(g, h->name);
+            h->alt = gf ? GetProcAddress(gf, h->name) : NULL;
+        }
+    }
+    for (i = 0; g_fontmods[i]; i++) {
+        if (g_fontmodpatched[i]) continue;
+        if (GetModuleHandleA(g_fontmods[i])) { g_fontmodpatched[i] = TRUE; patch_imports(g_fontmods[i], g_font_hooks); }
+        else left++;
+    }
+    g_fontpatched = !left;
+}
+
 static void note_size(HWND h, WPARAM w, LPARAM l)
 {
     char cls[32];
@@ -228,6 +355,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
         }
         if (!g_patched) patch_thbresize();
         if (!g_fsopatched) patch_attr();
+        if (!g_fontpatched) patch_font();
         if (c->message == WM_SIZE) note_size(c->hwnd, c->wParam, c->lParam);
         else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); }
     }
@@ -241,6 +369,15 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
         DisableThreadLibraryCalls(h);
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
+        if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
+        WideCharToMultiByte(CP_ACP, 0, g_fontW, -1, g_fontA, LF_FACESIZE, NULL, NULL);
+        {
+            char v[8]; int i, n = 0;
+            if (GetEnvironmentVariableA("DYNAFIX_FONT_SCALE", v, sizeof(v)) && v[0]) {
+                for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
+                if (n >= 50 && n <= 150) g_fontscale = n;
+            }
+        }
     }
     return TRUE;
 }

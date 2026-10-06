@@ -4,6 +4,7 @@
 #include <tlhelp32.h>
 
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
+#define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
 
 static DWORD g_pid, g_tid;
 
@@ -27,7 +28,7 @@ static void fail(const char *msg) { MessageBoxA(NULL, msg, "DynaRunFix", MB_ICON
 
 void WinMainCRTStartup(void)
 {
-    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], ev[64], *p, *cmd;
+    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd;
     STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e; int i;
 
     // dynafix.dll lives next to this launcher
@@ -44,10 +45,23 @@ void WinMainCRTStartup(void)
     g_pid = running();
     if (!g_pid) {
         { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
-        if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) fail("Cannot start DynaRun V3.exe");
-        g_pid = pi.dwProcessId;
-        WaitForInputIdle(pi.hProcess, 30000);
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
+        // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
+        lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
+        if (GetACP() == CP_UTF8 && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
+            // dynafix swaps Arial/MingLiU for this face (inherited by DynaRun through LEProc)
+            if (!GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
+            wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
+            if (!CreateProcessA(le, line, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) fail("Cannot start Locale Emulator");
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            for (i = 0; i < 600 && !(g_pid = running()); i++) Sleep(50);
+            if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
+        } else {
+            if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) fail("Cannot start DynaRun V3.exe");
+            g_pid = pi.dwProcessId;
+            WaitForInputIdle(pi.hProcess, 30000);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        }
     }
     for (i = 0; i < 600 && !g_tid; i++) { EnumWindows(findwin, 0); if (!g_tid) Sleep(100); }
     if (!g_tid) fail("DynaRun window not found");
