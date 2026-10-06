@@ -6,6 +6,16 @@
 2 RCDATA "build\dynafix.dll"
 3 RCDATA "manifest\DynaRun V3.exe.manifest"
 
+// Locale Emulator (LGPL-3.0, unmodified; fetched into build\le by tools\fetch-le.ps1) -> InstallDir\le
+10 RCDATA "build\\le\\LEProc.exe"
+11 RCDATA "build\\le\\LoaderDll.dll"
+12 RCDATA "build\\le\\LocaleEmulator.dll"
+13 RCDATA "build\\le\\LECommonLibrary.dll"
+14 RCDATA "build\\le\\LEConfig.xml"
+15 RCDATA "build\\le\\COPYING"
+16 RCDATA "build\\le\\COPYING.LESSER"
+17 RCDATA "build\\le\\THIRD-PARTY.txt"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 0,0,0,0
 PRODUCTVERSION 0,0,0,0

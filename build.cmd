@@ -24,6 +24,8 @@ link %LFLAGS% /ENTRY:mainCRTStartup /SUBSYSTEM:CONSOLE,5.01 /OUT:build\msgspy.ex
 
 rem The installer embeds the launcher, the dll and the code-page manifest. Its own manifest says asInvoker,
 rem otherwise Windows' installer detection ("Setup" in the name) would elevate the per-user stage too.
+rem Locale Emulator for the installer payload (downloaded once into build\le, SHA-256 checked).
+if not exist build\le\LEProc.exe powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-le.ps1 -OutDir build\le >nul || exit /b 1
 rc /nologo /Ibuild /fo build\setup.res src\setup.rc || exit /b 1
 link %LFLAGS% /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS,5.01 /MANIFEST:EMBED /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /OUT:build\DynaRunFix-Setup.exe build\setup.obj build\setup.res kernel32.lib user32.lib advapi32.lib shell32.lib ole32.lib comdlg32.lib uuid.lib || exit /b 1
 echo.

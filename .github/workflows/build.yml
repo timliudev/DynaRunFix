@@ -31,6 +31,7 @@ jobs:
           Copy-Item build\DynaRunFix.exe, build\dynafix.dll, build\DynaRunFix-Setup.exe, README.md, LICENSE $pkg
           Copy-Item 'manifest\DynaRun V3.exe.manifest' $pkg
           Copy-Item tools\register-machine-wide.ps1, build\msgspy.exe, build\msgspy.dll "$pkg\tools"
+          Copy-Item build\le "$pkg\le" -Recurse
           Compress-Archive -Path "$pkg\*" -DestinationPath "dist\$name.zip"
           "PKG=$name" >> $env:GITHUB_ENV
 
