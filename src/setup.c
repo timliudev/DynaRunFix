@@ -1,6 +1,8 @@
 // DynaRunFix-Setup.exe - installs DynaRunFix for end users (Windows XP .. 11).
 //
-//   DynaRunFix-Setup.exe [/quiet]             install or update
+//   DynaRunFix-Setup.exe                      wizard (wizard.c): installs DynaRun V3 first when it is
+//                                             missing (official download, password, license), then the fix
+//   DynaRunFix-Setup.exe /quiet               install the fix only, no UI (DynaRun must be installed)
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
@@ -20,6 +22,7 @@
 #include <shellapi.h>
 #include <commdlg.h>
 #include <sddl.h>
+#include "setup.h"
 #include "version.h"
 
 #ifndef SLDF_RUNAS_USER
@@ -38,25 +41,25 @@ static const WCHAR *COM_FILES[] = {
     L"filev090.ocx", L"mscomctl.ocx", L"mscomm32.ocx", L"msdatgrd.ocx", L"msflxgrd.ocx", L"mshflxgd.ocx",
     L"numled.ocx", L"pesgo32e.ocx", L"richtx32.ocx", L"shcmb090.ocx", L"tabctl32.ocx", L"thbres25.dll" };
 
-static BOOL g_zh, g_quiet;
-static WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
-#define T(en, zh) (g_zh ? (zh) : (en))
+BOOL g_zh, g_quiet;
+HWND g_hwnd;
+WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define TITLE T(L"DynaRunFix Setup", L"DynaRunFix 安裝程式")
 
 /* ---------- small helpers (no C runtime) ---------- */
 
-static void zero(void *p, SIZE_T n) { volatile char *z = (volatile char *)p; while (n--) *z++ = 0; }
-static void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
-static void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
+void zero(void *p, SIZE_T n) { volatile char *z = (volatile char *)p; while (n--) *z++ = 0; }
+void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
+void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 static WCHAR *cat3(WCHAR *d, const WCHAR *a, const WCHAR *b, const WCHAR *c)
 { lstrcpyW(d, a); lstrcatW(d, b); if (c) lstrcatW(d, c); return d; }
-static BOOL exists(const WCHAR *p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES; }
-static int msg(const WCHAR *text, UINT flags) { return MessageBoxW(NULL, text, TITLE, flags | MB_SETFOREGROUND); }
+BOOL exists(const WCHAR *p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES; }
+int msg(const WCHAR *text, UINT flags) { return MessageBoxW(g_hwnd, text, TITLE, flags | MB_SETFOREGROUND); }
 static void info(const WCHAR *text) { if (!g_quiet) msg(text, MB_ICONINFORMATION); }
 static void error2(const WCHAR *text, const WCHAR *what)
 { static WCHAR b[1024]; lstrcpynW(b, text, 600); if (what) { lstrcatW(b, L"\n\n"); lstrcatW(b, what); } msg(b, MB_ICONERROR); }
 
-static BOOL is_admin(void)
+BOOL is_admin(void)
 {
     SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY; PSID sid; BOOL r = FALSE;
     if (AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &sid)) {
@@ -66,7 +69,7 @@ static BOOL is_admin(void)
     return r;
 }
 
-static BOOL user_sid(WCHAR *out, int cch)
+BOOL user_sid(WCHAR *out, int cch)
 {
     HANDLE tok; static BYTE buf[256]; DWORD n; WCHAR *s; BOOL r = FALSE;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return FALSE;
@@ -181,24 +184,15 @@ static void init_paths(void)
     cat3(g_launcher, g_dir, L"\\DynaRunFix.exe", NULL);
 }
 
-static BOOL find_dynarun(void)
+BOOL locate_dynarun(void)
 {
     static const WCHAR *vars[] = { L"ProgramFiles(x86)", L"ProgramFiles" };
-    WCHAR pf[MAX_PATH]; OPENFILENAMEW of; int i;
+    WCHAR pf[MAX_PATH]; int i;
     if (reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0) && exists(g_exe)) return TRUE;
     for (i = 0; i < 2; i++)
         if (GetEnvironmentVariableW(vars[i], pf, MAX_PATH) && exists(cat3(g_exe, pf, DYNARUN_REL, NULL))) return TRUE;
-    if (g_quiet || msg(T(L"DynaRun V3 was not found.\n\nInstall DynaRun V3 with its original setup first, then run this program again.\n\n"
-                         L"If DynaRun is installed in another folder, click OK and select \"DynaRun V3.exe\".",
-                         L"找不到 DynaRun V3。\n\n請先用原廠安裝程式安裝 DynaRun V3，再執行本程式。\n\n"
-                         L"如果 DynaRun 裝在其他資料夾，請按「確定」，自行選擇「DynaRun V3.exe」。"),
-                       MB_OKCANCEL | MB_ICONWARNING) != IDOK) return FALSE;
-    zero(&of, sizeof(of)); g_exe[0] = 0;
-    of.lStructSize = sizeof(of);
-    of.lpstrFilter = L"DynaRun V3.exe\0DynaRun V3.exe\0*.exe\0*.exe\0";
-    of.lpstrFile = g_exe; of.nMaxFile = MAX_PATH;
-    of.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
-    return GetOpenFileNameW(&of);
+    g_exe[0] = 0;
+    return FALSE;
 }
 
 /* ---------- COM registrations: HKU\<sid>\Software\Classes -> HKLM\SOFTWARE\Classes ---------- */
@@ -511,8 +505,8 @@ static int run_elevated(const WCHAR *args)
     SHELLEXECUTEINFOW se; DWORD rc = 1; static WCHAR a[1024];
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet");
     zero(&se, sizeof(se));
-    se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-    se.lpVerb = L"runas"; se.lpFile = g_self; se.lpParameters = a; se.nShow = SW_SHOWNORMAL;
+    se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+    se.hwnd = g_hwnd; se.lpVerb = L"runas"; se.lpFile = g_self; se.lpParameters = a; se.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&se)) return GetLastError() == ERROR_CANCELLED ? 2 : 1;
     WaitForSingleObject(se.hProcess, INFINITE);
     GetExitCodeProcess(se.hProcess, &rc);
@@ -523,21 +517,47 @@ static int run_elevated(const WCHAR *args)
 static const WCHAR *no_admin(void)
 { return T(L"Administrator permission was not granted. Nothing was changed.", L"未取得系統管理員權限，沒有做任何變更。"); }
 
-static int install(void)
+// Elevated: install DynaRun from its MSI, then the machine stage. The MSI installs per user (as the
+// original setup does), so it must run as the user who asked for it: with over-the-shoulder
+// elevation (another account typed into the UAC prompt) return 3 and let the caller run it.
+static int machine_full(const WCHAR *sid, const WCHAR *msi)
 {
-    static WCHAR sid[200], args[600], txt[1024], p[MAX_PATH]; int rc; HKEY b;
-    if (!find_dynarun()) return 2;
-    wsprintfW(txt, T(L"DynaRunFix will be installed:\n\n"
-                     L"- program folder: %s\n"
-                     L"- your DynaRun V3 shortcuts will start DynaRun through DynaRunFix (restored on uninstall)\n"
-                     L"- DynaRun will also work with \"Run as administrator\"\n\n"
-                     L"Windows will ask for permission next; click \"Yes\".\n\nContinue?",
-                     L"即將安裝 DynaRunFix：\n\n"
-                     L"・程式資料夾：%s\n"
-                     L"・DynaRun V3 的捷徑改為經由 DynaRunFix 啟動（解除安裝時還原）\n"
-                     L"・讓 DynaRun 以系統管理員身分執行時也能正常啟動\n\n"
-                     L"接著 Windows 會詢問是否允許變更，請按「是」。\n\n要繼續嗎？"), g_dir);
-    if (!g_quiet && msg(txt, MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    static WCHAR me[200], txt[300]; int rc;
+    if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return 3;
+    rc = run_msiexec(msi);
+    if (rc != 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
+        if (rc == ERROR_INSTALL_USEREXIT) return 2;
+        wsprintfW(txt, T(L"The DynaRun V3 setup failed (Windows Installer error %d).", L"DynaRun V3 安裝失敗（Windows Installer 錯誤 %d）。"), rc);
+        if (rc == ERROR_INSTALL_ALREADY_RUNNING)
+            lstrcatW(txt, T(L"\n\nAnother installation is running. Wait until it finishes and try again.", L"\n\n有其他程式正在安裝，請等它完成後再試一次。"));
+        msg(txt, MB_ICONERROR);
+        return 4;
+    }
+    if (!locate_dynarun()) { msg(T(L"DynaRun V3 was installed, but DynaRun V3.exe was not found.", L"DynaRun V3 已安裝，但找不到 DynaRun V3.exe。"), MB_ICONERROR); return 5; }
+    return machine_install(sid);
+}
+
+// Not elevated: the current user's shortcuts; a desktop shortcut when there is none at all.
+static void user_stage(void)
+{
+    static WCHAR p[MAX_PATH]; HKEY b, s;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) return;
+    if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
+        int desk = fix_shortcuts(FALSE, s);
+        if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
+            desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
+        if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
+            save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_exe, 0, 0, 0, FALSE))
+            RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
+        RegCloseKey(s);
+    }
+    RegCloseKey(b);
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
+}
+
+int install_fix(void)
+{
+    static WCHAR sid[200], args[600]; int rc;
     if (!user_sid(sid, 200)) return 1;
     CoInitialize(NULL);
     if (is_admin()) rc = machine_install(sid);
@@ -546,23 +566,31 @@ static int install(void)
         if ((rc = run_elevated(args)) == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
     }
     if (rc) return rc;
+    user_stage();
+    return 0;
+}
 
-    if (!RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) {
-        HKEY s;
-        if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
-            int desk = fix_shortcuts(FALSE, s);
-            if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
-                desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-            if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
-                save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_exe, 0, 0, 0, FALSE))
-                RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
-            RegCloseKey(s);
-        }
-        RegCloseKey(b);
+int install_all(const WCHAR *msi)
+{
+    static WCHAR sid[200], args[MAX_PATH + 300]; int rc;
+    if (!user_sid(sid, 200)) return 1;
+    CoInitialize(NULL);
+    if (is_admin()) rc = machine_full(sid, msi);
+    else {
+        wsprintfW(args, L"/full %s \"%s\"", sid, msi);
+        rc = run_elevated(args);
     }
-    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
-    info(T(L"DynaRunFix is installed.\n\nStart DynaRun with the \"DynaRun V3\" icon as before.",
-           L"DynaRunFix 安裝完成。\n\n以後照常點「DynaRun V3」圖示啟動即可。"));
+    if (rc == 3) {                      // over-the-shoulder elevation: setup as this user, then the fix
+        rc = run_msiexec(msi);
+        if (rc == ERROR_INSTALL_USEREXIT) return 2;
+        if (rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED) return 4;
+        if (!locate_dynarun()) return 5;
+        return install_fix();
+    }
+    if (rc == 2) return 2;
+    if (rc) return rc;
+    locate_dynarun();
+    user_stage();
     return 0;
 }
 
@@ -587,8 +615,8 @@ static int uninstall(void)
         info(T(L"DynaRunFix is not installed.", L"DynaRunFix 尚未安裝。"));
         return 0;
     }
-    if (!g_quiet && msg(T(L"Uninstall DynaRunFix and restore the original DynaRun shortcuts?",
-                          L"要解除安裝 DynaRunFix，並還原 DynaRun 原本的捷徑嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    if (!g_quiet && msg(T(L"Uninstall DynaRunFix and restore the original DynaRun shortcuts?\n\nDynaRun V3 itself stays installed.",
+                          L"要解除安裝 DynaRunFix，並還原 DynaRun 原本的捷徑嗎？\n\nDynaRun V3 本身會保留。"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
     CoInitialize(NULL);
     restore_shortcuts(HKEY_CURRENT_USER, USERKEY);
@@ -610,11 +638,15 @@ void WinMainCRTStartup(void)
         lstrcpynW(g_exe, argv[3], MAX_PATH);
         CoInitialize(NULL);
         rc = machine_install(argv[2]);
+    } else if (argc >= 4 && !lstrcmpiW(argv[1], L"/full")) {
+        CoInitialize(NULL);
+        rc = machine_full(argv[2], argv[3]);
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/unmachine")) {
         reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
         CoInitialize(NULL);
         rc = machine_uninstall();
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall();
-    else rc = install();
+    else if (g_quiet) rc = locate_dynarun() ? install_fix() : 1;
+    else rc = wizard();
     ExitProcess(rc);
 }

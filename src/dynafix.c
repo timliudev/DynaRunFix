@@ -16,7 +16,15 @@
 // such a file as not a normal file and silently skips it. The file-attribute APIs
 // imported by MSVBVM60.DLL and scrrun.dll are redirected to wrappers that clear
 // those bits. Only import tables in this process are patched; nothing on disk changes.
+//
+// Third fix: on the first start DynaRun runs System Data\Setup_<n>.exe with VB's Shell
+// (MSVBVM60 -> CreateProcessA) and waits for it. Windows' installer detection ("Setup" in the
+// name, no manifest) requires elevation for that helper, so a non-elevated DynaRun gets
+// ERROR_ELEVATION_REQUIRED and waits forever. MSVBVM60's CreateProcessA import is redirected:
+// on that error the same command is started with ShellExecuteEx "runas" (one UAC prompt) and
+// the new process is returned to DynaRun as if CreateProcessA had started it.
 #include <windows.h>
+#include <shellapi.h>
 #include <intrin.h>
 
 #pragma comment(linker, "/EXPORT:CwpProc=_CwpProc@12")
@@ -121,6 +129,53 @@ static BOOL WINAPI H_FindNextFileW(HANDLE h, LPWIN32_FIND_DATAW d)
     return ok;
 }
 
+// ---- helpers that need elevation ----
+
+static FARPROC r_cpA;
+
+// "C: b\Setup_114.exe" args  or  C: b\Setup_114.exe args (CreateProcess tries each space)
+static void split_cmd(LPCSTR app, LPCSTR cmd, char *file, char **params)
+{
+    const char *p = cmd; char *e;
+    *params = "";
+    if (app) { lstrcpynA(file, app, MAX_PATH); if (cmd && *cmd == '"') { p++; while (*p && *p != '"') p++; if (*p) p++; } else if (cmd) while (*p && *p != ' ') p++; }
+    else if (*p == '"') { p++; lstrcpynA(file, p, MAX_PATH); for (e = file; *e && *e != '"'; e++); *e = 0; while (*p && *p != '"') p++; if (*p) p++; }
+    else {
+        lstrcpynA(file, p, MAX_PATH);
+        for (e = file; *e; e++)
+            if (*e == ' ') { *e = 0; if (GetFileAttributesA(file) != INVALID_FILE_ATTRIBUTES) break; *e = ' '; }
+        p += lstrlenA(file);
+    }
+    while (*p == ' ') p++;
+    *params = (char *)p;
+}
+
+static BOOL WINAPI H_CreateProcessA(LPCSTR app, LPSTR cmd, LPSECURITY_ATTRIBUTES pa, LPSECURITY_ATTRIBUTES ta, BOOL inherit,
+                                    DWORD flags, LPVOID env, LPCSTR dir, LPSTARTUPINFOA si, LPPROCESS_INFORMATION pi)
+{
+    typedef BOOL (WINAPI *cp_t)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+    typedef BOOL (WINAPI *se_t)(SHELLEXECUTEINFOA *);
+    typedef DWORD (WINAPI *gpi_t)(HANDLE);
+    BOOL ok = ((cp_t)r_cpA)(app, cmd, pa, ta, inherit, flags, env, dir, si, pi);
+    char file[MAX_PATH], *params; SHELLEXECUTEINFOA se; se_t sx; gpi_t gpi; int i;
+    if (ok || GetLastError() != ERROR_ELEVATION_REQUIRED || (flags & CREATE_SUSPENDED)) return ok;
+    sx = (se_t)GetProcAddress(LoadLibraryA("shell32.dll"), "ShellExecuteExA");
+    gpi = (gpi_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetProcessId");
+    if (!sx || !gpi) { SetLastError(ERROR_ELEVATION_REQUIRED); return FALSE; }
+    split_cmd(app, cmd, file, &params);
+    { volatile char *z = (volatile char *)&se; for (i = 0; i < (int)sizeof(se); i++) z[i] = 0; }
+    se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    se.lpVerb = "runas"; se.lpFile = file; se.lpParameters = params; se.lpDirectory = dir;
+    se.nShow = si && (si->dwFlags & STARTF_USESHOWWINDOW) ? si->wShowWindow : SW_SHOWNORMAL;
+    logf("elevation required for %s, starting it with runas %u %u\r\n", (DWORD)(UINT_PTR)file, 0, 0);
+    if (!sx(&se) || !se.hProcess) { logf("runas failed: error %u %u %u\r\n", GetLastError(), 0, 0); SetLastError(ERROR_ELEVATION_REQUIRED); return FALSE; }
+    pi->hProcess = se.hProcess;
+    pi->dwProcessId = gpi(se.hProcess);
+    pi->dwThreadId = 0;     // no thread handle from ShellExecuteEx: hand out a second process handle so CloseHandle works
+    if (!DuplicateHandle(GetCurrentProcess(), se.hProcess, GetCurrentProcess(), &pi->hThread, SYNCHRONIZE, FALSE, 0)) pi->hThread = NULL;
+    return TRUE;
+}
+
 // *real = kernel32 export, alt = kernelbase export (api-ms-win-* imports bind there)
 typedef struct { const char *name; FARPROC *real; FARPROC hook; FARPROC alt; } hook_t;
 
@@ -133,6 +188,10 @@ static hook_t g_attr_hooks[] = {
     { "FindFirstFileW",       &r_ffW,   (FARPROC)H_FindFirstFileW },
     { "FindNextFileA",        &r_fnA,   (FARPROC)H_FindNextFileA },
     { "FindNextFileW",        &r_fnW,   (FARPROC)H_FindNextFileW },
+    { 0 }
+};
+static hook_t g_proc_hooks[] = {
+    { "CreateProcessA",       &r_cpA,   (FARPROC)H_CreateProcessA },
     { 0 }
 };
 static void resolve(hook_t *h)
@@ -191,6 +250,8 @@ static void patch_attr(void)
         g_vbpatched = TRUE;
         resolve(g_attr_hooks);
         patch_imports("MSVBVM60.DLL", g_attr_hooks);
+        resolve(g_proc_hooks);
+        patch_imports("MSVBVM60.DLL", g_proc_hooks);
     }
     if (g_vbpatched && !g_fsopatched && GetModuleHandleA("scrrun.dll")) {
         g_fsopatched = TRUE;
