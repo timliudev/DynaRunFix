@@ -59,7 +59,8 @@ Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25 PostMessageA`.
 DynaRun's setup registers several ActiveX controls (MSComm, MSCOMCTL, MSHFlexGrid, ...) only for the
 current user (`HKCU\Software\Classes`) when it runs without elevation. Elevated processes ignore per-user
 COM registrations, so MSComm cannot be created and initialisation stops silently at step 115. The
-settings/initialisation screens need administrator rights, so this matters.
+settings/initialisation screens need administrator rights, so this matters. The same pattern hits many
+XP-era ActiveX programs; see the playbook [docs/ELEVATED_COM.md](docs/ELEVATED_COM.md).
 
 Fix, from an **elevated** PowerShell:
 
