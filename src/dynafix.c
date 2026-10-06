@@ -101,7 +101,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             GetModuleFileNameA(g_self, self, MAX_PATH);
             LoadLibraryA(self);
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
-            logf("dynafix active pid=%u tid=%u %u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), 0);
+            logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
             if (e) { SetEvent(e); CloseHandle(e); }

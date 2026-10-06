@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  External application manifest for "DynaRun V3.exe" (the executable has no embedded manifest,
+  so Windows uses this file when it sits next to the exe).
+
+  activeCodePage=Legacy makes DynaRun use the system locale's ANSI code page (e.g. 950/Big5 for
+  zh-TW) even when "Beta: Use Unicode UTF-8 for worldwide language support" is enabled.
+  VB6 programs store translated strings in the ANSI code page, so with UTF-8 (65001) they show
+  garbled text.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="DynaPro.DynaRunV3" version="3.26.0.0" processorArchitecture="x86"/>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">Legacy</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>
