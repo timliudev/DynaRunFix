@@ -10,7 +10,8 @@
 //   machine stage (elevated, "/machine <user SID> <DynaRun exe>"): copies DynaRunFix.exe,
 //     dynafix.dll and this program to Program Files\DynaRunFix, copies DynaRun's per-user COM
 //     registrations of that user to HKLM (tools/register-machine-wide.ps1 in C), adds the
-//     code-page manifest when the system ANSI code page is UTF-8, retargets all-users shortcuts,
+//     code-page manifest when the system ANSI code page is UTF-8, puts Locale Emulator in le\ (the
+//     launcher uses it only with the UTF-8 option on a zh-TW system), retargets all-users shortcuts,
 //     registers the uninstaller.
 //   user stage (not elevated): retargets the user's DynaRun shortcuts to the launcher (the original
 //     .lnk bytes are kept in the registry and put back on uninstall); creates a desktop shortcut
@@ -441,6 +442,17 @@ static int machine_install(const WCHAR *sid)
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL))) {
         error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
         return 1;
+    }
+    {   // Locale Emulator, resources 10.. (see setup.rc)
+        static const WCHAR *le[] = { L"LEProc.exe", L"LoaderDll.dll", L"LocaleEmulator.dll", L"LECommonLibrary.dll",
+                                     L"LEConfig.xml", L"COPYING", L"COPYING.LESSER", L"THIRD-PARTY.txt" };
+        int i;
+        CreateDirectoryW(cat3(p, g_dir, L"\\le", NULL), NULL);
+        for (i = 0; i < (int)(sizeof(le) / sizeof(le[0])); i++)
+            if (!extract(10 + i, cat3(p, g_dir, L"\\le\\", le[i]))) {
+                error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), p);
+                return 1;
+            }
     }
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
     if (lstrcmpiW(p, g_self) && !CopyFileW(g_self, p, FALSE) && !(move_aside(p) && CopyFileW(g_self, p, FALSE))) {

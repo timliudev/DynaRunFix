@@ -4,6 +4,7 @@
 #include <tlhelp32.h>
 
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
+#define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
 
 static DWORD g_pid, g_tid;
 
@@ -45,9 +46,33 @@ static void elevate(const char *args)
     ExitProcess(ShellExecuteExA(&se) ? 0 : 1);
 }
 
+// TRUE if the compatibility setting "Run as administrator" (RUNASADMIN layer) is set for exe.
+static BOOL runasadmin(const char *exe)
+{
+    static const HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+    char v[512], *w; DWORD n, t; HKEY k; int r; BOOL found = FALSE;
+    for (r = 0; r < 2 && !found; r++) {
+        if (RegOpenKeyExA(roots[r], "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers",
+                          0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &k)) continue;
+        n = sizeof(v) - 1;
+        if (!RegQueryValueExA(k, exe, NULL, &t, (BYTE *)v, &n) && t == REG_SZ) {
+            v[n] = 0;
+            for (w = v; *w && !found; ) {          // space-separated layer names, e.g. "~ RUNASADMIN"
+                char *end = w; char c;
+                while (*end && *end != ' ') end++;
+                c = *end; *end = 0;
+                found = !lstrcmpiA(w, "RUNASADMIN");
+                *end = c; w = *end ? end + 1 : end;
+            }
+        }
+        RegCloseKey(k);
+    }
+    return found;
+}
+
 void WinMainCRTStartup(void)
 {
-    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], ev[64], *p, *cmd, *args;
+    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
     STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i;
 
     // dynafix.dll lives next to this launcher
@@ -74,13 +99,31 @@ void WinMainCRTStartup(void)
         if (h) CloseHandle(h); else if (GetLastError() == ERROR_ACCESS_DENIED) elevate(args);
     } else {
         { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
-        if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
-            if (GetLastError() == ERROR_ELEVATION_REQUIRED) elevate(args);
-            fail("Cannot start DynaRun V3.exe");
+        // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
+        // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
+        // Only for a Traditional Chinese system locale (legacy code page 950): the LE profile is zh-TW.
+        // Other locales get just the manifest, which selects their own legacy code page.
+        lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
+        if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
+        if (GetACP() == CP_UTF8 && !lstrcmpA(ev, "950") && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
+            // LEProc cannot raise DynaRun itself; elevate first if DynaRun is set to run as administrator.
+            if (runasadmin(exe)) elevate(args);
+            // dynafix swaps Arial/MingLiU for this face (inherited by DynaRun through LEProc)
+            if (!GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
+            wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
+            if (!CreateProcessA(le, line, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) fail("Cannot start Locale Emulator");
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            for (i = 0; i < 600 && !(g_pid = running()); i++) Sleep(50);
+            if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
+        } else {
+            if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+                if (GetLastError() == ERROR_ELEVATION_REQUIRED) elevate(args);
+                fail("Cannot start DynaRun V3.exe");
+            }
+            g_pid = pi.dwProcessId;
+            WaitForInputIdle(pi.hProcess, 30000);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         }
-        g_pid = pi.dwProcessId;
-        WaitForInputIdle(pi.hProcess, 30000);
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     }
     for (i = 0; i < 600 && !g_tid; i++) { EnumWindows(findwin, 0); if (!g_tid) Sleep(100); }
     if (!g_tid) fail("DynaRun window not found");
