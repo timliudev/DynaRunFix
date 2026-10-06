@@ -67,7 +67,7 @@ Fix, from an **elevated** PowerShell:
 powershell -ExecutionPolicy Bypass -File tools\register-machine-wide.ps1          # add -WhatIf to preview
 ```
 
-It copies the affected CLSID/ProgID keys to `HKLM`. `regsvr32` alone is not enough: while a class key exists
+It copies the affected CLSID/ProgID/TypeLib keys to `HKLM` (with a backup and a log). `regsvr32` alone is not enough: while a class key exists
 under HKCU, writes through HKCR land in HKCU again.
 
 To get both the flicker fix and administrator rights, start `DynaRunFix.exe` as administrator (for
@@ -159,7 +159,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 以系統管理員執行卡在「System Initializing. Please Wait. 115」
 原廠安裝程式以一般權限執行時,MSComm、MSCOMCTL、MSHFlexGrid 等 ActiveX 元件只註冊在目前使用者(HKCU)。
 以系統管理員執行的程式會忽略 HKCU 的 COM 註冊,所以建立 MSComm 失敗,初始化就停在 115。
-進入語言或初始化設定畫面都需要系統管理員權限,所以這個問題一定得處理。
+進入語言或初始化設定畫面都需要系統管理員權限,所以這個問題一定得處理。很多 XP 時代的 ActiveX 程式都有同樣的問題,通用的診斷與修正流程見 [docs/ELEVATED_COM.md](docs/ELEVATED_COM.md)。
 
 修正:以**系統管理員**開 PowerShell,執行 `tools\register-machine-wide.ps1`(加 `-WhatIf` 可以先預覽),
 它會把相關的 CLSID/ProgID 複製到 HKLM。只跑 `regsvr32` 沒用,因為機碼已經存在於 HKCU 時,寫入會落回 HKCU。
