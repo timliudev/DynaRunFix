@@ -328,3 +328,75 @@ int run_msiexec(const WCHAR *msi)
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return (int)rc;
 }
+
+/* ---------- OneDrive placeholders the setup will overwrite ---------- */
+
+#ifndef FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS 0x00400000
+#endif
+#ifndef FILE_ATTRIBUTE_RECALL_ON_OPEN
+#define FILE_ATTRIBUTE_RECALL_ON_OPEN 0x00040000
+#endif
+
+static BOOL name_listed(const WCHAR *list, const WCHAR *name)
+{
+    for (; *list; list += lstrlenW(list) + 1) if (!lstrcmpiW(list, name)) return TRUE;
+    return FALSE;
+}
+
+static int hydrate_tree(const WCHAR *dir, const WCHAR *names)
+{
+    static BYTE buf[CHUNK];
+    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f, h; DWORD n; int count = 0;
+    if (!p) return 0;
+    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
+    if ((f = FindFirstFileW(p, &fd)) != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
+            lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { count += hydrate_tree(p, names); continue; }
+            if (!(fd.dwFileAttributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE))) continue;
+            if (!name_listed(names, fd.cFileName)) continue;
+            h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+            if (h == INVALID_HANDLE_VALUE) continue;
+            while (ReadFile(h, buf, sizeof(buf), &n, NULL) && n) ;
+            CloseHandle(h);
+            count++;
+        } while (FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+    release(p);
+    return count;
+}
+
+// The setup also installs manuals and example data to Documents\Dyna Pro Dynamometers. When Documents
+// is in OneDrive and an earlier copy there is "online-only", Windows Installer (a SYSTEM service)
+// cannot read it and stops with error 1305. Reading those files as the user makes OneDrive download
+// them first. Only files the setup will overwrite are read; contents and OneDrive settings stay as they are.
+int pkg_prepare_documents(const WCHAR *msi)
+{
+    MSIHANDLE db, v, r; WCHAR *names, *w, root[MAX_PATH], one[300], *bar; DWORD n, used = 0, cap = 64 * 1024; int count = 0;
+    if (!SHGetSpecialFolderPathW(NULL, root, CSIDL_PERSONAL, FALSE) || lstrlenW(root) > MAX_PATH - 30) return 0;
+    lstrcatW(root, L"\\Dyna Pro Dynamometers");
+    if (!exists(root) || MsiOpenDatabaseW(msi, (LPCWSTR)MSIDBOPEN_READONLY, &db)) return 0;
+    if (!(names = alloc(cap * sizeof(WCHAR)))) { MsiCloseHandle(db); return 0; }
+    if (!MsiDatabaseOpenViewW(db, L"SELECT `FileName` FROM `File`", &v)) {
+        if (!MsiViewExecute(v, 0))
+            while (!MsiViewFetch(v, &r)) {
+                n = 300;
+                if (!MsiRecordGetStringW(r, 1, one, &n)) {
+                    for (w = one, bar = NULL; *w; w++) if (*w == '|') bar = w;   // "SHORT~1.PDF|Long Name.pdf"
+                    w = bar ? bar + 1 : one;
+                    n = lstrlenW(w);
+                    if (used + n + 2 < cap) { lstrcpyW(names + used, w); used += n + 1; }
+                }
+                MsiCloseHandle(r);
+            }
+        MsiViewClose(v); MsiCloseHandle(v);
+    }
+    MsiCloseHandle(db);
+    names[used] = 0;
+    if (used) count = hydrate_tree(root, names);
+    release(names);
+    return count;
+}

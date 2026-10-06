@@ -42,16 +42,22 @@ log in `%TEMP%\dynafix.log`.
 
 ## Usage
 
-1. Install DynaRun V3 normally with its original setup.
-2. Download **`DynaRunFix-Setup.exe`** from [Releases](https://github.com/timliudev/DynaRunFix/releases)
+1. Download **`DynaRunFix-Setup.exe`** from [Releases](https://github.com/timliudev/DynaRunFix/releases)
    and double-click it. Windows SmartScreen may say *"Windows protected your PC"* because the file is not
-   code-signed: click **More info → Run anyway**. Then confirm the installer and click **Yes** in the
-   Windows permission prompt (once).
-3. Start DynaRun with its usual **DynaRun V3** icon. That's it.
-4. The very first start of DynaRun (system selection) must run **as administrator**: right-click the icon →
-   *Run as administrator*, once (see [below](#first-time-setup-hangs-after-ok-system-selection-window-stays-one-cpu-core-at-100)).
+   code-signed: click **More info → Run anyway**.
+2. Follow the window. If DynaRun V3 is not installed yet, it downloads the DynaRun V3 setup from
+   [Dyna Pro's website](https://dynapro.co.uk/Software_Release.htm) (or uses a
+   `Dyna Pro Dynamometers.zip` already in *Downloads* / on the desktop), asks for the **setup password you got
+   from Dyna Pro**, shows Dyna Pro's license and installs DynaRun V3 and the fix. If DynaRun V3 is already
+   installed, it only installs the fix. Windows asks once for permission: click **Yes**.
+3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
+   once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
 
-What the installer does:
+Nothing of Dyna Pro's is included in DynaRunFix: the setup comes from Dyna Pro's site and the password from
+Dyna Pro. The DynaRun setup runs with basic UI (`msiexec /qb`), so its wizard pages, the only part of it
+that uses VBScript, are not shown. The password is used only to open the zip and is not stored.
+
+What the installer does for the fix:
 - installs `DynaRunFix.exe` and `dynafix.dll` to `Program Files\DynaRunFix`;
 - points the existing DynaRun V3 shortcuts (desktop, Start menu, pinned taskbar, all users and current
   user) to the launcher, keeping their name, icon and *Run as administrator* setting; creates a desktop
@@ -67,7 +73,11 @@ What the installer does:
 Uninstalling restores the original shortcut files and removes the manifest it added. The machine-wide
 ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
 and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
-`/uninstall`.
+`/uninstall`. `/quiet` installs only the fix and needs DynaRun V3 installed.
+
+If *Documents* is in OneDrive and an earlier copy of DynaRun's manuals or example files there is
+"online-only", the installer reads those files first so that OneDrive downloads them; Windows Installer
+cannot do that itself and would stop with error 1305. File contents and OneDrive settings are not changed.
 
 The launcher elevates itself when DynaRun has to run elevated (compatibility setting *Run as
 administrator*, or an elevated DynaRun is already running), so the shortcut does not need to.
@@ -106,11 +116,25 @@ installed shortcut: right-click → *Run as administrator*).
 ### First-time setup hangs after "OK" (system selection window stays, one CPU core at 100%)
 
 On the first start DynaRun runs `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<nnn>.exe`
-(e.g. `Setup_114.exe` for the S68). These helpers have no manifest and "Setup" in their name and description,
-so Windows' installer detection requires elevation for them; a non-elevated DynaRun cannot start the helper
-and keeps waiting for it. Do the first-time setup **as administrator** (after running
-`tools\register-machine-wide.ps1`, otherwise the elevated start stops at 115). Afterwards DynaRun can be
-used without elevation. Verified on Windows 11 with DynaRun 3.26.0; the same happens on Windows 7 with UAC.
+(e.g. `Setup_114.exe` for the S68) with `ShellExecute`. These helpers have no manifest and "Setup" in their
+name and description, so Windows' installer detection runs them elevated. The helper does its work, but the
+non-elevated DynaRun keeps showing the system selection and only picks up the new configuration on its next
+start.
+
+`dynafix.dll` handles this in memory: DynaRun's `ShellExecuteA` (a VB *Declare*, resolved through
+`GetProcAddress`) is wrapped, waits for `Setup_<nnn>.exe` to finish (one UAC prompt) and then restarts
+DynaRun through `DynaRunFix.exe /restart <pid>`. DynaRun then comes up with the chosen system. Verified on
+Windows 11 with DynaRun 3.26.0.
+
+### Garbled Chinese text with a Traditional Chinese system locale
+
+When Windows was installed in English and the system locale changed to Chinese (Taiwan) later, the
+`HKLM\SYSTEM\CurrentControlSet\Control\FontAssoc\Associated Charset` key may lack `ANSI(00)=YES`. GDI
+then draws DynaRun's Big5 labels in ANSI-charset fonts with code page 1252, which shows Latin letters
+(`Aw³ï¥B·P...`). The launcher detects this and `dynafix.dll` creates those fonts with the Big5 charset (and
+Microsoft JhengHei UI) inside DynaRun only (`DYNAFIX_CHARSET`). Nothing in the registry is changed.
+If the system locale is not Chinese at all, DynaRun's Chinese cannot be shown: set *Language for non-Unicode
+programs* to Chinese (Traditional, Taiwan); the installer says so when it detects it.
 
 ### Garbled Chinese (or other DBCS) text with Windows' UTF-8 option
 
@@ -174,7 +198,7 @@ build.cmd
 ```
 
 Output goes to `build\` (`DynaRunFix-Setup.exe` embeds `DynaRunFix.exe`, `dynafix.dll` and the manifest;
-set `DRF_VERSION` for its version string). The binaries are 32-bit, have no C runtime dependency and target Windows XP and later.
+set `DRF_VERSION` for its version string); it uses [miniz](https://github.com/richgel999/miniz) 3.1.2 (MIT, `third_party/miniz`) to unpack the DynaRun setup). The binaries are 32-bit, have no C runtime dependency and target Windows XP and later.
 
 ## Diagnostic tool: msgspy
 
@@ -220,14 +244,19 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 除了 `%TEMP%\dynafix.log` 不寫任何檔案。同一個 dll 也修正 OneDrive 檔案打不開的問題(見下方)。
 
 ### 使用方式
-1. 用原廠 setup 正常安裝 DynaRun V3。
-2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 **`DynaRunFix-Setup.exe`**，雙擊執行。
+1. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 **`DynaRunFix-Setup.exe`**，雙擊執行。
    因為檔案沒有數位簽章，Windows SmartScreen 可能顯示「Windows 已保護您的電腦」：請按 **其他資訊 → 仍要執行**。
-   接著確認安裝，Windows 詢問是否允許變更時按 **是**（只有這一次）。
-3. 以後照常點 **DynaRun V3** 圖示啟動，就這樣。
-4. DynaRun **第一次**啟動（選擇系統）必須**以系統管理員身分**執行：在圖示上按右鍵 →「以系統管理員身分執行」，只需一次（原因見下方「首次設定按 OK 後卡住」）。
+2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
+   （「下載」或桌面已經有 `Dyna Pro Dynamometers.zip` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
+   顯示 Dyna Pro 的授權合約，然後安裝 DynaRun V3 和修正。已經裝好 DynaRun V3 時，只會安裝修正。
+   Windows 會詢問一次是否允許變更，請按 **是**。
+3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
+   請按 **是**，DynaRun 會自己重新啟動。
 
-安裝程式會做這些事：
+DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網，密碼由 Dyna Pro 提供。DynaRun 安裝檔以基本介面
+（`msiexec /qb`）執行，所以不會出現它的精靈頁面（安裝檔裡唯一用到 VBScript 的部分）。密碼只用來打開 zip，不會被儲存。
+
+安裝修正時會做這些事：
 - 把 `DynaRunFix.exe`、`dynafix.dll` 安裝到 `Program Files\DynaRunFix`；
 - 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
 - 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見下方）；
@@ -236,7 +265,10 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
 解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
-不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`。
+不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3）。
+
+如果「文件」放在 OneDrive，而之前留下的 DynaRun 手冊或範例檔是「只在線上」，安裝程式會先讀取這些檔案讓 OneDrive 下載下來；
+Windows Installer 自己做不到，會出現錯誤 1305。不會改變檔案內容或 OneDrive 設定。
 
 DynaRun 需要以系統管理員執行時（相容性設定勾了「以系統管理員身分執行」，或已有一個以系統管理員執行中的 DynaRun），啟動器會自己提升權限，捷徑不需要另外設定。
 
@@ -257,11 +289,19 @@ Releases 的 zip 內含同樣的檔案：把 `DynaRunFix.exe` 和 `dynafix.dll` 
 (在安裝好的捷徑上按右鍵 →「以系統管理員身分執行」)。
 
 ### 首次設定按「OK」後卡住(系統選擇視窗不消失、CPU 一核 100%)
-首次啟動時,DynaRun 會執行 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`(S68 是 `Setup_114.exe`)。
-這些程式沒有 manifest,檔名和描述又含「Setup」,Windows 的安裝程式偵測會要求它們以系統管理員執行;
-一般權限的 DynaRun 叫不起它,就一直空等。請**以系統管理員身分完成首次設定**
-(先跑 `tools\register-machine-wide.ps1`,否則系統管理員模式會卡在 115),之後平常用一般權限即可。
-已在 Win11 + DynaRun 3.26.0 驗證;Win7 開 UAC 時也一樣。
+首次啟動時,DynaRun 會用 `ShellExecute` 執行 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`(S68 是 `Setup_114.exe`)。
+這些程式沒有 manifest,檔名和描述又含「Setup」,Windows 的安裝程式偵測會以系統管理員執行它們。設定程式本身會完成,
+但一般權限的 DynaRun 會一直停在系統選擇畫面,要下次啟動才會讀到新的設定。
+
+`dynafix.dll` 只在記憶體中處理:包裝 DynaRun 的 `ShellExecuteA`(VB 的 *Declare*,經由 `GetProcAddress` 取得),
+等 `Setup_<編號>.exe` 執行完(一次 UAC),再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun,就會直接進入選好的系統。
+已在 Win11 + DynaRun 3.26.0 驗證。
+
+### 系統地區是繁體中文仍然亂碼
+Windows 以英文安裝、之後才把系統地區改成中文(台灣)時,`HKLM\SYSTEM\CurrentControlSet\Control\FontAssoc\Associated Charset`
+可能沒有 `ANSI(00)=YES`。GDI 會用字碼頁 1252 繪製 ANSI 字元集字型裡的 Big5 標籤,變成 `Aw³ï¥B·P...` 這類拉丁字母。
+啟動器偵測到這種情況時,`dynafix.dll` 只在 DynaRun 內把這些字型改用 Big5 字元集(以及微軟正黑體)建立(`DYNAFIX_CHARSET`),不改登錄。
+系統地區根本不是中文時無法顯示 DynaRun 的中文,請把「非 Unicode 程式的語言」設為「中文(繁體,台灣)」;安裝程式偵測到時會提示。
 
 ### 開啟系統 UTF-8 選項時中文亂碼
 「地區 → 系統管理 → 變更系統地區設定 → Beta:使用 Unicode UTF-8 提供全球語言支援」開啟時,系統 ANSI 字碼頁是 65001,VB6 程式的中文會變亂碼。
@@ -297,4 +337,4 @@ Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案
 生效時 log 會出現 `cleared cloud attributes 00080020 in GetFileAttributesA`。已在 Win11 + DynaRun 3.26.0 驗證。
 
 ### 建置
-安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。
+安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定;解開 DynaRun 安裝檔用的是 [miniz](https://github.com/richgel999/miniz) 3.1.2,MIT 授權,在 `third_party/miniz`)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。

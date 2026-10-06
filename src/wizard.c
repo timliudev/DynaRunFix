@@ -64,6 +64,15 @@ static void progress(BOOL marquee)
     vis(ID_PROG, TRUE);
 }
 
+static UINT StrToUint(const WCHAR *s) { UINT v = 0; while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0'); return v; }
+
+// ANSI code page of the system locale, also when "Beta: UTF-8" makes the active one 65001
+static UINT legacy_acp(void)
+{
+    WCHAR b[8];
+    return GetLocaleInfoW(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, b, 8) ? StrToUint(b) : GetACP();
+}
+
 static void set_page(int p)
 {
     static WCHAR b[1200];
@@ -150,6 +159,9 @@ static void set_page(int p)
                         L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
                         L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
         buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
+        if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
+            status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
+                   L"請到「設定 → 時間與語言 → 語言與地區 → 系統管理語言設定 → 變更系統地區設定」選「中文（繁體，台灣）」，再重新開機。", TRUE);
         break;
     case P_ERROR:
         text(ID_TITLE, T(L"Something went wrong", L"發生問題"));

@@ -42,3 +42,4 @@ char *msi_license_rtf(const WCHAR *msi);    // RTF of the setup's license page (
 BOOL msi_is_dynarun(const WCHAR *msi, WCHAR *version, int cch);
 int run_msiexec(const WCHAR *msi);          // msiexec exit code
 void pkg_temp_dir(WCHAR *out);              // %TEMP%\DynaRunFix (created)
+int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only" copies the setup overwrites

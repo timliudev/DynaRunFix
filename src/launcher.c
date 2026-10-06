@@ -7,11 +7,12 @@
 #define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
 
 static DWORD g_pid, g_tid;
+static HWND g_wnd;
 
 static BOOL CALLBACK findwin(HWND h, LPARAM l)
 {
     DWORD pid, tid = GetWindowThreadProcessId(h, &pid);
-    if (pid == g_pid) { g_tid = tid; return FALSE; }
+    if (pid == g_pid) { g_tid = tid; g_wnd = h; return FALSE; }
     return TRUE;
 }
 
@@ -24,6 +25,19 @@ static DWORD running(void)
     return pid;
 }
 
+// one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
+static void llog(const char *fmt, DWORD a, DWORD b)
+{
+    char path[MAX_PATH], line[200]; DWORD n; HANDLE h;
+    if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
+    lstrcatA(path, "\\dynafix.log");
+    wsprintfA(line, fmt, a, b);
+    h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    WriteFile(h, line, lstrlenA(line), &n, NULL);
+    CloseHandle(h);
+}
+
 static void fail(const char *msg) { MessageBoxA(NULL, msg, "DynaRunFix", MB_ICONERROR); ExitProcess(1); }
 
 static BOOL is_admin(void)
@@ -34,6 +48,24 @@ static BOOL is_admin(void)
         FreeSid(sid);
     }
     return r;
+}
+
+// DBCS system locale whose FontAssoc key does not map ANSI_CHARSET fonts (Windows installed in English,
+// locale changed later): DynaRun's Big5 labels would be drawn as Latin letters. dynafix then creates
+// those fonts with the locale's charset (DYNAFIX_CHARSET) and, for zh-TW, a face with the glyphs.
+static void charset_env(void)
+{
+    static const struct { UINT cp; const char *cs; } t[] = { { 950, "136" }, { 936, "134" }, { 932, "128" }, { 949, "129" } };
+    char v[8]; HKEY k; DWORD n = sizeof(v); UINT acp = GetACP(); int i; BOOL assoc = FALSE;
+    if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\FontAssoc\\Associated Charset", 0, KEY_QUERY_VALUE, &k)) {
+        assoc = !RegQueryValueExA(k, "ANSI(00)", NULL, NULL, (BYTE *)v, &n) && !lstrcmpiA(v, "YES");
+        RegCloseKey(k);
+    }
+    if (assoc) return;
+    for (i = 0; i < 4; i++) if (t[i].cp == acp) {
+        if (!GetEnvironmentVariableA("DYNAFIX_CHARSET", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_CHARSET", t[i].cs);
+        if (acp == 950 && !GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
+    }
 }
 
 static void elevate(const char *args)
@@ -81,6 +113,14 @@ void WinMainCRTStartup(void)
     cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
+    // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
+    if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
+        DWORD old = 0; HANDLE h0;
+        for (p = cmd + 8; *p == ' '; p++);
+        while (*p >= '0' && *p <= '9') old = old * 10 + (*p++ - '0');
+        if (old && (h0 = OpenProcess(SYNCHRONIZE, FALSE, old))) { WaitForSingleObject(h0, 15000); CloseHandle(h0); }
+        cmd = p; while (*cmd == ' ') cmd++;
+    }
     args = cmd;
     if (*cmd == '"') { cmd++; lstrcpynA(exe, cmd, MAX_PATH); p = exe; while (*p && *p != '"') p++; *p = 0; }
     else if (*cmd) lstrcpynA(exe, cmd, MAX_PATH);
@@ -116,6 +156,7 @@ void WinMainCRTStartup(void)
             for (i = 0; i < 600 && !(g_pid = running()); i++) Sleep(50);
             if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
         } else {
+            charset_env();
             if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
                 if (GetLastError() == ERROR_ELEVATION_REQUIRED) elevate(args);
                 fail("Cannot start DynaRun V3.exe");
@@ -127,6 +168,7 @@ void WinMainCRTStartup(void)
     }
     for (i = 0; i < 600 && !g_tid; i++) { EnumWindows(findwin, 0); if (!g_tid) Sleep(100); }
     if (!g_tid) fail("DynaRun window not found");
+    llog("launcher: DynaRun pid=%u gui-thread=%u\r\n", g_pid, g_tid);
 
     wsprintfA(ev, "Local\\dynafix_ready_%u", g_pid);
     e = CreateEventA(NULL, TRUE, FALSE, ev);
@@ -136,10 +178,14 @@ void WinMainCRTStartup(void)
     hk = SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)GetProcAddress(hd, "CwpProc"), hd, g_tid);
     if (!hk) fail("SetWindowsHookEx failed");
     for (i = 0; i < 100; i++) {           // keep nudging the GUI thread until the DLL reports in
+        // WH_CALLWNDPROC runs (and loads the dll) only for sent messages; a quiet window, such as the first-run
+        // system selection, may not get any for a long time, so send one
+        SendMessageTimeoutA(g_wnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 200, NULL);
         PostThreadMessageA(g_tid, WM_NULL, 0, 0);
         EnumWindows(findwin, 0);
         if (WaitForSingleObject(e, 100) == WAIT_OBJECT_0) break;
     }
+    if (i == 100) llog("launcher: dynafix.dll did not report in (hook thread %u, error %u)\r\n", g_tid, GetLastError());
     UnhookWindowsHookEx(hk);
     ExitProcess(0);
 }

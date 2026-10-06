@@ -587,6 +587,7 @@ int install_all(const WCHAR *msi)
     static WCHAR sid[200], args[MAX_PATH + 300]; int rc;
     if (!user_sid(sid, 200)) return 1;
     CoInitialize(NULL);
+    pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
     if (is_admin()) rc = machine_full(sid, msi);
     else {
         wsprintfW(args, L"/full %s \"%s\"", sid, msi);
