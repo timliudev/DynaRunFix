@@ -224,7 +224,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
-            if (e) { SetEvent(e); CloseHandle(e); }
+            if (e) SetEvent(e);   // handle stays open: a later launcher sees the fix is already active
         }
         if (!g_patched) patch_thbresize();
         if (!g_fsopatched) patch_attr();

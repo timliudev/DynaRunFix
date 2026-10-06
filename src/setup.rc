@@ -1,0 +1,31 @@
+// Payload of DynaRunFix-Setup.exe. Paths are relative to the repository root (build.cmd runs rc there).
+#include <winver.h>
+#include "version.h"
+
+1 RCDATA "build\DynaRunFix.exe"
+2 RCDATA "build\dynafix.dll"
+3 RCDATA "manifest\DynaRun V3.exe.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "DynaRunFix (github.com/timliudev/DynaRunFix)"
+      VALUE "FileDescription", "DynaRunFix installer"
+      VALUE "FileVersion", DRF_VERSION
+      VALUE "ProductName", "DynaRunFix"
+      VALUE "ProductVersion", DRF_VERSION
+      VALUE "OriginalFilename", "DynaRunFix-Setup.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

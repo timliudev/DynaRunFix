@@ -18,7 +18,9 @@ jobs:
 
       - name: Build
         shell: cmd
-        run: call build.cmd
+        run: |
+          if "%GITHUB_REF_TYPE%"=="tag" set DRF_VERSION=%GITHUB_REF_NAME:~1%
+          call build.cmd
 
       - name: Package
         shell: pwsh
@@ -26,7 +28,7 @@ jobs:
           $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "DynaRunFix-$env:GITHUB_REF_NAME" } else { "DynaRunFix-$($env:GITHUB_SHA.Substring(0,7))" }
           $pkg = "dist\$name"
           New-Item -ItemType Directory -Force $pkg, "$pkg\tools" | Out-Null
-          Copy-Item build\DynaRunFix.exe, build\dynafix.dll, README.md, LICENSE $pkg
+          Copy-Item build\DynaRunFix.exe, build\dynafix.dll, build\DynaRunFix-Setup.exe, README.md, LICENSE $pkg
           Copy-Item 'manifest\DynaRun V3.exe.manifest' $pkg
           Copy-Item tools\register-machine-wide.ps1, build\msgspy.exe, build\msgspy.dll "$pkg\tools"
           Compress-Archive -Path "$pkg\*" -DestinationPath "dist\$name.zip"
@@ -35,11 +37,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PKG }}
-          path: dist/${{ env.PKG }}.zip
+          path: |
+            dist/${{ env.PKG }}.zip
+            build/DynaRunFix-Setup.exe
 
       - name: Release
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME "dist\$env:PKG.zip" --title $env:GITHUB_REF_NAME --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME build\DynaRunFix-Setup.exe "dist\$env:PKG.zip" --title $env:GITHUB_REF_NAME --generate-notes

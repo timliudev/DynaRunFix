@@ -42,16 +42,40 @@ log in `%TEMP%\dynafix.log`.
 
 ## Usage
 
-1. Install DynaRun V3 normally (use the original setup so its data files are in place).
-2. Download the zip from [Releases](https://github.com/timliudev/DynaRunFix/releases) (or build, see below)
-   and keep `DynaRunFix.exe` and `dynafix.dll` **in the same folder**
-   (for example `%LOCALAPPDATA%\DynaRunFix`).
-3. Start DynaRun through `DynaRunFix.exe` (create a desktop shortcut to it).
-   - Default target: `C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe`
-   - Other location: `DynaRunFix.exe "D:\path\to\DynaRun V3.exe"`
-   - If DynaRun is already running, the launcher attaches the fix to it.
-4. If you start DynaRun **as administrator**, start `DynaRunFix.exe` as administrator too
-   (a non-elevated process cannot hook an elevated one).
+1. Install DynaRun V3 normally with its original setup.
+2. Download **`DynaRunFix-Setup.exe`** from [Releases](https://github.com/timliudev/DynaRunFix/releases)
+   and double-click it. Windows SmartScreen may say *"Windows protected your PC"* because the file is not
+   code-signed: click **More info → Run anyway**. Then confirm the installer and click **Yes** in the
+   Windows permission prompt (once).
+3. Start DynaRun with its usual **DynaRun V3** icon. That's it.
+4. The very first start of DynaRun (system selection) must run **as administrator**: right-click the icon →
+   *Run as administrator*, once (see [below](#first-time-setup-hangs-after-ok-system-selection-window-stays-one-cpu-core-at-100)).
+
+What the installer does:
+- installs `DynaRunFix.exe` and `dynafix.dll` to `Program Files\DynaRunFix`;
+- points the existing DynaRun V3 shortcuts (desktop, Start menu, pinned taskbar, all users and current
+  user) to the launcher, keeping their name, icon and *Run as administrator* setting; creates a desktop
+  shortcut if there is none;
+- makes DynaRun's ActiveX controls visible to elevated processes (what `tools/register-machine-wide.ps1`
+  does, see [below](#run-as-administrator-stops-at-system-initializing-please-wait-115));
+- only if Windows' *UTF-8 for worldwide language support* option is on: adds the
+  [code-page manifest](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option) next to `DynaRun V3.exe`;
+- registers an uninstaller in *Programs and Features* / *Installed apps*.
+
+Uninstalling restores the original shortcut files and removes the manifest it added. The machine-wide
+ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
+and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
+`/uninstall`.
+
+The launcher elevates itself when DynaRun has to run elevated (compatibility setting *Run as
+administrator*, or an elevated DynaRun is already running), so the shortcut does not need to.
+
+### Manual use (zip)
+
+The zip on the Releases page contains the same files for manual use: keep `DynaRunFix.exe` and
+`dynafix.dll` **in the same folder** and start DynaRun through `DynaRunFix.exe`
+(`DynaRunFix.exe "D:\path\to\DynaRun V3.exe"` for another location). If DynaRun is already running, the
+launcher attaches the fix to it.
 
 Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25 PostMessageA`.
 
@@ -65,7 +89,7 @@ COM registrations, so MSComm cannot be created and initialisation stops silently
 settings/initialisation screens need administrator rights, so this matters. The same pattern hits many
 XP-era ActiveX programs; see the playbook [docs/ELEVATED_COM.md](docs/ELEVATED_COM.md).
 
-Fix, from an **elevated** PowerShell:
+`DynaRunFix-Setup.exe` does this automatically. Manual fix, from an **elevated** PowerShell:
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\register-machine-wide.ps1          # add -WhatIf to preview
@@ -74,8 +98,8 @@ powershell -ExecutionPolicy Bypass -File tools\register-machine-wide.ps1        
 It copies the affected CLSID/ProgID/TypeLib keys to `HKLM` (with a backup and a log). `regsvr32` alone is not enough: while a class key exists
 under HKCU, writes through HKCR land in HKCU again.
 
-To get both the flicker fix and administrator rights, start `DynaRunFix.exe` as administrator (for
-example a shortcut with *Advanced → Run as administrator* ticked).
+To get both the flicker fix and administrator rights, start `DynaRunFix.exe` as administrator (the
+installed shortcut: right-click → *Run as administrator*).
 
 ### First-time setup hangs after "OK" (system selection window stays, one CPU core at 100%)
 
@@ -105,7 +129,8 @@ locale's legacy code page (950 for zh-TW) while the rest of the system stays UTF
 text boxes, charts). Some window captions, check boxes and labels are converted by Windows itself with the
 system code page and can stay garbled while the UTF-8 option is on, and files in folders with non-ASCII names
 may fail to open. Switching the option off (or running DynaRun through a locale emulator) fixes those too.
-On systems without the UTF-8 option none of this is needed.
+On systems without the UTF-8 option none of this is needed. `DynaRunFix-Setup.exe` adds the manifest
+(and removes it on uninstall) only when the option is on.
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
@@ -128,7 +153,8 @@ Requires Visual Studio 2019 or newer with the C++ desktop workload. Run:
 build.cmd
 ```
 
-Output goes to `build\`. The binaries are 32-bit, have no C runtime dependency and target Windows XP and later.
+Output goes to `build\` (`DynaRunFix-Setup.exe` embeds `DynaRunFix.exe`, `dynafix.dll` and the manifest;
+set `DRF_VERSION` for its version string). The binaries are 32-bit, have no C runtime dependency and target Windows XP and later.
 
 ## Diagnostic tool: msgspy
 
@@ -175,10 +201,27 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 
 ### 使用方式
 1. 用原廠 setup 正常安裝 DynaRun V3。
-2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 zip(或自行建置),把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**(例如 `%LOCALAPPDATA%\DynaRunFix`)。
-3. 以後都從 `DynaRunFix.exe` 啟動(可建桌面捷徑);DynaRun 若已在執行,會直接套用修正。
-   安裝在其他路徑:`DynaRunFix.exe "D:\路徑\DynaRun V3.exe"`。
-4. 若要**以系統管理員身分**執行 DynaRun,`DynaRunFix.exe` 也要以系統管理員身分執行。
+2. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 **`DynaRunFix-Setup.exe`**，雙擊執行。
+   因為檔案沒有數位簽章，Windows SmartScreen 可能顯示「Windows 已保護您的電腦」：請按 **其他資訊 → 仍要執行**。
+   接著確認安裝，Windows 詢問是否允許變更時按 **是**（只有這一次）。
+3. 以後照常點 **DynaRun V3** 圖示啟動，就這樣。
+4. DynaRun **第一次**啟動（選擇系統）必須**以系統管理員身分**執行：在圖示上按右鍵 →「以系統管理員身分執行」，只需一次（原因見下方「首次設定按 OK 後卡住」）。
+
+安裝程式會做這些事：
+- 把 `DynaRunFix.exe`、`dynafix.dll` 安裝到 `Program Files\DynaRunFix`；
+- 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
+- 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見下方）；
+- 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上字碼頁 manifest（見下方）；
+- 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
+
+解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
+不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`。
+
+DynaRun 需要以系統管理員執行時（相容性設定勾了「以系統管理員身分執行」，或已有一個以系統管理員執行中的 DynaRun），啟動器會自己提升權限，捷徑不需要另外設定。
+
+#### 手動使用（zip）
+Releases 的 zip 內含同樣的檔案：把 `DynaRunFix.exe` 和 `dynafix.dll` 放在**同一個資料夾**，從 `DynaRunFix.exe` 啟動
+（裝在其他路徑：`DynaRunFix.exe "D:\路徑\DynaRun V3.exe"`）。DynaRun 若已在執行，會直接套用修正。
 
 `%TEMP%\dynafix.log` 出現 `patched THBRes25 PostMessageA` 即代表生效。
 
@@ -187,10 +230,10 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 以系統管理員執行的程式會忽略 HKCU 的 COM 註冊,所以建立 MSComm 失敗,初始化就停在 115。
 進入語言或初始化設定畫面都需要系統管理員權限,所以這個問題一定得處理。很多 XP 時代的 ActiveX 程式都有同樣的問題,通用的診斷與修正流程見 [docs/ELEVATED_COM.md](docs/ELEVATED_COM.md)。
 
-修正:以**系統管理員**開 PowerShell,執行 `tools\register-machine-wide.ps1`(加 `-WhatIf` 可以先預覽),
+`DynaRunFix-Setup.exe` 會自動處理。手動修正:以**系統管理員**開 PowerShell,執行 `tools\register-machine-wide.ps1`(加 `-WhatIf` 可以先預覽),
 它會把相關的 CLSID/ProgID 複製到 HKLM。只跑 `regsvr32` 沒用,因為機碼已經存在於 HKCU 時,寫入會落回 HKCU。
 要同時有防閃爍修正和系統管理員權限,請以系統管理員身分執行 `DynaRunFix.exe`
-(捷徑 → 內容 → 進階 → 勾選「以系統管理員身分執行」)。
+(在安裝好的捷徑上按右鍵 →「以系統管理員身分執行」)。
 
 ### 首次設定按「OK」後卡住(系統選擇視窗不消失、CPU 一核 100%)
 首次啟動時,DynaRun 會執行 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`(S68 是 `Setup_114.exe`)。
@@ -207,7 +250,7 @@ DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維�
 `(Get-Item 'C:\Program Files (x86)\Dyna Pro Dynamometers\DynaRun V3.exe').LastWriteTime = Get-Date`。
 之後 `%TEMP%\dynafix.log` 會顯示 `ansi-codepage=950`。選單、文字框、圖表都會正常;
 部分視窗標題、核取方塊、按鈕和標籤是由 Windows 用系統字碼頁轉換的,開著 UTF-8 時仍會亂碼,含中文的資料夾路徑也可能無法開啟檔案;關閉該選項(或用 Locale Emulator 類工具啟動 DynaRun)即可完全正常。
-沒開 UTF-8 選項的電腦完全不需要這一步。
+沒開 UTF-8 選項的電腦完全不需要這一步。`DynaRunFix-Setup.exe` 只在開啟該選項時才加上 manifest(解除安裝時移除)。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
@@ -220,4 +263,4 @@ Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案
 生效時 log 會出現 `cleared cloud attributes 00080020 in GetFileAttributesA`。已在 Win11 + DynaRun 3.26.0 驗證。
 
 ### 建置
-安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`。32 位元、不依賴 C 執行階段、XP 以上皆可執行。
+安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。
