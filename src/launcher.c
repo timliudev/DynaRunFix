@@ -6,7 +6,7 @@
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
 #define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
 
-static DWORD g_pid, g_tid;
+static DWORD g_pid, g_tid, g_first;
 static HWND g_wnd;
 
 static BOOL CALLBACK findwin(HWND h, LPARAM l)
@@ -23,6 +23,15 @@ static DWORD running(void)
     if (Process32First(s, &pe)) do { if (!lstrcmpiA(pe.szExeFile, "DynaRun V3.exe")) pid = pe.th32ProcessID; } while (Process32Next(s, &pe));
     CloseHandle(s);
     return pid;
+}
+
+static BOOL is_dynarun(DWORD pid)
+{
+    PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); BOOL r = FALSE;
+    pe.dwSize = sizeof(pe);
+    if (Process32First(s, &pe)) do { if (pe.th32ProcessID == pid) r = !lstrcmpiA(pe.szExeFile, "DynaRun V3.exe"); } while (!r && Process32Next(s, &pe));
+    CloseHandle(s);
+    return r;
 }
 
 // one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
@@ -50,21 +59,27 @@ static BOOL is_admin(void)
     return r;
 }
 
-// DBCS system locale whose FontAssoc key does not map ANSI_CHARSET fonts (Windows installed in English,
-// locale changed later): DynaRun's Big5 labels would be drawn as Latin letters. dynafix then creates
-// those fonts with the locale's charset (DYNAFIX_CHARSET) and, for zh-TW, a face with the glyphs.
-static void charset_env(void)
+// TRUE if FontAssoc maps ANSI_CHARSET fonts to the locale's charset (Windows installed in that language)
+static BOOL fontassoc(void)
 {
-    static const struct { UINT cp; const char *cs; } t[] = { { 950, "136" }, { 936, "134" }, { 932, "128" }, { 949, "129" } };
-    char v[8]; HKEY k; DWORD n = sizeof(v); UINT acp = GetACP(); int i; BOOL assoc = FALSE;
+    char v[8]; HKEY k; DWORD n = sizeof(v); BOOL assoc = FALSE;
     if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\FontAssoc\\Associated Charset", 0, KEY_QUERY_VALUE, &k)) {
         assoc = !RegQueryValueExA(k, "ANSI(00)", NULL, NULL, (BYTE *)v, &n) && !lstrcmpiA(v, "YES");
         RegCloseKey(k);
     }
-    if (assoc) return;
+    return assoc;
+}
+
+// DBCS system locale whose FontAssoc key does not map ANSI_CHARSET fonts (Windows installed in English,
+// locale changed later): DynaRun's Big5 labels would be drawn as Latin letters. dynafix then creates
+// those fonts with the locale's charset (DYNAFIX_CHARSET); the face is swapped for the UI font anyway.
+static void charset_env(void)
+{
+    static const struct { UINT cp; const char *cs; } t[] = { { 950, "136" }, { 936, "134" }, { 932, "128" }, { 949, "129" } };
+    UINT acp = GetACP(); int i;
+    if (fontassoc()) return;
     for (i = 0; i < 4; i++) if (t[i].cp == acp) {
         if (!GetEnvironmentVariableA("DYNAFIX_CHARSET", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_CHARSET", t[i].cs);
-        if (acp == 950 && !GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
     }
 }
 
@@ -100,6 +115,42 @@ static BOOL runasadmin(const char *exe)
         RegCloseKey(k);
     }
     return found;
+}
+
+// First thread of process pid (DynaRun's GUI thread), 0 if none yet.
+static DWORD first_thread(DWORD pid)
+{
+    THREADENTRY32 te; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); DWORD tid = 0;
+    if (s == INVALID_HANDLE_VALUE) return 0;
+    te.dwSize = sizeof(te);
+    if (Thread32First(s, &te)) do { if (te.th32OwnerProcessID == pid) tid = te.th32ThreadID; } while (!tid && Thread32Next(s, &te));
+    CloseHandle(s);
+    return tid;
+}
+
+// Hook DynaRun's GUI thread before it makes its first window, so dynafix.dll is in place before any font is
+// made: fonts made before that (splash screen, forms loaded at start-up) would keep the old face/charset,
+// and VB's OLE fonts are cached and reused. A thread can be hooked only once it has a message queue, which
+// it gets with its first USER call (well before VB creates a window): poll from the moment it runs.
+// Exits the launcher once the dll has reported in; returns if that did not happen.
+static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
+{
+    char ev[64]; HANDLE e, hs[2]; HMODULE hd; HHOOK hk; int i;
+    wsprintfA(ev, "Local\\dynafix_ready_%u", pid);
+    e = CreateEventA(NULL, TRUE, FALSE, ev);
+    hd = LoadLibraryA(dll);
+    for (hk = NULL, i = 0; hd && !hk && i < 5000; i++)
+        if (!(hk = SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)GetProcAddress(hd, "CwpProc"), hd, tid))) Sleep(1);
+    if (!hk) { llog("launcher: early hook failed (error %u) %u\r\n", GetLastError(), 0); return; }
+    // the dll reports in (and keeps itself loaded) when DynaRun's first window gets a message
+    hs[0] = e; hs[1] = proc;
+    if (WaitForMultipleObjects(2, hs, FALSE, 60000) == WAIT_OBJECT_0) {
+        llog("launcher: DynaRun pid=%u hooked from start (thread %u)\r\n", pid, tid);
+        UnhookWindowsHookEx(hk);
+        ExitProcess(0);
+    }
+    UnhookWindowsHookEx(hk);
+    llog("launcher: early hook did not report in %u %u\r\n", 0, 0);
 }
 
 void WinMainCRTStartup(void)
@@ -145,23 +196,62 @@ void WinMainCRTStartup(void)
         // Other locales get just the manifest, which selects their own legacy code page.
         lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
         if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
-        if (GetACP() == CP_UTF8 && !lstrcmpA(ev, "950") && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
+        // Also for a zh-TW system locale whose FontAssoc lacks ANSI(00)=YES (Windows installed in English,
+        // locale changed later): LE gives DynaRun the Big5 code page and charset for every window, including
+        // tooltips and OCX controls that dynafix's font hooks do not reach.
+        if (!lstrcmpA(ev, "950") && (GetACP() == CP_UTF8 || (GetACP() == 950 && !fontassoc())) &&
+            GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
             // LEProc cannot raise DynaRun itself; elevate first if DynaRun is set to run as administrator.
             if (runasadmin(exe)) elevate(args);
-            // dynafix swaps Arial/MingLiU for this face (inherited by DynaRun through LEProc)
-            if (!GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
             wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
-            if (!CreateProcessA(le, line, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) fail("Cannot start Locale Emulator");
-            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-            for (i = 0; i < 600 && !(g_pid = running()); i++) Sleep(50);
+            // LE creates DynaRun suspended (to load its own dll) and resumes it: catch it right away. LEProc runs in a
+            // job, so DynaRun's creation is reported at once (polling the process list can be late: VB reads the
+            // screen size before its first form, and dynafix must be in place by then); polling is the fallback.
+            {
+                HANDLE job = CreateJobObjectA(NULL, NULL), port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+                JOBOBJECT_ASSOCIATE_COMPLETION_PORT jp; BOOL injob = FALSE;
+                if (job && port) {
+                    jp.CompletionKey = job; jp.CompletionPort = port;
+                    injob = SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &jp, sizeof(jp));
+                }
+                if (!CreateProcessA(le, line, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, dir, &si, &pi)) fail("Cannot start Locale Emulator");
+                injob = injob && AssignProcessToJobObject(job, pi.hProcess);
+                ResumeThread(pi.hThread);
+                if (injob) {
+                    DWORD msg, t0 = GetTickCount(); ULONG_PTR key; LPOVERLAPPED ov;
+                    while (!g_pid && GetTickCount() - t0 < 30000 && GetQueuedCompletionStatus(port, &msg, &key, &ov, 30000))
+                        if (msg == JOB_OBJECT_MSG_NEW_PROCESS && (DWORD)(UINT_PTR)ov != pi.dwProcessId && is_dynarun((DWORD)(UINT_PTR)ov))
+                            g_pid = (DWORD)(UINT_PTR)ov;
+                    if (g_pid) {   // its first thread, at once (a thread list of the whole system takes too long)
+                        typedef LONG (NTAPI *gnt_t)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, HANDLE *);
+                        typedef DWORD (WINAPI *gti_t)(HANDLE);
+                        gnt_t gnt = (gnt_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtGetNextThread");
+                        gti_t gti = (gti_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadId");
+                        HANDLE hp = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, g_pid), ht = NULL;
+                        if (hp && gnt && gti && !gnt(hp, NULL, THREAD_QUERY_INFORMATION, 0, 0, &ht)) { g_first = gti(ht); CloseHandle(ht); }
+                        if (hp) CloseHandle(hp);
+                    }
+                }
+                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            }
+            for (i = 0; i < 30000 && !g_pid && !(g_pid = running()); i++) Sleep(1);
             if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
+            {
+                DWORD tid = g_first; HANDLE h0 = OpenProcess(SYNCHRONIZE, FALSE, g_pid);
+                for (i = 0; i < 1000 && !tid && !(tid = first_thread(g_pid)); i++) Sleep(1);
+                if (tid && h0) early_hook(dll, g_pid, tid, h0);
+                if (h0) CloseHandle(h0);
+            }
         } else {
             charset_env();
-            if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+            if (!CreateProcessA(exe, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, dir, &si, &pi)) {
                 if (GetLastError() == ERROR_ELEVATION_REQUIRED) elevate(args);
                 fail("Cannot start DynaRun V3.exe");
             }
             g_pid = pi.dwProcessId;
+            // Without the early hook the dll is attached once the first window shows up.
+            ResumeThread(pi.hThread);
+            early_hook(dll, g_pid, pi.dwThreadId, pi.hProcess);
             WaitForInputIdle(pi.hProcess, 30000);
             CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         }

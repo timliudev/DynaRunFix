@@ -38,7 +38,17 @@ Full analysis, message traces and the tools used: [docs/ROOT_CAUSE.md](docs/ROOT
 process only, it redirects THBRes25.dll's import of `PostMessageA` and drops the `0x591` message when it
 was triggered by a `WM_SIZE` that is identical to the previous one for the same form. That restores the
 Windows 7 behaviour; genuine size changes still go through. Nothing is written to disk except a small
-log in `%TEMP%\dynafix.log`.
+log in `%TEMP%\dynafix.log`. The same dll also fixes the [first-time setup](#first-time-setup) and
+[OneDrive files that will not open](#some-dpr-files-will-not-open-empty-file-run-properties-no-curves).
+
+## What's new in v1.2.2
+
+- First start keeps the chosen language and optional features.
+- DynaRun's text in Windows' own UI font; Chinese everywhere on Windows installed in English with a Chinese locale.
+- The taskbar no longer hides DynaRun's status bar.
+- Installer: closes a running DynaRun for you, stays in front, works from a network drive, has an icon.
+
+All versions: [CHANGELOG.md](CHANGELOG.md).
 
 ## Usage
 
@@ -52,6 +62,13 @@ log in `%TEMP%\dynafix.log`.
    installed, it only installs the fix. Windows asks once for permission: click **Yes**.
 3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
    once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
+
+| | | |
+|---|---|---|
+| ![1. Start](docs/img/setup-start.png) | ![2. Download from Dyna Pro](docs/img/setup-download.png) | ![3. Setup password](docs/img/setup-password.png) |
+| ![4. Dyna Pro license](docs/img/setup-license.png) | ![5. Installing](docs/img/setup-installing.png) | ![6. Done](docs/img/setup-done.png) |
+
+*Fresh Windows 11 (Traditional Chinese), DynaRunFix 1.2.2.*
 
 Nothing of Dyna Pro's is included in DynaRunFix: the setup comes from Dyna Pro's site and the password from
 Dyna Pro. The DynaRun setup runs with basic UI (`msiexec /qb`), so its wizard pages, the only part of it
@@ -70,13 +87,21 @@ What the installer does for the fix:
 - only if Windows' *UTF-8 for worldwide language support* option is on: adds the
   [code-page manifest](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option) next to `DynaRun V3.exe`;
 - puts [Locale Emulator](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option) in `Program Files\DynaRunFix\le`
-  (used only with the UTF-8 option on a Traditional Chinese system);
+  (used only on a Traditional Chinese system with the UTF-8 option on, or whose FontAssoc lacks `ANSI(00)=YES`);
 - registers an uninstaller in *Programs and Features* / *Installed apps*.
 
 Uninstalling restores the original shortcut files and removes the manifest it added. The machine-wide
 ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
 and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
 `/uninstall`. `/quiet` installs only the fix and needs DynaRun V3 installed.
+
+DynaRun must be closed while the fix is installed or updated: a running DynaRun keeps the old
+`dynafix.dll` (and Locale Emulator's dlls) loaded. The installer checks for a running `DynaRun V3.exe`
+(and for `DynaRunFix.exe` / `LEProc.exe` from its own folder) before it changes anything. The wizard
+then offers *Close DynaRun and install*: DynaRun is closed like with its own close button, and ended
+if it is still running 10 seconds later (a test run in progress stops, unsaved data is lost).
+`/quiet` changes nothing and ends with exit code **6**; `/quiet /close` closes DynaRun the same way first.
+After copying, each installed file is read back and compared with the installer's copy.
 
 If *Documents* is in OneDrive and an earlier copy of DynaRun's manuals or example files there is
 "online-only", the installer reads those files first so that OneDrive downloads them; Windows Installer
@@ -93,6 +118,27 @@ The zip on the Releases page contains the same files for manual use: keep `DynaR
 launcher attaches the fix to it.
 
 Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25 PostMessageA`.
+
+## First-time setup
+
+On its first start DynaRun asks for the language, then for the dyno model and optional features
+("Dyna Pro系統選擇"). After **OK** Windows asks once for permission for `Setup_<nnn>.exe`, Dyna Pro's per-model
+configuration helper: click **Yes**. DynaRun then restarts by itself with the chosen model, language and optional
+features (climate monitor, cooling fans, AFR analyser).
+
+Without the fix DynaRun 3.26.0 hangs at this point on every Windows version, XP included: the selection
+window stays and one CPU core runs at 100 %, because DynaRun waits in an endless loop after starting the helper.
+After a forced restart the language is English (the helper overwrites it) and the optional features are off
+(the helper writes their enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
+it waits for the helper, puts the chosen language back, switches on the picked features with the same values
+*Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
+`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log`.
+
+| Language | System selection (climate monitor and AFR analyser picked) | After the automatic restart |
+|---|---|---|
+| ![Language selection](docs/img/first-start-language.png) | ![System selection](docs/img/first-start-select-picked.png) | ![Main window in Chinese with climate strip and AFR gauge](docs/img/first-start-main-v122.png) |
+
+Root causes, registry values, screenshots and test status: [docs/FIRST_START.md](docs/FIRST_START.md).
 
 ## Other Windows 10/11 problems
 
@@ -116,26 +162,16 @@ under HKCU, writes through HKCR land in HKCU again.
 To get both the flicker fix and administrator rights, start `DynaRunFix.exe` as administrator (the
 installed shortcut: right-click → *Run as administrator*).
 
-### First-time setup hangs after "OK" (system selection window stays, one CPU core at 100%)
-
-On the first start DynaRun runs `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<nnn>.exe`
-(e.g. `Setup_114.exe` for the S68) with `ShellExecute`. These helpers have no manifest and "Setup" in their
-name and description, so Windows' installer detection runs them elevated. The helper does its work, but the
-non-elevated DynaRun keeps showing the system selection and only picks up the new configuration on its next
-start.
-
-`dynafix.dll` handles this in memory: DynaRun's `ShellExecuteA` (a VB *Declare*, resolved through
-`GetProcAddress`) is wrapped, waits for `Setup_<nnn>.exe` to finish (one UAC prompt) and then restarts
-DynaRun through `DynaRunFix.exe /restart <pid>`. DynaRun then comes up with the chosen system. Verified on
-Windows 11 with DynaRun 3.26.0.
-
 ### Garbled Chinese text with a Traditional Chinese system locale
 
 When Windows was installed in English and the system locale changed to Chinese (Taiwan) later, the
 `HKLM\SYSTEM\CurrentControlSet\Control\FontAssoc\Associated Charset` key may lack `ANSI(00)=YES`. GDI
 then draws DynaRun's Big5 labels in ANSI-charset fonts with code page 1252, which shows Latin letters
-(`Aw³ï¥B·P...`). The launcher detects this and `dynafix.dll` creates those fonts with the Big5 charset (and
-Microsoft JhengHei UI) inside DynaRun only (`DYNAFIX_CHARSET`). Nothing in the registry is changed.
+(`Aw³ï¥B·P...`). For a Traditional Chinese locale the launcher detects this and starts DynaRun through
+[Locale Emulator](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option) (with `dynafix.dll` attached as usual):
+LE gives DynaRun the Big5 code page and charset in every window, including tooltips and OCX controls.
+For other DBCS locales (and if LE is missing) `dynafix.dll` creates DynaRun's ANSI-charset fonts with the
+locale's charset instead (`DYNAFIX_CHARSET`). Nothing in the registry is changed.
 If the system locale is not Chinese at all, DynaRun's Chinese cannot be shown: set *Language for non-Unicode
 programs* to Chinese (Traditional, Taiwan); the installer says so when it detects it.
 
@@ -168,16 +204,69 @@ with the system code page and stay garbled; for those, DynaRunFix runs DynaRun t
   directly, as before.
 - Keep the manifest as well: only the combination shows all text correctly (manifest alone: labels
   garbled; LE alone: menus and message boxes garbled).
-- Under LE fonts are created with the Big5 charset, so Windows draws Arial and similar faces with MingLiU.
-  The launcher sets `DYNAFIX_FONT=Microsoft JhengHei UI` and `dynafix.dll` swaps Arial, Times New Roman,
-  MS Sans Serif and MingLiU for it in DynaRun, its OCX controls and the chart. JhengHei's line height is 1.27
-  em versus MingLiU's 1.0, so text of 16 px and up is scaled to 90 % to keep two-line labels fitting
-  (`DYNAFIX_FONT_SCALE`, 50-150). Set `DYNAFIX_FONT` yourself to pick another face.
+- Under LE fonts are created with the Big5 charset, so Windows would draw Arial and similar faces with
+  MingLiU; `dynafix.dll` draws them in Microsoft JhengHei UI instead (see [Fonts](#fonts-windows-ui-font-everywhere)).
 
 Verified on Windows 11 (UTF-8 option on) with DynaRun 3.26.0: menus, dialogs, labels, buttons, the
 viewer and files in folders with Chinese names all work. Switching the UTF-8 option off also fixes
 everything without LE. On systems without the UTF-8 option none of this is needed. `DynaRunFix-Setup.exe` adds the manifest
 (and removes it on uninstall) only when the option is on.
+
+### Fonts: Windows' UI font everywhere
+
+DynaRun's forms ask for Arial, MS Sans Serif, Times New Roman or MingLiU (新細明體), and Windows substitutes
+others for some of them, so one window mixed several faces. `dynafix.dll` now draws DynaRun's text in the
+face Windows itself uses for dialogs in that language, picked by the code page DynaRun runs with (under Locale
+Emulator that is Big5):
+
+| Code page | Face (first one installed) |
+|---|---|
+| 950 Traditional Chinese | Microsoft JhengHei UI, Microsoft JhengHei |
+| 936 Simplified Chinese | Microsoft YaHei UI, Microsoft YaHei |
+| 932 Japanese | Yu Gothic UI, Meiryo UI |
+| 949 Korean | Malgun Gothic |
+| other (English, ...) | the system's message font: Segoe UI (Tahoma on XP) |
+
+- Applies on every path: native Traditional Chinese Windows, a locale changed later (Locale Emulator or
+  `DYNAFIX_CHARSET`), English Windows.
+- Swapped faces: Arial, Times New Roman, MS Sans Serif, Microsoft Sans Serif, MS Shell Dlg, Tahoma, Verdana,
+  Segoe UI, MingLiU / PMingLiU / 新細明體 and the other languages' old UI faces (SimSun, MS UI Gothic, Gulim, ...).
+  Symbol, digital and fixed-pitch faces (Wingdings, 7-segment fonts, Courier New, ...) and narrow or heavy faces
+  (Arial Narrow, Arial Black) stay as they are.
+- Covers DynaRun itself, its OCX controls (toolbars, lists, grids, tabs, the chart), VB's fonts, THBResize and
+  the common controls (tooltips), including the stock GUI font. Menus, message boxes and the file dialogs are
+  drawn by Windows and already use the UI font.
+- The UI faces have a taller line than the old ones, so text of 16 px and up is scaled to 90 % to keep
+  multi-line labels fitting (`DYNAFIX_FONT_SCALE`, 50-150).
+- `DYNAFIX_FONT=<face>` picks another face, `DYNAFIX_FONT=off` keeps DynaRun's own fonts. Only DynaRun's
+  process is affected; no file or setting is changed.
+
+Status: verified on Windows 11 with DynaRun 3.26.0 (native Traditional Chinese, and English Windows with the
+locale changed to Traditional Chinese through Locale Emulator).
+
+### Status bar hidden behind the taskbar
+
+DynaRun's main window is maximized but has no title bar. Windows maximizes such a window over the whole
+monitor, so a taskbar at the bottom covers DynaRun's status bar (recording mode, date, time). This is DynaRun's
+own behaviour on every Windows version, XP included; with the taskbar on the side the status bar is visible.
+
+`dynafix.dll` makes DynaRun see the primary monitor's work area (the screen minus the taskbar) as its screen
+size: VB's cached screen size (`Screen.Width/Height`) is changed in memory before DynaRun's first form loads.
+DynaRun sizes its main window and its whole dashboard layout from that value, so everything is laid out as on a
+slightly smaller monitor, with nothing out of place. VB copies the value when the first form loads, so the
+launcher attaches the fix right as DynaRun starts (through Locale Emulator, LEProc runs in a job object that
+reports DynaRun's start at once). As a fallback the maximized window is kept inside the work area. With an
+auto-hide taskbar 2 pixels are left free on that edge. `DYNAFIX_FULLSCREEN=1` keeps the original full-screen
+window. The log shows `VB's screen size 2048x1280 -> 2048x1232 (work area)` when it applies.
+
+| Before: the taskbar covers the status bar | After: status bar above the taskbar |
+|---|---|
+| ![Bottom of DynaRun's window, status bar hidden by the taskbar](docs/img/statusbar-before.png) | ![DynaRun's status bar (recording mode, date, time) above the taskbar](docs/img/statusbar-after.png) |
+
+*Windows 11, 2560x1600 at 125 %.*
+
+Status: verified on Windows 11 (1920x1080, taskbar at the bottom) and on a Windows 11 PC at 2560x1600 / 125 %,
+both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups not tested yet.
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
@@ -191,6 +280,16 @@ date written by older versions) are not the cause: a byte-identical copy without
 return the attributes without the cloud bits (pinned, unpinned, recall-on-open, recall-on-data-access).
 Files and OneDrive settings are not changed. The log shows `cleared cloud attributes 00080020 in
 GetFileAttributesA` when it applies. Verified on Windows 11 with DynaRun 3.26.0.
+
+### Setup warns "This setup uses VBScript custom actions" (Windows 11 25H2)
+
+Only the setup wizard's **Next**/**Back** buttons use VBScript (two Wise custom actions); DynaRun itself and
+everything the setup installs do not. Once Windows disables VBScript by default (planned for about 2027) the
+interactive setup is expected to stop at the first **Next**, while `msiexec /i Setup.msi /qb` keeps working.
+`DynaRunFix-Setup.exe` already runs it that way, so this only matters when you start Dyna Pro's `Setup.msi` yourself.
+[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) turns your own
+`Setup.msi` into a transform (`Setup-novbs.mst`) and a patched copy that install without VBScript and without
+the warning. Details, timeline and test results: [docs/VBSCRIPT.md](docs/VBSCRIPT.md).
 
 ## Building
 
@@ -244,7 +343,15 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 修正方式
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
-除了 `%TEMP%\dynafix.log` 不寫任何檔案。同一個 dll 也修正 OneDrive 檔案打不開的問題(見下方)。
+除了 `%TEMP%\dynafix.log` 不寫任何檔案。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
+
+### v1.2.2 更新內容
+- 首次啟動保留選的語言和選購功能。
+- DynaRun 的文字改用 Windows 介面字型;英文安裝、地區改成中文的 Windows 也全部顯示中文。
+- 工作列不再遮住 DynaRun 的狀態列。
+- 安裝程式:會幫你關閉執行中的 DynaRun、保持在最前面、可從網路磁碟機執行、有圖示了。
+
+所有版本的紀錄:[CHANGELOG.md](CHANGELOG.md#更新紀錄)。
 
 ### 使用方式
 1. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 **`DynaRunFix-Setup.exe`**，雙擊執行。
@@ -256,6 +363,13 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
    請按 **是**，DynaRun 會自己重新啟動。
 
+| | | |
+|---|---|---|
+| ![1. 開始](docs/img/setup-start.png) | ![2. 從 Dyna Pro 官網下載](docs/img/setup-download.png) | ![3. 輸入安裝密碼](docs/img/setup-password.png) |
+| ![4. Dyna Pro 授權合約](docs/img/setup-license.png) | ![5. 安裝中](docs/img/setup-installing.png) | ![6. 完成](docs/img/setup-done.png) |
+
+*全新的 Win11(繁體中文),DynaRunFix 1.2.2。*
+
 DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網，密碼由 Dyna Pro 提供。DynaRun 安裝檔以基本介面
 （`msiexec /qb`）執行，所以不會出現它的精靈頁面（安裝檔裡唯一用到 VBScript 的部分）。密碼只用來打開 zip，不會被儲存。
 安裝檔是依內容辨識，不看檔名：只有 UpgradeCode 是 DynaRun 的（`{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}`，每個版本都相同）
@@ -266,11 +380,16 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
 - 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
 - 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見下方）；
 - 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上字碼頁 manifest（見下方）；
-- 把 Locale Emulator 放到 `Program Files\DynaRunFix\le`（只有繁中系統開了 UTF-8 選項時才會用到，見下方）；
+- 把 Locale Emulator 放到 `Program Files\DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到，見下方）；
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
 解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
 不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3）。
+
+安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。
+安裝程式在改動任何東西之前，會先檢查是否有執行中的 `DynaRun V3.exe`（以及從安裝資料夾執行的 `DynaRunFix.exe`／`LEProc.exe`）。
+精靈會顯示「關閉 DynaRun 並安裝」：像按 DynaRun 自己的關閉鈕一樣關掉它，10 秒後還沒結束就強制結束（正在進行的測試會中斷，沒存檔的資料會遺失）。
+`/quiet` 則不做任何變更，以結束代碼 **6** 結束；`/quiet /close` 會先用同樣方式關閉 DynaRun 再安裝。複製完成後，每個安裝的檔案都會讀回來和安裝程式內的版本比對。
 
 如果「文件」放在 OneDrive，而之前留下的 DynaRun 手冊或範例檔是「只在線上」，安裝程式會先讀取這些檔案讓 OneDrive 下載下來；
 Windows Installer 自己做不到，會出現錯誤 1305。不會改變檔案內容或 OneDrive 設定。
@@ -283,6 +402,22 @@ Releases 的 zip 內含同樣的檔案：把 `DynaRunFix.exe` 和 `dynafix.dll` 
 
 `%TEMP%\dynafix.log` 出現 `patched THBRes25 PostMessageA` 即代表生效。
 
+### 首次設定
+首次啟動時 DynaRun 會先問語言,再顯示「Dyna Pro系統選擇」(機型與選購功能)。按 **OK** 後 Windows 會詢問一次是否允許
+`Setup_<編號>.exe`(Dyna Pro 各機型的設定程式)變更,請按 **是**。之後 DynaRun 會自動以選好的機型、語言和選購功能
+(大氣監測、冷卻風扇、空燃比分析儀)重新啟動。
+
+沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:選擇視窗不消失、CPU 一核 100%,因為 DynaRun 啟動設定程式後進入無限迴圈。
+強制重新啟動後語言變成英文(被設定程式蓋掉),選購功能也是關閉的(設定程式把啟用旗標寫成 `0`)。
+`dynafix.dll` 只在記憶體中包裝 DynaRun 的 `ShellExecuteA`:等設定程式結束、寫回選的語言、以和「工程模式 → 系統組態設定 → 存檔並離開」相同的值啟用勾選的功能,
+再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`。
+
+| 語言 | 系統選擇(勾選大氣監測、空燃比分析儀) | 自動重新啟動後 |
+|---|---|---|
+| ![選擇語言](docs/img/first-start-language.png) | ![系統選擇](docs/img/first-start-select-picked.png) | ![中文主畫面,有大氣資訊與空燃比錶](docs/img/first-start-main-v122.png) |
+
+根本原因、登錄值、截圖與測試狀態見 [docs/FIRST_START.md](docs/FIRST_START.md)。
+
 ### 以系統管理員執行卡在「System Initializing. Please Wait. 115」
 原廠安裝程式以一般權限執行時,MSComm、MSCOMCTL、MSHFlexGrid 等 ActiveX 元件只註冊在目前使用者(HKCU)。
 以系統管理員執行的程式會忽略 HKCU 的 COM 註冊,所以建立 MSComm 失敗,初始化就停在 115。
@@ -293,19 +428,12 @@ Releases 的 zip 內含同樣的檔案：把 `DynaRunFix.exe` 和 `dynafix.dll` 
 要同時有防閃爍修正和系統管理員權限,請以系統管理員身分執行 `DynaRunFix.exe`
 (在安裝好的捷徑上按右鍵 →「以系統管理員身分執行」)。
 
-### 首次設定按「OK」後卡住(系統選擇視窗不消失、CPU 一核 100%)
-首次啟動時,DynaRun 會用 `ShellExecute` 執行 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`(S68 是 `Setup_114.exe`)。
-這些程式沒有 manifest,檔名和描述又含「Setup」,Windows 的安裝程式偵測會以系統管理員執行它們。設定程式本身會完成,
-但一般權限的 DynaRun 會一直停在系統選擇畫面,要下次啟動才會讀到新的設定。
-
-`dynafix.dll` 只在記憶體中處理:包裝 DynaRun 的 `ShellExecuteA`(VB 的 *Declare*,經由 `GetProcAddress` 取得),
-等 `Setup_<編號>.exe` 執行完(一次 UAC),再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun,就會直接進入選好的系統。
-已在 Win11 + DynaRun 3.26.0 驗證。
-
 ### 系統地區是繁體中文仍然亂碼
 Windows 以英文安裝、之後才把系統地區改成中文(台灣)時,`HKLM\SYSTEM\CurrentControlSet\Control\FontAssoc\Associated Charset`
 可能沒有 `ANSI(00)=YES`。GDI 會用字碼頁 1252 繪製 ANSI 字元集字型裡的 Big5 標籤,變成 `Aw³ï¥B·P...` 這類拉丁字母。
-啟動器偵測到這種情況時,`dynafix.dll` 只在 DynaRun 內把這些字型改用 Big5 字元集(以及微軟正黑體)建立(`DYNAFIX_CHARSET`),不改登錄。
+系統地區是繁體中文時,啟動器偵測到這種情況就改用 Locale Emulator 啟動 DynaRun(照常掛上 `dynafix.dll`),
+所有視窗(含工具提示和 OCX 控制項)都以 Big5 字碼頁與字元集顯示。其他 DBCS 地區(或找不到 LE 時)則由 `dynafix.dll`
+只在 DynaRun 內把 ANSI 字元集字型改用該地區的字元集建立(`DYNAFIX_CHARSET`)。不改登錄。
 系統地區根本不是中文時無法顯示 DynaRun 的中文,請把「非 Unicode 程式的語言」設為「中文(繁體,台灣)」;安裝程式偵測到時會提示。
 
 ### 開啟系統 UTF-8 選項時中文亂碼
@@ -323,13 +451,54 @@ DynaRun 就會改用系統地區的舊字碼頁(zh-TW 是 950),其他程式維�
 - 系統字碼頁是 UTF-8、系統地區是繁體中文(舊字碼頁 950),且有 `le\LEProc.exe` 時,`DynaRunFix.exe` 會透過 LE 啟動 DynaRun,並立刻掛上防閃爍修正;
   否則(沒開 UTF-8,或其他地區,只用 manifest)照舊直接啟動。
 - manifest 也要保留:兩者一起才會全部正常(只有 manifest:標籤亂碼;只有 LE:選單和訊息框亂碼)。
-- 透過 LE 時字型會以 Big5 字元集建立,Arial 等字型會被 Windows 換成細明體。啟動器會設定
-  `DYNAFIX_FONT=Microsoft JhengHei UI`,`dynafix.dll` 在 DynaRun、OCX 元件和圖表裡把 Arial、Times New Roman、
-  MS Sans Serif、細明體換成它。正黑體行高是 1.27 em(細明體 1.0),所以 16 px 以上的字縮為 90%,兩行的標籤才放得下
-  (`DYNAFIX_FONT_SCALE`,50–150)。要用別的字型可以自行設定 `DYNAFIX_FONT`。
+- 透過 LE 時字型會以 Big5 字元集建立,Windows 會把 Arial 等字型換成細明體;`dynafix.dll` 改用 Microsoft JhengHei UI 繪製
+  (見[字型](#字型全部使用-windows-介面字型))。
 
 已在 Win11(開啟 UTF-8 選項)+ DynaRun 3.26.0 驗證:選單、對話框、標籤、按鈕、看圖程式、中文資料夾裡的檔案都正常。
 關閉 UTF-8 選項也能全部正常,不需要 LE。沒開 UTF-8 選項的電腦完全不需要這一步。`DynaRunFix-Setup.exe` 只在開啟該選項時才加上 manifest(解除安裝時移除)。
+
+### 字型:全部使用 Windows 介面字型
+
+DynaRun 的表單指定 Arial、MS Sans Serif、Times New Roman 或新細明體,其中一部分又被 Windows 替換,同一個視窗裡混著好幾種字型。
+現在 `dynafix.dll` 讓 DynaRun 的文字都用 Windows 該語言對話框所用的字型,依 DynaRun 執行時的字碼頁決定(透過 Locale Emulator 時為 Big5):
+
+| 字碼頁 | 字型(取第一個已安裝的) |
+|---|---|
+| 950 繁體中文 | Microsoft JhengHei UI、Microsoft JhengHei |
+| 936 簡體中文 | Microsoft YaHei UI、Microsoft YaHei |
+| 932 日文 | Yu Gothic UI、Meiryo UI |
+| 949 韓文 | Malgun Gothic |
+| 其他(英文等) | 系統訊息字型:Segoe UI(XP 為 Tahoma) |
+
+- 所有情況都套用:原生繁中 Windows、後來才改地區(Locale Emulator 或 `DYNAFIX_CHARSET`)、英文 Windows。
+- 替換的字型:Arial、Times New Roman、MS Sans Serif、Microsoft Sans Serif、MS Shell Dlg、Tahoma、Verdana、Segoe UI、
+  細明體/新細明體,以及其他語言的舊介面字型(SimSun、MS UI Gothic、Gulim 等)。符號、數位、等寬字型(Wingdings、七段顯示字型、
+  Courier New 等)與窄體/粗黑字型(Arial Narrow、Arial Black)不變。
+- 範圍包含 DynaRun 本身、OCX 元件(工具列、清單、表格、頁籤、圖表)、VB 字型、THBResize 與通用控制項(工具提示),也包含系統預設 GUI 字型。
+  選單、訊息框和開檔對話框由 Windows 繪製,本來就是介面字型。
+- 介面字型行高較高,16 px 以上的字縮為 90%,多行標籤才放得下(`DYNAFIX_FONT_SCALE`,50–150)。
+- `DYNAFIX_FONT=<字型>` 指定其他字型,`DYNAFIX_FONT=off` 保留 DynaRun 原本的字型。只影響 DynaRun 的程序,不改任何檔案或設定。
+
+狀態:已在 Win11 + DynaRun 3.26.0 驗證(原生繁中,以及英文安裝、地區改為繁中並經 Locale Emulator)。
+
+### 狀態列被工作列遮住
+DynaRun 主視窗是最大化但沒有標題列的視窗,Windows 會把這種視窗放大到整個螢幕,所以放在底部的工作列會蓋住
+DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的行為,XP 也一樣;工作列放在側邊時就看得到。
+
+`dynafix.dll` 讓 DynaRun 把主螢幕的工作區(扣掉工作列的範圍)當成螢幕大小:在 DynaRun 載入第一個表單之前,
+只在記憶體中把 VB 記住的螢幕大小(`Screen.Width/Height`)改成工作區大小。DynaRun 依這個值決定主視窗和整個儀表
+版面,所以畫面就像在稍小的螢幕上,所有元件位置都正確。VB 在載入第一個表單時就會複製這個值,所以 launcher
+在 DynaRun 一啟動就掛上修正(經過 Locale Emulator 時,LEProc 放在 job 物件中,DynaRun 一建立就會立即通知)。
+另外仍保留把最大化視窗限制在工作區內的保險。工作列自動隱藏時該邊留 2 像素。`DYNAFIX_FULLSCREEN=1` 保留原本的
+全螢幕視窗。生效時 log 會出現 `VB's screen size 2048x1280 -> 2048x1232 (work area)`。
+
+| 修正前:工作列蓋住狀態列 | 修正後:狀態列在工作列上方 |
+|---|---|
+| ![DynaRun 底部,狀態列被工作列遮住](docs/img/statusbar-before.png) | ![DynaRun 的狀態列(紀錄模式、日期、時間)在工作列上方](docs/img/statusbar-after.png) |
+
+*Win11,2560x1600、125%。*
+
+狀態:已在 Win11(1920x1080、工作列在底部)及 Win11 2560x1600 / 125% 的電腦上驗證,兩者都經 Locale Emulator。XP、工作列自動隱藏、多螢幕尚未測試。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
@@ -340,6 +509,13 @@ Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案
 `dynafix.dll` 只在記憶體中處理:`MSVBVM60.DLL` 和 `scrrun.dll` 匯入的檔案屬性 API 回傳時,會去掉雲端相關位元
 (pinned、unpinned、recall-on-open、recall-on-data-access)。不修改任何檔案,也不改 OneDrive 設定。
 生效時 log 會出現 `cleared cloud attributes 00080020 in GetFileAttributesA`。已在 Win11 + DynaRun 3.26.0 驗證。
+
+### 安裝程式出現「此安裝程式使用 VBScript 自訂動作」警告(Win11 25H2)
+只有安裝精靈的「Next/Back」換頁用到 VBScript(Wise 的兩個自訂動作),DynaRun 本身和安裝的內容都沒有。
+微軟預計約 2027 年預設停用 VBScript,屆時直接點兩下安裝,預期會在第一次按 Next 就失敗;`msiexec /i Setup.msi /qb`(不顯示精靈)仍可安裝。
+`DynaRunFix-Setup.exe` 本來就是這樣執行它,只有自己直接執行 Dyna Pro 的 `Setup.msi` 時才會遇到。
+[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) 會用你自己的 `Setup.msi`
+產生轉換檔(`Setup-novbs.mst`)和修改版副本,兩者都不需要 VBScript,也不會再出現警告。時程、細節與測試結果見 [docs/VBSCRIPT.md](docs/VBSCRIPT.md)。
 
 ### 建置
 安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定;解開 DynaRun 安裝檔用的是 [miniz](https://github.com/richgel999/miniz) 3.1.2,MIT 授權,在 `third_party/miniz`)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。

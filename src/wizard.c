@@ -19,13 +19,14 @@
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 
-enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY };
-enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_LICENSE, P_INSTALL, P_DONE, P_ERROR };
+enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP };
+enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR };
 enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 #define WM_PROGRESS (WM_APP + 1)
 #define WM_JOBDONE  (WM_APP + 2)
+#define TIMER_RUNNING 1
 
-static int g_page, g_job, g_dpi, g_lastpct = -1;
+static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
 static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile;
 static HANDLE g_thread;
@@ -81,6 +82,15 @@ static const WCHAR *file_name(const WCHAR *path)
     return n;
 }
 
+// "DynaRun V3", "DynaRunFix.exe" ... for the running-programs page
+static void running_names(int run, WCHAR *out)
+{
+    out[0] = 0;
+    if (run & RUN_DYNARUN) lstrcatW(out, L"   DynaRun V3\n");
+    if (run & RUN_LAUNCHER) lstrcatW(out, T(L"   DynaRunFix.exe (starting DynaRun)\n", L"   DynaRunFix.exe（正在啟動 DynaRun）\n"));
+    if (run & RUN_LEPROC) lstrcatW(out, L"   LEProc.exe (Locale Emulator)\n");
+}
+
 // The size is the server's (Content-Length), shown once the download has started.
 static void fetch_body(DWORD total)
 {
@@ -99,6 +109,7 @@ static void set_page(int p)
 {
     static WCHAR b[1200];
     g_page = p;
+    KillTimer(g_hwnd, TIMER_RUNNING);
     vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
     switch (p) {
     case P_HELLO:
@@ -169,6 +180,20 @@ static void set_page(int p)
         SetFocus(H(ID_CHECK));                       // the disabled "Install" button cannot hold the keyboard focus
         if (g_note[0]) status(g_note, TRUE);
         break;
+    case P_RUNNING: {
+        WCHAR names[200];
+        running_names(g_lastrun = running_programs(), names);
+        text(ID_TITLE, T(L"DynaRun is running", L"DynaRun 正在執行"));
+        wsprintfW(b, T(L"DynaRun must be closed to install:\n%s\n"
+                       L"\"Close DynaRun and install\" closes it now.\nA test run in progress stops, unsaved data is lost.",
+                       L"安裝前必須關閉 DynaRun：\n%s\n"
+                       L"按「關閉 DynaRun 並安裝」會立即關閉它。\n正在進行的測試會中斷，沒存檔的資料會遺失。"), names);
+        text(ID_BODY, b);
+        buttons(T(L"Close DynaRun and install", L"關閉 DynaRun 並安裝"), T(L"Cancel", L"取消"), NULL);
+        if (g_note[0]) status(g_note, TRUE);
+        SetTimer(g_hwnd, TIMER_RUNNING, 1000, NULL);
+        break;
+    }
     case P_INSTALL:
         text(ID_TITLE, T(L"Installing", L"安裝中"));
         text(ID_BODY, T(L"Installing, please wait. This takes a minute or two.\n\nWhen Windows asks whether to allow changes, click \"Yes\".",
@@ -229,6 +254,7 @@ static void start_job(int job, int page)
     g_job = job; g_cancel = 0; g_busy = TRUE;
     set_page(page);
     g_thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
+    if (job == JOB_INSTALL_ALL || job == JOB_INSTALL_FIX) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
 }
 
 /* ---------- steps ---------- */
@@ -242,6 +268,14 @@ static DWORD CALLBACK rtf_in(DWORD_PTR c, LPBYTE b, LONG n, LONG *got)
     for (i = 0; i < k; i++) b[i] = (BYTE)s->p[i];
     s->p += k; s->left -= k; *got = k;
     return 0;
+}
+
+// The install jobs start only once DynaRun is closed (see running_programs in setup.c).
+static void install(int job)
+{
+    g_pending = job;
+    if (running_programs()) set_page(P_RUNNING);
+    else start_job(job, P_INSTALL);
 }
 
 static void fetch(void)
@@ -277,7 +311,7 @@ static void after_extract(void)
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
         SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
         set_page(P_LICENSE);
-    } else start_job(JOB_INSTALL_ALL, P_INSTALL);
+    } else install(JOB_INSTALL_ALL);
 }
 
 static void open_package(void)
@@ -362,6 +396,7 @@ static void job_done(int job, int rc)
     case JOB_INSTALL_ALL:
     case JOB_INSTALL_FIX:
         if (rc == 0) { cleanup_files(); set_page(P_DONE); break; }
+        if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); break; }   // DynaRun was started meanwhile
         if (rc == 2) {
             lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
             set_page(job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);
@@ -378,7 +413,7 @@ static void on_primary(void)
 {
     switch (g_page) {
     case P_HELLO:
-        if (g_installed) start_job(JOB_INSTALL_FIX, P_INSTALL); else fetch();
+        if (g_installed) install(JOB_INSTALL_FIX); else fetch();
         break;
     case P_FAIL: fetch(); break;
     case P_PASSWORD:
@@ -389,7 +424,11 @@ static void on_primary(void)
         }
         start_job(JOB_EXTRACT, P_EXTRACT);
         break;
-    case P_LICENSE: start_job(JOB_INSTALL_ALL, P_INSTALL); break;
+    case P_LICENSE: install(JOB_INSTALL_ALL); break;
+    case P_RUNNING:
+        g_close = TRUE;                              // the elevated stage closes DynaRun (see close_programs in setup.c)
+        start_job(g_pending, P_INSTALL);
+        break;
     case P_DONE:
         ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, NULL, SW_SHOWNORMAL);
         DestroyWindow(g_hwnd);
@@ -494,6 +533,60 @@ static void pick_face(LOGFONTW *lf)
     ReleaseDC(NULL, dc);
 }
 
+// Brings the wizard back in front after the elevated part. SetForegroundWindow alone is refused
+// when another process (msiexec's progress window, "Windows configures ...") had the foreground:
+// raise it to the top of the z-order anyway, then borrow the foreground thread's input to activate it.
+static void bring_front(HWND h)
+{
+    HWND fg = GetForegroundWindow(); DWORD me = GetCurrentThreadId(), other = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+    SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    if (SetForegroundWindow(h) || !other || other == me) return;
+    if (AttachThreadInput(me, other, TRUE)) {
+        BringWindowToTop(h); SetForegroundWindow(h); SetFocus(h);
+        AttachThreadInput(me, other, FALSE);
+    }
+    if (GetForegroundWindow() != h) {                // still refused: at least flash the taskbar button
+        FLASHWINFO f; f.cbSize = sizeof(f); f.hwnd = h; f.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG; f.uCount = 3; f.dwTimeout = 0;
+        FlashWindowEx(&f);
+    }
+}
+
+// Image name (no path) of the process that owns window w; "" when it cannot be read.
+static const WCHAR *owner_name(HWND w, WCHAR *buf, DWORD n)
+{
+    typedef BOOL (WINAPI *qfpin_t)(HANDLE, DWORD, LPWSTR, PDWORD);
+    static qfpin_t qfpin; DWORD pid = 0; HANDLE p; const WCHAR *name = buf, *c;
+    buf[0] = 0;
+    if (!qfpin) qfpin = (qfpin_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryFullProcessImageNameW");
+    if (!qfpin || !GetWindowThreadProcessId(w, &pid)) return buf;
+    if ((p = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, FALSE, pid)) != NULL) {
+        if (!qfpin(p, 0, buf, &n)) buf[0] = 0;
+        CloseHandle(p);
+    }
+    for (c = buf; *c; c++) if (*c == '\\') name = c + 1;
+    return name;
+}
+
+// While the elevated part installs: the UAC prompt and msiexec's progress window take the foreground,
+// and afterwards Windows may activate Explorer, which then covers the wizard. Keep the wizard just
+// behind msiexec's window, and above Explorer; other programs the user switches to are left alone.
+static void keep_up(HWND h)
+{
+    static WCHAR b[MAX_PATH]; const WCHAR *n; HWND fg = GetForegroundWindow(); DWORD pid = 0;
+    if (!fg || fg == h || IsIconic(h)) return;
+    GetWindowThreadProcessId(fg, &pid);
+    if (pid == GetCurrentProcessId()) return;
+    n = owner_name(fg, b, MAX_PATH);
+    if (!lstrcmpiW(n, L"msiexec.exe") || !lstrcmpiW(n, L"consent.exe"))
+        SetWindowPos(h, fg, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    else if (!lstrcmpiW(n, L"explorer.exe")) {
+        SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -525,7 +618,26 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     }
-    case WM_JOBDONE: job_done((int)w, (int)l); return 0;
+    case WM_TIMER:                                  // the page follows DynaRun being closed (or started again)
+        if (w == TIMER_RUNNING && g_page == P_RUNNING) {
+            int run = running_programs();
+            if (run != g_lastrun) {
+                g_lastrun = run;
+                if (run) set_page(P_RUNNING);
+                else {                               // closed by the user meanwhile: plain "Install"
+                    buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
+                    status(T(L"DynaRun is closed.", L"DynaRun 已關閉。"), FALSE);
+                    layout();
+                }
+            }
+        }
+        if (w == ID_KEEPUP) keep_up(h);
+        return 0;
+    case WM_JOBDONE:
+        KillTimer(h, ID_KEEPUP);
+        // after the elevated part (which allows it) the wizard comes back in front of other windows
+        if (w == JOB_INSTALL_ALL || w == JOB_INSTALL_FIX) bring_front(h);
+        job_done((int)w, (int)l); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; RECT c; HDC dc = BeginPaint(h, &ps); HPEN pen, old;
         GetClientRect(h, &c); c.top = c.bottom - S(FOOTER);
