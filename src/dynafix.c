@@ -16,7 +16,14 @@
 // such a file as not a normal file and silently skips it. The file-attribute APIs
 // imported by MSVBVM60.DLL and scrrun.dll are redirected to wrappers that clear
 // those bits. Only import tables in this process are patched; nothing on disk changes.
+//
+// Third fix: on the first start DynaRun runs System Data\Setup_<n>.exe (VB Declare ShellExecuteA)
+// and polls for its result. Windows' installer detection runs that helper elevated; DynaRun then
+// keeps showing the system selection and only picks up the new configuration on its next start.
+// ShellExecuteA, which MSVBVM60 resolves with GetProcAddress, gets a wrapper: for Setup_<n>.exe it
+// waits for the helper to finish (one UAC prompt) and restarts DynaRun through the launcher.
 #include <windows.h>
+#include <shellapi.h>
 #include <intrin.h>
 
 #pragma comment(linker, "/EXPORT:CwpProc=_CwpProc@12")
@@ -121,6 +128,68 @@ static BOOL WINAPI H_FindNextFileW(HANDLE h, LPWIN32_FIND_DATAW d)
     return ok;
 }
 
+// ---- VB Declare functions ----
+// DynaRun's own API calls (VB "Declare") are resolved at run time by MSVBVM60 with GetProcAddress,
+// so they are in no import table: MSVBVM60's import of GetProcAddress is redirected instead.
+
+static FARPROC r_gpa, r_shexec;
+
+// After the first-time setup helper DynaRun keeps showing the system selection and only picks up the
+// new configuration on its next start, so start it again: the launcher next to this dll waits for this
+// process to end ("/restart <pid>") and starts DynaRun with the fix attached.
+static void restart_dynarun(void)
+{
+    char exe[MAX_PATH + 40], *p; STARTUPINFOA si; PROCESS_INFORMATION pi; int i;
+    GetModuleFileNameA(g_self, exe, MAX_PATH);
+    for (p = exe + lstrlenA(exe); p > exe && p[-1] != '\\'; p--);
+    lstrcpyA(p, "DynaRunFix.exe");
+    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) return;
+    { char cmd[MAX_PATH + 60]; volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; si.cb = sizeof(si);
+      wsprintfA(cmd, "\"%s\" /restart %u", exe, GetCurrentProcessId());
+      if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return; }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    logf("restarting DynaRun to load the new configuration %u %u %u\r\n", 0, 0, 0);
+    ExitProcess(0);
+}
+
+static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR params, LPCSTR dir, INT show)
+{
+    typedef HINSTANCE (WINAPI *se_t)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
+    typedef BOOL (WINAPI *sx_t)(SHELLEXECUTEINFOA *);
+    const char *p; int i;
+    // First-time setup helper (System Data\Setup_<n>.exe): run it to the end with the message loop
+    // running, then restart DynaRun. A declined UAC prompt is reported to DynaRun as access denied.
+    for (p = file; p && *p; p++)
+        if ((p == file || p[-1] == '\\') && lstrlenA(p) >= 6 &&
+            CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, p, 6, "Setup_", 6) == CSTR_EQUAL) {
+            SHELLEXECUTEINFOA se; sx_t sx = (sx_t)GetProcAddress(GetModuleHandleA("shell32.dll"), "ShellExecuteExA"); MSG m;
+            if (!sx) break;
+            { volatile char *z = (volatile char *)&se; for (i = 0; i < (int)sizeof(se); i++) z[i] = 0; }
+            se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC; se.hwnd = w;
+            se.lpVerb = verb; se.lpFile = file; se.lpParameters = params; se.lpDirectory = dir; se.nShow = show;
+            if (!sx(&se)) { logf("setup helper %s did not start: error %u %u\r\n", (DWORD)(UINT_PTR)file, GetLastError(), 0); return (HINSTANCE)(UINT_PTR)SE_ERR_ACCESSDENIED; }
+            logf("setup helper %s started, waiting for it %u %u\r\n", (DWORD)(UINT_PTR)file, 0, 0);
+            if (se.hProcess) {
+                while (MsgWaitForMultipleObjects(1, &se.hProcess, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
+                    while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
+                CloseHandle(se.hProcess);
+            }
+            logf("setup helper finished %u %u %u\r\n", 0, 0, 0);
+            restart_dynarun();
+            return (HINSTANCE)42;
+        }
+    return ((se_t)r_shexec)(w, verb, file, params, dir, show);
+}
+
+static FARPROC WINAPI H_GetProcAddress(HMODULE m, LPCSTR name)
+{
+    typedef FARPROC (WINAPI *gpa_t)(HMODULE, LPCSTR);
+    FARPROC f = ((gpa_t)r_gpa)(m, name);
+    if (!f || (UINT_PTR)name < 0x10000) return f;          // ordinal
+    if (!lstrcmpA(name, "ShellExecuteA")) { r_shexec = f; return (FARPROC)H_ShellExecuteA; }
+    return f;
+}
+
 // *real = kernel32 export, alt = kernelbase export (api-ms-win-* imports bind there)
 typedef struct { const char *name; FARPROC *real; FARPROC hook; FARPROC alt; } hook_t;
 
@@ -133,12 +202,20 @@ typedef struct { const char *name; FARPROC *real; FARPROC hook; FARPROC alt; } h
 // MingLiU's line height is 1.0 em, JhengHei's 1.27 em, and DynaRun's multi-line labels are sized for
 // MingLiU, so the em height of large fonts (16 px and up) is scaled by DYNAFIX_FONT_SCALE percent
 // (default 90) to keep them fitting.
+//
+// Without LE, on a DBCS system locale (e.g. zh-TW, code page 950) whose FontAssoc key lacks
+// "Associated Charset\ANSI(00)=YES" (common when Windows was installed in English and the locale
+// changed later), GDI converts text drawn in ANSI_CHARSET fonts with code page 1252, so DynaRun's
+// Big5 labels come out as Latin letters. The launcher then sets DYNAFIX_CHARSET (136 for Big5) and
+// ANSI_CHARSET fonts are created with that charset instead, which is what FontAssoc would do.
 
 static FARPROC r_cfiA, r_cfiW, r_cfA, r_cfW;
 static WCHAR g_fontW[LF_FACESIZE];
 static char g_fontA[LF_FACESIZE];
 static LONG g_fontlog;
 static int g_fontscale = 90;   // % of the requested em height (DYNAFIX_FONT_SCALE)
+static BYTE g_charset;         // DYNAFIX_CHARSET: replaces ANSI_CHARSET, 0 = off
+#define CS(c) (g_charset && (c) == ANSI_CHARSET ? g_charset : (c))
 
 static const WCHAR *g_swap[] = {
     L"Arial", L"Times New Roman", L"MS Sans Serif", L"Microsoft Sans Serif", L"MS Shell Dlg", L"MS Shell Dlg 2",
@@ -170,12 +247,12 @@ static void log_face(const WCHAR *face, BOOL swapped)
 static HFONT WINAPI H_CreateFontIndirectW(const LOGFONTW *lf)
 {
     LOGFONTW f;
-    BOOL sw = lf && swap_face(lf->lfFaceName);
+    BOOL sw = lf && g_fontW[0] && swap_face(lf->lfFaceName);
     if (lf) log_face(lf->lfFaceName, sw);
-    if (!sw) return ((HFONT (WINAPI *)(const LOGFONTW *))r_cfiW)(lf);
+    if (!sw && (!lf || CS(lf->lfCharSet) == lf->lfCharSet)) return ((HFONT (WINAPI *)(const LOGFONTW *))r_cfiW)(lf);
     f = *lf;
-    lstrcpynW(f.lfFaceName, g_fontW, LF_FACESIZE);
-    fit(&f.lfHeight, &f.lfQuality);
+    f.lfCharSet = CS(f.lfCharSet);
+    if (sw) { lstrcpynW(f.lfFaceName, g_fontW, LF_FACESIZE); fit(&f.lfHeight, &f.lfQuality); }
     return ((HFONT (WINAPI *)(const LOGFONTW *))r_cfiW)(&f);
 }
 
@@ -185,12 +262,12 @@ static HFONT WINAPI H_CreateFontIndirectA(const LOGFONTA *lf)
     BOOL sw;
     if (!lf) return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(lf);
     MultiByteToWideChar(CP_ACP, 0, lf->lfFaceName, -1, w, LF_FACESIZE);
-    sw = swap_face(w);
+    sw = g_fontW[0] && swap_face(w);
     log_face(w, sw);
-    if (!sw) return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(lf);
+    if (!sw && CS(lf->lfCharSet) == lf->lfCharSet) return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(lf);
     f = *lf;
-    lstrcpynA(f.lfFaceName, g_fontA, LF_FACESIZE);
-    fit(&f.lfHeight, &f.lfQuality);
+    f.lfCharSet = CS(f.lfCharSet);
+    if (sw) { lstrcpynA(f.lfFaceName, g_fontA, LF_FACESIZE); fit(&f.lfHeight, &f.lfQuality); }
     return ((HFONT (WINAPI *)(const LOGFONTA *))r_cfiA)(&f);
 }
 
@@ -201,10 +278,10 @@ static HFONT WINAPI H_CreateFontW(int h, int w, int esc, int ori, int wt, DWORD 
                                   DWORD op, DWORD cp, DWORD q, DWORD pf, LPCWSTR face)
 {
     LONG hh = h; BYTE qq = (BYTE)q;
-    BOOL sw = face && swap_face(face);
+    BOOL sw = face && g_fontW[0] && swap_face(face);
     if (face) log_face(face, sw);
     if (sw) { fit(&hh, &qq); face = g_fontW; }
-    return ((CreateFontW_t)r_cfW)(hh, w, esc, ori, wt, it, ul, so, cs, op, cp, qq, pf, face);
+    return ((CreateFontW_t)r_cfW)(hh, w, esc, ori, wt, it, ul, so, CS(cs), op, cp, qq, pf, face);
 }
 
 static HFONT WINAPI H_CreateFontA(int h, int w, int esc, int ori, int wt, DWORD it, DWORD ul, DWORD so, DWORD cs,
@@ -212,9 +289,9 @@ static HFONT WINAPI H_CreateFontA(int h, int w, int esc, int ori, int wt, DWORD 
 {
     LONG hh = h; BYTE qq = (BYTE)q; WCHAR fw[LF_FACESIZE];
     BOOL sw = FALSE;
-    if (face) { MultiByteToWideChar(CP_ACP, 0, face, -1, fw, LF_FACESIZE); sw = swap_face(fw); log_face(fw, sw); }
+    if (face) { MultiByteToWideChar(CP_ACP, 0, face, -1, fw, LF_FACESIZE); sw = g_fontW[0] && swap_face(fw); log_face(fw, sw); }
     if (sw) { fit(&hh, &qq); face = g_fontA; }
-    return ((CreateFontA_t)r_cfA)(hh, w, esc, ori, wt, it, ul, so, cs, op, cp, qq, pf, face);
+    return ((CreateFontA_t)r_cfA)(hh, w, esc, ori, wt, it, ul, so, CS(cs), op, cp, qq, pf, face);
 }
 
 static hook_t g_font_hooks[] = {
@@ -234,6 +311,10 @@ static hook_t g_attr_hooks[] = {
     { "FindFirstFileW",       &r_ffW,   (FARPROC)H_FindFirstFileW },
     { "FindNextFileA",        &r_fnA,   (FARPROC)H_FindNextFileA },
     { "FindNextFileW",        &r_fnW,   (FARPROC)H_FindNextFileW },
+    { 0 }
+};
+static hook_t g_proc_hooks[] = {
+    { "GetProcAddress",       &r_gpa,   (FARPROC)H_GetProcAddress },
     { 0 }
 };
 static void resolve(hook_t *h)
@@ -292,6 +373,8 @@ static void patch_attr(void)
         g_vbpatched = TRUE;
         resolve(g_attr_hooks);
         patch_imports("MSVBVM60.DLL", g_attr_hooks);
+        resolve(g_proc_hooks);
+        patch_imports("MSVBVM60.DLL", g_proc_hooks);
     }
     if (g_vbpatched && !g_fsopatched && GetModuleHandleA("scrrun.dll")) {
         g_fsopatched = TRUE;
@@ -309,7 +392,7 @@ static void patch_font(void)
     HMODULE g, gf;
     hook_t *h;
     int i, left = 0;
-    if (!g_fontW[0] || !GetModuleHandleA("MSVBVM60.DLL")) return;
+    if ((!g_fontW[0] && !g_charset) || !GetModuleHandleA("MSVBVM60.DLL")) return;
     if (!r_cfiW) {
         g = GetModuleHandleA("gdi32.dll"); gf = GetModuleHandleA("gdi32full.dll");
         for (h = g_font_hooks; h->name; h++) {
@@ -376,6 +459,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
             if (GetEnvironmentVariableA("DYNAFIX_FONT_SCALE", v, sizeof(v)) && v[0]) {
                 for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
                 if (n >= 50 && n <= 150) g_fontscale = n;
+            }
+            if (GetEnvironmentVariableA("DYNAFIX_CHARSET", v, sizeof(v)) && v[0]) {
+                for (i = 0, n = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
+                if (n > 0 && n < 255) g_charset = (BYTE)n;
             }
         }
     }
