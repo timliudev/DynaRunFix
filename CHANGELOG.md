@@ -2,6 +2,16 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.2.3 — 2026-10-07
+
+- **Removed `tools/msi-novbs`:** DynaRunFix no longer ships anything that changes Dyna Pro's setup. If Windows
+  has VBScript switched off, turn it back on under *Optional features*, or use `DynaRunFix-Setup.exe`, which runs
+  Dyna Pro's setup without its VBScript wizard pages.
+- **Licences:** the installer and the zip now include the miniz licence (`LICENSE-miniz.txt`); miniz is used by
+  the installer to unpack Dyna Pro's setup.
+- **Docs:** the first-start notes describe only what can be observed from outside DynaRun; the README asks users
+  to check their licence agreement with Dyna Pro.
+
 ## v1.2.2 — 2026-10-07
 
 - **First start:** the language picked on the first start and the optional features picked on the system
@@ -23,8 +33,8 @@
   - The wizard stays in front of Explorer while DynaRun's setup and the permission prompt run.
   - Works when started from a network drive.
   - New icon.
-- **Tool:** [`tools/msi-novbs`](README.md#setup-warns-this-setup-uses-vbscript-custom-actions-windows-11-25h2)
-  makes Dyna Pro's `Setup.msi` installable without VBScript (for when Windows disables it, planned for about
+- **Tool (removed in v1.2.3):** `tools/msi-novbs`
+  made Dyna Pro's `Setup.msi` installable without VBScript (for when Windows disables it, planned for about
   2027). `DynaRunFix-Setup.exe` does not need it: it runs that setup without its VBScript wizard pages.
 
 ## v1.2.1 — 2026-10-07
@@ -52,6 +62,13 @@
 
 ## 更新紀錄
 
+### v1.2.3 — 2026-10-07
+
+- **移除 `tools/msi-novbs`:** DynaRunFix 不再提供任何修改 Dyna Pro 安裝檔的工具。Windows 停用 VBScript 時,
+  請到「選用功能」重新啟用,或使用 `DynaRunFix-Setup.exe`(它執行 Dyna Pro 安裝檔時不顯示用到 VBScript 的精靈頁面)。
+- **授權:** 安裝程式與 zip 附上 miniz 的授權(`LICENSE-miniz.txt`);安裝程式用 miniz 解開 Dyna Pro 的安裝檔。
+- **文件:** 首次啟動說明只描述從 DynaRun 外部觀察得到的行為;README 提醒使用者自行確認與 Dyna Pro 的授權條款。
+
 ### v1.2.2 — 2026-10-07
 
 - **首次啟動:** 保留第一次啟動時選的語言,以及系統選擇畫面勾選的選購功能(大氣監測、水冷、冷卻風扇、空燃比分析儀);
@@ -67,7 +84,7 @@
   - DynaRun 安裝程式和權限提示執行時,精靈保持在檔案總管前面。
   - 從網路磁碟機執行也能安裝。
   - 新圖示。
-- **工具:** [`tools/msi-novbs`](README.md#安裝程式出現此安裝程式使用-vbscript-自訂動作警告win11-25h2) 讓 Dyna Pro 的
+- **工具(v1.2.3 已移除):** `tools/msi-novbs` 讓 Dyna Pro 的
   `Setup.msi` 不需要 VBScript 也能安裝(微軟預計約 2027 年預設停用 VBScript)。`DynaRunFix-Setup.exe` 不需要它:
   它執行該安裝檔時本來就不顯示用到 VBScript 的精靈頁面。
 
