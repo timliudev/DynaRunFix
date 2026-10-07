@@ -77,10 +77,10 @@ All in memory, no DynaRun file is changed.
 | Part | Change | Status |
 |---|---|---|
 | `dynafix.dll` | Wraps DynaRun's `ShellExecuteA` (a VB *Declare*, resolved by MSVBVM60 through `GetProcAddress`). For `Setup_*` it runs the helper with `ShellExecuteExA`, waits for it (one UAC prompt), puts back the `Default_Language` DynaRun had stored before the helper ran, and restarts DynaRun through `DynaRunFix.exe /restart <pid>` — so the endless loop is never entered. | Verified, Win11 zh-TW, DynaRun 3.26.0 |
-| `DynaRunFix.exe` (launcher) | Starts DynaRun with `CREATE_SUSPENDED`, resumes it and polls `SetWindowsHookEx(WH_CALLWNDPROC)` on its GUI thread until it succeeds (a thread can be hooked only once it has a message queue; before that the call fails with error 87). `dynafix.dll` is then loaded before the first window, so the splash screen and forms created at start-up also get the charset fix. | Verified, Win11 (log: `hooked from start`) and native zh-TW Win11 |
+| `DynaRunFix.exe` (launcher) | Starts DynaRun with `CREATE_SUSPENDED`, resumes it and polls `SetWindowsHookEx(WH_CALLWNDPROC)` on its GUI thread until it succeeds (a thread can be hooked only once it has a message queue; before that the call fails with error 87). Through Locale Emulator it starts `LEProc.exe` suspended in a job object, is told at once when DynaRun's process is created and hooks DynaRun's first thread the same way. `dynafix.dll` is then loaded before the first window, so the splash screen and forms created at start-up are covered too. With `/restart <pid>` it first waits (up to 15 s) for the old DynaRun to end. | Verified, Win11 (log: `hooked from start`) and native zh-TW Win11 |
 | `DynaRunFix-Setup.exe` | Elevation from a mapped network drive (e.g. a VM shared folder) first copies the setup to `%TEMP%` and elevates the copy — the elevated process cannot see the user's mapped drives. Before, no UAC prompt appeared and the install failed silently. | Verified, Win11 (UAC names the `%TEMP%` copy) |
 | `DynaRunFix-Setup.exe` (wizard) | Comes back to the foreground after the elevated part (the elevated process calls `AllowSetForegroundWindow`; if msiexec's window still holds the foreground, the wizard is raised in z-order and activated through `AttachThreadInput`, else its taskbar button flashes). | Verified, Win11 (final page in front of a maximized Explorer) |
-| `dynafix.dll` (optional features) | While the selection screen is still open, reads which optional-feature buttons are green (controls inside the frame by position, hidden EB-150/EB-250 skipped). After the helper it writes the `System_Setup` flags that *存檔並離開* would write (`Auto_Climate_Enable` + `Property_Auto_Climate`, `Cooling_Fan_Enable`, `Int_AF_Ratio_Enable`, `Water_Cooler_Enable`) as `"-1"`, logs each value, then restarts DynaRun. If the buttons cannot be read, climate/AFR count as picked when a model was stored. | Verified, Win11 (cooling fan alone; climate + fan + AFR) and native zh-TW Win11 (combined build `64535b2`); XP not tested |
+| `dynafix.dll` (optional features) | While the selection screen is still open, reads which optional-feature buttons are green (controls inside the frame by position, hidden EB-150/EB-250 skipped). After the helper it writes the `System_Setup` flags that *存檔並離開* would write (`Auto_Climate_Enable` + `Property_Auto_Climate`, `Cooling_Fan_Enable`, `Int_AF_Ratio_Enable`, `Water_Cooler_Enable`) as `"-1"`, logs each value, then restarts DynaRun. If the buttons cannot be read, climate/AFR count as picked when a model was stored. | Verified, Win11 (cooling fan alone; climate + fan + AFR) and native zh-TW Win11 (v1.2.2 code); XP not tested |
 
 After the restart DynaRun comes up with the chosen model and language:
 
@@ -92,7 +92,7 @@ DP-AF-1000-D) and the main window shows the AFR gauge and the climate strip:
 ![Configuration after the first start with the fix](img/first-start-config-after-fix.png)
 
 Splash screen before and after the launcher hooked DynaRun from start (version and status line), with the
-`DYNAFIX_CHARSET` font replacement — since `cbc61d5` a Traditional Chinese locale uses Locale Emulator instead (below):
+`DYNAFIX_CHARSET` font replacement — a Traditional Chinese locale now uses Locale Emulator instead (below):
 
 ![Splash screen before the early hook: garbled version text](img/first-start-splash-before-font-fix.png)
 ![Splash screen with the early hook: readable](img/first-start-splash-after-font-fix.png)
@@ -116,7 +116,8 @@ A Win11 installed in Traditional Chinese (ANSI code page 950), fresh DynaRun fro
   keeps coming back and the registry stays at the placeholder values → the hang is not tied to a changed
   system locale.
 * With DynaRunFix everything worked (language kept, model, splash/RPM dialog/viewer in Chinese, no garbled text).
-* `FontAssoc\Associated CharSet` does not exist at all there (no `ANSI(00)=YES`), and no font handling is needed.
+* `FontAssoc\Associated CharSet` does not exist at all there (no `ANSI(00)=YES`), and no charset handling is needed (the UI-font swap of v1.2.2 still applies, see the
+  README's *Fonts* section).
 
 ## Garbled text after the locale was changed to Chinese (final fix: Locale Emulator)
 
@@ -130,11 +131,12 @@ text in ANSI-charset fonts is drawn as Latin letters.
 
   ![Viewer toolbar tooltip still garbled with the font patch](img/viewer-tooltip-garbled.png)
 
-* **Final fix** (WIP `cbc61d5`): for a Traditional Chinese locale without `ANSI(00)=YES` the launcher starts
+* **Final fix** (v1.2.2): for a Traditional Chinese locale without `ANSI(00)=YES` the launcher starts
   DynaRun through Locale Emulator, with `dynafix.dll` attached as usual. Verified by Tim on Win11: splash, dialogs,
-  viewer and tooltips all Chinese, no flicker. The `DYNAFIX_CHARSET` font replacement in `dynafix.dll` remains only
-  for other DBCS locales, or when LE is missing.
-* A natively Traditional Chinese Windows needs no font handling at all, only the first-start fix.
+  viewer and tooltips all Chinese, no flicker. `DYNAFIX_CHARSET` (the charset `dynafix.dll` gives the fonts it
+  swaps) remains only for other DBCS locales, or when LE is missing.
+* A natively Traditional Chinese Windows needs no charset handling, only the first-start fix; the UI-font swap
+  (README, *Fonts*) applies there as everywhere else.
 
 ## How this was tested
 
@@ -198,10 +200,10 @@ Process Monitor 也確認 DynaRun 下次啟動會讀到設定程式寫的值。
 | 元件 | 修改 | 狀態 |
 |---|---|---|
 | `dynafix.dll` | 包裝 `ShellExecuteA`:遇到 `Setup_*` 時用 `ShellExecuteExA` 執行並等待(一次 UAC),寫回 DynaRun 先前存的 `Default_Language`,再以 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun,完全避開無限迴圈。 | 已驗證(Win11 繁中、3.26.0) |
-| `DynaRunFix.exe` | 以 `CREATE_SUSPENDED` 啟動 DynaRun,恢復執行後輪詢 `SetWindowsHookEx`,直到其 GUI 執行緒有訊息佇列(之前會回傳錯誤 87)。這樣 `dynafix.dll` 在第一個視窗之前就載入,啟動畫面的字型也會套用字元集修正。 | 已驗證(Win11、原生繁中 Win11) |
+| `DynaRunFix.exe` | 以 `CREATE_SUSPENDED` 啟動 DynaRun,恢復執行後輪詢 `SetWindowsHookEx`,直到其 GUI 執行緒有訊息佇列(之前會回傳錯誤 87)。經 Locale Emulator 時則把 `LEProc.exe` 暫停啟動並放進 job 物件,DynaRun 一建立就收到通知,再以同樣方式掛上它的第一個執行緒。這樣 `dynafix.dll` 在第一個視窗之前就載入,啟動畫面和一開始建立的表單也都涵蓋。`/restart <pid>` 時先等舊的 DynaRun 結束(最多 15 秒)。 | 已驗證(Win11、原生繁中 Win11) |
 | `DynaRunFix-Setup.exe` | 從網路磁碟機(例如虛擬機共用資料夾)提升權限時,先複製到 `%TEMP%` 再提升(提升後的行程看不到使用者對應的網路磁碟機)。修正前不會出現 UAC,安裝無聲失敗。 | 已驗證(Win11) |
 | 安裝精靈 | 提升權限的部分結束後回到前景(`AllowSetForegroundWindow`;若前景仍被 msiexec 視窗佔住,改用 z-order + `AttachThreadInput`,再不行就閃爍工作列按鈕)。 | 已驗證(Win11) |
-| `dynafix.dll`(選購功能) | 選擇畫面還開著時讀出哪些選購功能按鈕是綠色(依位置、略過隱藏的 EB-150/EB-250),設定程式結束後寫入「存檔並離開」會寫的 `"-1"` 旗標並記錄,再重新啟動 DynaRun。讀不到按鈕時,有存型號的大氣監測/空燃比視為已選。 | 已驗證(Win11;原生繁中 Win11 以合併後的 `64535b2` 測試);XP 未測 |
+| `dynafix.dll`(選購功能) | 選擇畫面還開著時讀出哪些選購功能按鈕是綠色(依位置、略過隱藏的 EB-150/EB-250),設定程式結束後寫入「存檔並離開」會寫的 `"-1"` 旗標並記錄,再重新啟動 DynaRun。讀不到按鈕時,有存型號的大氣監測/空燃比視為已選。 | 已驗證(Win11;原生繁中 Win11 以 v1.2.2 的程式碼測試);XP 未測 |
 
 v1.2.2 在全新原生繁中 Win11 上的錄影截圖(由 `DynaRunFix-Setup.exe` 1.2.2 下載並安裝 DynaRun 3.26.0;選中文、S68、勾選大氣監測與空燃比分析儀,
 `Setup_114.Exe` 一次 UAC,自動重新啟動;啟動畫面與主畫面都是 Microsoft JhengHei UI,狀態列在工作列上方):
@@ -214,7 +216,7 @@ v1.2.2 在全新原生繁中 Win11 上的錄影截圖(由 `DynaRunFix-Setup.exe`
 ### 原生繁中 Win11 對照
 
 以繁體中文安裝的 Win11(字碼頁 950)、官方安裝程式全新安裝 DynaRun:沒有 DynaRunFix 時首次啟動過不去(接受 UAC 後選擇畫面一直回來,登錄停在預設佔位值),
-所以卡住與「後來才改系統地區」無關;有 DynaRunFix 時全部正常、沒有亂碼。該系統根本沒有 `FontAssoc\Associated CharSet`(沒有 `ANSI(00)=YES`),也不需要任何字型處理。
+所以卡住與「後來才改系統地區」無關;有 DynaRunFix 時全部正常、沒有亂碼。該系統根本沒有 `FontAssoc\Associated CharSet`(沒有 `ANSI(00)=YES`),也不需要任何字元集處理(v1.2.2 的介面字型替換仍會套用,見 README「字型」)。
 
 ### 地區後來才改成中文時的亂碼(最終解法:Locale Emulator)
 
@@ -223,9 +225,9 @@ DynaRun 在 ANSI 字元集字型裡的 Big5 文字會變成拉丁字母。
 
 * 第一個做法(分支 `claude/fontfix-labels`,**已停止**):`dynafix.dll` 把 OCX 與 `comctl32` 建立的字型改成 Big5 字元集。
   轉速錶設定與看圖程式的標籤變成中文,但工具列 tooltip(圖形設定(手動開啟圖形)、看圖程式)仍是亂碼。
-* **最終解法**(WIP `cbc61d5`):繁中地區且缺 `ANSI(00)=YES` 時,啟動器改用 Locale Emulator 啟動 DynaRun(照常掛上 `dynafix.dll`)。
-  Tim 已在 Win11 驗證:啟動畫面、對話框、看圖程式、tooltip 全部是中文,不閃爍。`dynafix.dll` 的 `DYNAFIX_CHARSET` 字型替換只留給其他 DBCS 地區或找不到 LE 時。
-* 原生繁中 Windows 不需要任何字型處理,只需要首次啟動的修正。
+* **最終解法**(v1.2.2):繁中地區且缺 `ANSI(00)=YES` 時,啟動器改用 Locale Emulator 啟動 DynaRun(照常掛上 `dynafix.dll`)。
+  Tim 已在 Win11 驗證:啟動畫面、對話框、看圖程式、tooltip 全部是中文,不閃爍。`DYNAFIX_CHARSET`(`dynafix.dll` 替換字型時使用的字元集)只留給其他 DBCS 地區或找不到 LE 時。
+* 原生繁中 Windows 不需要字元集處理,只需要首次啟動的修正;介面字型替換(README「字型」)在這裡也一樣套用。
 
 ### 測試方法
 
