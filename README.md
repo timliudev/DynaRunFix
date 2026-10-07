@@ -9,7 +9,8 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 
 > This project is not affiliated with or endorsed by Dyna Pro Dynamometers Ltd or THB Componentware.
 > It does not contain, modify or redistribute any of their files, and it does not touch licensing or
-> copy-protection in any way. You need your own legally installed copy of DynaRun V3.
+> copy-protection in any way. You need your own legally installed copy of DynaRun V3, and it is up to you to
+> make sure that using this fix is consistent with your licence agreement with Dyna Pro.
 
 ## Symptom
 
@@ -287,9 +288,8 @@ Only the setup wizard's **Next**/**Back** buttons use VBScript (two Wise custom 
 everything the setup installs do not. Once Windows disables VBScript by default (planned for about 2027) the
 interactive setup is expected to stop at the first **Next**, while `msiexec /i Setup.msi /qb` keeps working.
 `DynaRunFix-Setup.exe` already runs it that way, so this only matters when you start Dyna Pro's `Setup.msi` yourself.
-[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) turns your own
-`Setup.msi` into a transform (`Setup-novbs.mst`) and a patched copy that install without VBScript and without
-the warning. Details, timeline and test results: [docs/VBSCRIPT.md](docs/VBSCRIPT.md).
+If VBScript has been switched off, turn it back on under *Optional features* before running that setup, or ask
+Dyna Pro for a setup that does not need it. Details and timeline: [docs/VBSCRIPT.md](docs/VBSCRIPT.md).
 
 ## Building
 
@@ -326,7 +326,7 @@ MIT, see [LICENSE](LICENSE).
 讓 *DynaRun V3* 馬力機軟體(Dyna Pro Dynamometers,S68 等機型)**原生在 Windows 10/11 執行時主畫面不再閃爍**的小型相容性修正。
 
 > 本專案與 Dyna Pro Dynamometers Ltd、THB Componentware 無任何關係,不包含、不修改、不散布原廠任何檔案,
-> 也完全不碰授權或防拷機制。你必須自備合法安裝的 DynaRun V3。
+> 也完全不碰授權或防拷機制。你必須自備合法安裝的 DynaRun V3,並請自行確認使用本修正符合你與 Dyna Pro 之間的授權條款。
 
 ### 症狀
 Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一套安裝在 XP / Win7 正常。
@@ -514,8 +514,7 @@ Process Monitor 可以看到它只查了屬性,完全沒開檔讀取。跟檔案
 只有安裝精靈的「Next/Back」換頁用到 VBScript(Wise 的兩個自訂動作),DynaRun 本身和安裝的內容都沒有。
 微軟預計約 2027 年預設停用 VBScript,屆時直接點兩下安裝,預期會在第一次按 Next 就失敗;`msiexec /i Setup.msi /qb`(不顯示精靈)仍可安裝。
 `DynaRunFix-Setup.exe` 本來就是這樣執行它,只有自己直接執行 Dyna Pro 的 `Setup.msi` 時才會遇到。
-[`tools/msi-novbs/Remove-WiseVBScript.ps1`](tools/msi-novbs/Remove-WiseVBScript.ps1) 會用你自己的 `Setup.msi`
-產生轉換檔(`Setup-novbs.mst`)和修改版副本,兩者都不需要 VBScript,也不會再出現警告。時程、細節與測試結果見 [docs/VBSCRIPT.md](docs/VBSCRIPT.md)。
+若 VBScript 已被停用,請先到「選用功能」重新啟用再執行該安裝程式,或向 Dyna Pro 索取不需要 VBScript 的安裝檔。時程與細節見 [docs/VBSCRIPT.md](docs/VBSCRIPT.md)。
 
 ### 建置
 安裝 Visual Studio 2019 以上(含 C++ 桌面開發),執行 `build.cmd`,產物在 `build\`(`DynaRunFix-Setup.exe` 內含 `DynaRunFix.exe`、`dynafix.dll` 和 manifest;版本字串用環境變數 `DRF_VERSION` 指定;解開 DynaRun 安裝檔用的是 [miniz](https://github.com/richgel999/miniz) 3.1.2,MIT 授權,在 `third_party/miniz`)。32 位元、不依賴 C 執行階段、XP 以上皆可執行。

@@ -550,7 +550,8 @@ static int machine_install(const WCHAR *sid)
     if (g_close) close_programs();
     if (running_programs()) return RC_RUNNING;          // checked again here: DynaRun may have been started since
     CreateDirectoryW(g_dir, NULL);
-    if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL))) {
+    if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
+        !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL))) {
         error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
         return 1;
     }

@@ -20,7 +20,7 @@ window "Dyna Pro系統選擇" (model plus optional features). After **OK**:
 
 ## What DynaRun does on "OK"
 
-The OK handler (at `0xd5def0` in `DynaRun V3.exe` 3.26.0) stores the selection and runs
+On OK, DynaRun stores the selection and runs
 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<n>.exe` with `ShellExecuteA` — one helper per
 model, e.g. `Setup_114.exe` for the S68, `Setup_103.exe` for the S125. Each helper is a tiny VB6 program
 ("Registry Setup <n>") that writes that model's defaults into `HKCU\Software\DynaPro` with
@@ -38,15 +38,10 @@ confirms DynaRun reads the helper's values on its next start.
 
 ## Root causes
 
-Found with Process Monitor traces (Win11, Win7, XP VMs) and disassembly of the OK handler.
+Found by observing DynaRun from the outside: Process Monitor traces and window behaviour on Win11, Win7 and XP VMs.
 
-1. **DynaRun waits forever (its own bug).** After `ShellExecuteA` the handler runs the equivalent of
-
-   ```vb
-   Do While x = 0: DoEvents: Loop      ' 0xd5eb02; x is a local variable nothing ever sets
-   ```
-
-   so the selection window stays and one core runs at 100 %. Reproduced identically on a **fresh XP VM with the
+1. **DynaRun waits forever (its own behaviour).** After starting the helper, DynaRun keeps processing messages
+   but never continues, even after the helper has exited: the selection window stays and one core runs at 100 %. Reproduced identically on a **fresh XP VM with the
    official installer** (administrator account, no UAC), on Win7 and on Win11 → not caused by UAC or by
    DynaRunFix. Presumably DynaRun is meant to be restarted after the helper; the new configuration is read
    only on the next start.
@@ -168,7 +163,7 @@ DynaRun V3 3.26.0 首次啟動流程的開發紀錄:哪裡出錯、DynaRunFix �
 
 ### 按 OK 時 DynaRun 做了什麼
 
-OK 的處理常式(3.26.0 的 `0xd5def0`)存下選擇後,用 `ShellExecuteA` 執行
+按下 OK 後,DynaRun 存下選擇,用 `ShellExecuteA` 執行
 `%APPDATA%\Dyna Pro Dynamometers\Dyna Run V3\System Data\Setup_<編號>.exe`。每個機型一個(S68 是 `Setup_114.exe`、
 S125 是 `Setup_103.exe`…),都是很小的 VB6 程式「Registry Setup <編號>」,用 `WScript.Shell.RegWrite` 把該機型的預設值寫進
 `HKCU\Software\DynaPro` 後結束。這些程式沒有 manifest、名稱含「Setup」,Windows 的安裝程式偵測會以系統管理員執行(UAC)。
@@ -181,9 +176,9 @@ Process Monitor 也確認 DynaRun 下次啟動會讀到設定程式寫的值。
 
 ### 根本原因
 
-依據 Win11/Win7/XP 虛擬機的 Process Monitor 紀錄與反組譯:
+依據從外部觀察 DynaRun 的結果(Win11/Win7/XP 虛擬機的 Process Monitor 紀錄與視窗行為):
 
-1. **DynaRun 自己無限等待。** `ShellExecuteA` 之後執行相當於 `Do While x = 0: DoEvents: Loop`(`0xd5eb02`,`x` 是從沒被設定的區域變數),
+1. **DynaRun 自己無限等待。** 啟動設定程式後,DynaRun 持續處理訊息卻永遠不會繼續,設定程式結束了也一樣,
    所以視窗不消失、CPU 一核 100%。在**全新 XP 虛擬機 + 官方安裝程式**(管理員帳號、沒有 UAC)、Win7、Win11 上都一模一樣
    → 是 DynaRun 本身的行為,與 UAC 或 DynaRunFix 無關。新設定要到下次啟動才會讀取。
 2. **設定程式把語言改回英文。** 它寫入 `Operation_Data\Default_Language = "English"`,蓋掉 DynaRun 剛從語言對話框存下的選擇。
