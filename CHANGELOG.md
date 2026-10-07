@@ -1,0 +1,91 @@
+# Changelog
+
+[繁體中文在下方](#更新紀錄)
+
+## v1.2.2 — 2026-10-07
+
+- **First start:** the language picked on the first start and the optional features picked on the system
+  selection (climate monitor, water cooler, cooling fans, AFR analyser) are kept; Dyna Pro's configuration
+  helper used to reset them to English / off. ([details](README.md#first-time-setup))
+- **Fonts:** all of DynaRun's text is drawn in Windows' own UI font for the language (Microsoft JhengHei UI on
+  Traditional Chinese, Segoe UI on English Windows) instead of a mix of Arial, MS Sans Serif and MingLiU.
+  ([details](README.md#fonts-windows-ui-font-everywhere))
+- **Garbled text:** Windows installed in English with the locale changed to Traditional Chinese later
+  (FontAssoc without `ANSI(00)=YES`) now also runs DynaRun through Locale Emulator: every window, tooltips
+  included, shows Chinese. ([details](README.md#garbled-chinese-text-with-a-traditional-chinese-system-locale))
+- **Status bar:** the taskbar no longer hides DynaRun's bottom status bar; DynaRun is laid out for the screen's
+  work area. ([details](README.md#status-bar-hidden-behind-the-taskbar))
+- **Launcher:** the fix is attached before DynaRun's first window, so the splash screen and the first forms are
+  covered too.
+- **Installer:**
+  - DynaRun running: *Close DynaRun and install* instead of replacing files under a running DynaRun;
+    `/quiet` exits with code 6, `/quiet /close` closes DynaRun first.
+  - The wizard stays in front of Explorer while DynaRun's setup and the permission prompt run.
+  - Works when started from a network drive.
+  - New icon.
+- **Tool:** [`tools/msi-novbs`](README.md#setup-warns-this-setup-uses-vbscript-custom-actions-windows-11-25h2)
+  makes Dyna Pro's `Setup.msi` installable without VBScript (for when Windows disables it, planned for about
+  2027). `DynaRunFix-Setup.exe` does not need it: it runs that setup without its VBScript wizard pages.
+
+## v1.2.1 — 2026-10-07
+
+- Setup: shows Dyna Pro's download page while downloading, reports the real download size, and recognises the
+  DynaRun setup by its UpgradeCode instead of the file name.
+
+## v1.2.0 — 2026-10-07
+
+- One-click setup: downloads and installs DynaRun V3 when it is missing (password and license from Dyna Pro).
+- First start no longer hangs after the system selection.
+- Windows' UTF-8 option: code-page manifest plus Locale Emulator for a Traditional Chinese system locale.
+
+## v1.1.0 — 2026-10-07
+
+- `DynaRunFix-Setup.exe`: one-click installer for the fix (shortcuts, machine-wide ActiveX registration,
+  uninstaller).
+
+## v1.0.0 — 2026-10-07
+
+- Stops the main-screen flicker of DynaRun V3 on Windows 10/11.
+- .Dpr files stored in OneDrive (*Always keep on this device*) open again.
+
+---
+
+## 更新紀錄
+
+### v1.2.2 — 2026-10-07
+
+- **首次啟動:** 保留第一次啟動時選的語言,以及系統選擇畫面勾選的選購功能(大氣監測、水冷、冷卻風扇、空燃比分析儀);
+  以前會被 Dyna Pro 的設定程式改回英文、關閉。([說明](README.md#首次設定))
+- **字型:** DynaRun 所有文字改用 Windows 該語言的介面字型(繁中:Microsoft JhengHei UI;英文 Windows:Segoe UI),
+  不再混用 Arial、MS Sans Serif、新細明體。([說明](README.md#字型全部使用-windows-介面字型))
+- **亂碼:** 以英文安裝、之後才改成繁中地區的 Windows(FontAssoc 缺 `ANSI(00)=YES`)也改用 Locale Emulator 啟動 DynaRun,
+  所有視窗(含工具提示)都是中文。([說明](README.md#系統地區是繁體中文仍然亂碼))
+- **狀態列:** 工作列不再遮住 DynaRun 底部的狀態列,DynaRun 依螢幕的工作區排版。([說明](README.md#狀態列被工作列遮住))
+- **啟動器:** 在 DynaRun 第一個視窗出現前就掛上修正,啟動畫面和最先載入的表單也涵蓋在內。
+- **安裝程式:**
+  - DynaRun 執行中:改為「關閉 DynaRun 並安裝」,不再在執行中的 DynaRun 底下換檔案;`/quiet` 以代碼 6 結束,`/quiet /close` 先關閉 DynaRun。
+  - DynaRun 安裝程式和權限提示執行時,精靈保持在檔案總管前面。
+  - 從網路磁碟機執行也能安裝。
+  - 新圖示。
+- **工具:** [`tools/msi-novbs`](README.md#安裝程式出現此安裝程式使用-vbscript-自訂動作警告win11-25h2) 讓 Dyna Pro 的
+  `Setup.msi` 不需要 VBScript 也能安裝(微軟預計約 2027 年預設停用 VBScript)。`DynaRunFix-Setup.exe` 不需要它:
+  它執行該安裝檔時本來就不顯示用到 VBScript 的精靈頁面。
+
+### v1.2.1 — 2026-10-07
+
+- 安裝程式:下載時顯示 Dyna Pro 下載頁、顯示實際下載大小,改用 UpgradeCode 而非檔名辨識 DynaRun 安裝檔。
+
+### v1.2.0 — 2026-10-07
+
+- 一鍵安裝:沒有 DynaRun V3 時自動下載安裝(密碼與授權來自 Dyna Pro)。
+- 首次啟動選擇系統後不再卡住。
+- Windows UTF-8 選項:字碼頁 manifest,繁中系統地區再加上 Locale Emulator。
+
+### v1.1.0 — 2026-10-07
+
+- `DynaRunFix-Setup.exe`:修正的一鍵安裝程式(捷徑、系統層級 ActiveX 註冊、解除安裝)。
+
+### v1.0.0 — 2026-10-07
+
+- 修正 DynaRun V3 在 Windows 10/11 主畫面閃爍。
+- 存在 OneDrive(「永遠保留在此裝置」)的 .Dpr 檔可以正常開啟。
