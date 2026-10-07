@@ -21,7 +21,9 @@
 // and polls for its result. Windows' installer detection runs that helper elevated; DynaRun then
 // keeps showing the system selection and only picks up the new configuration on its next start.
 // ShellExecuteA, which MSVBVM60 resolves with GetProcAddress, gets a wrapper: for Setup_<n>.exe it
-// waits for the helper to finish (one UAC prompt) and restarts DynaRun through the launcher.
+// waits for the helper to finish (one UAC prompt) and restarts DynaRun through the launcher. The helper
+// also resets DynaRun's language to English; the language chosen in the first-start dialog is restored,
+// and it switches off all optional features; the ones picked on the selection screen are switched on again.
 #include <windows.h>
 #include <shellapi.h>
 #include <intrin.h>
@@ -32,6 +34,7 @@
 #define P_W     "dynafix.w"
 #define P_L     "dynafix.l"
 #define P_DUP   "dynafix.dup"
+#define LANG_KEY "Software\\DynaPro\\Operation_Data"
 
 // FILE_ATTRIBUTE_RECALL_ON_OPEN | PINNED | UNPINNED | RECALL_ON_DATA_ACCESS
 #define CLOUD_ATTRS 0x005C0000
@@ -152,6 +155,122 @@ static void restart_dynarun(void)
     ExitProcess(0);
 }
 
+// ---- optional features picked on the first-start system selection ----
+// The selection screen's "optional features" group (bottom right) holds four buttons, top to bottom:
+// auto climate monitor, water cooler, cooling air fans / AFR extraction, internal AFR analyser. A picked
+// one is drawn green. DynaRun stores only the climate / AFR model (Calibration_Data) and the helper then
+// writes all System_Setup enable flags as "0", so the picked features end up off. They are switched on
+// afterwards with the same REG_SZ "-1" values that 工程模式 -> 系統組態設定 -> 存檔並離開 writes.
+#define SETUP_KEY "Software\\DynaPro\\System_Setup"
+#define CAL_KEY   "Software\\DynaPro\\Calibration_Data"
+#define N_OPT 4
+static const char *g_optname[N_OPT] = { "auto climate", "water cooler", "cooling fans", "AFR" };
+static const char *g_optval[N_OPT][3] = {
+    { "Auto_Climate_Enable", "Property_Auto_Climate", 0 },
+    { "Water_Cooler_Enable", 0 },
+    { "Cooling_Fan_Enable", 0 },
+    { "Int_AF_Ratio_Enable", 0 },
+};
+
+typedef struct { HWND form, frame; RECT fr; int n; HWND btn[8]; } sel_t;
+
+static void utf8_text(HWND h, char *a, int size)
+{
+    WCHAR w[60];
+    w[0] = 0; GetWindowTextW(h, w, 60);
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, a, size, NULL, NULL);
+}
+
+// The options frame is the lowest frame in the right half of the form.
+static BOOL CALLBACK find_frame(HWND h, LPARAM l)
+{
+    sel_t *s = (sel_t *)l; char cls[40]; RECT r, f;
+    if (!GetClassNameA(h, cls, sizeof(cls)) || lstrcmpA(cls, "ThunderRT6Frame") || !IsWindowVisible(h)) return TRUE;
+    GetWindowRect(h, &r); GetWindowRect(s->form, &f);
+    if ((r.left + r.right) / 2 > (f.left + f.right) / 2 && (!s->frame || r.top > s->fr.top)) { s->frame = h; s->fr = r; }
+    return TRUE;
+}
+
+// The buttons are the controls lying inside the frame: not all of them are its children (the cooling fan
+// button is not), so all controls of the form are checked by position.
+static BOOL CALLBACK find_buttons(HWND h, LPARAM l)
+{
+    sel_t *s = (sel_t *)l; RECT r, q; POINT c; char cls[40]; int i;
+    if (s->n >= 8 || !IsWindowVisible(h) || !GetClassNameA(h, cls, sizeof(cls)) || !lstrcmpA(cls, "ThunderRT6Frame")) return TRUE;
+    GetWindowRect(h, &r);
+    c.x = (r.left + r.right) / 2; c.y = (r.top + r.bottom) / 2;
+    if (!PtInRect(&s->fr, c)) return TRUE;
+    for (i = s->n++; i > 0; i--) {             // keep them sorted top to bottom
+        GetWindowRect(s->btn[i - 1], &q);
+        if (q.top <= r.top) break;
+        s->btn[i] = s->btn[i - 1];
+    }
+    s->btn[i] = h;
+    return TRUE;
+}
+
+static BOOL CALLBACK find_form(HWND h, LPARAM l)
+{
+    sel_t *s = (sel_t *)l;
+    if (!IsWindowVisible(h)) return TRUE;
+    s->form = h; s->frame = NULL;
+    EnumChildWindows(h, find_frame, l);
+    return !s->frame;                          // stop at the first form with a frame
+}
+
+// Which optional features are drawn as picked (green). Returns FALSE if the group was not found.
+static BOOL read_options(BOOL *on)
+{
+    typedef COLORREF (WINAPI *gp_t)(HDC, int, int);
+    gp_t gp = (gp_t)GetProcAddress(GetModuleHandleA("gdi32.dll"), "GetPixel");
+    sel_t s; int i, k = 0;
+    { volatile char *z = (volatile char *)&s; for (i = 0; i < (int)sizeof(s); i++) z[i] = 0; }
+    EnumThreadWindows(GetCurrentThreadId(), find_form, (LPARAM)&s);
+    if (!s.frame) { logf("optional features: selection form not found %u %u %u\r\n", 0, 0, 0); return FALSE; }
+    EnumChildWindows(s.form, find_buttons, (LPARAM)&s);
+    { char a[150]; utf8_text(s.frame, a, sizeof(a)); logf("optional features group '%s' has %u controls %u\r\n", (DWORD)(UINT_PTR)a, s.n, 0); }
+    for (i = 0; i < s.n; i++) {
+        char cls[40], a[150]; RECT r; HDC dc; COLORREF c = CLR_INVALID; BOOL g;
+        GetClassNameA(s.btn[i], cls, sizeof(cls)); utf8_text(s.btn[i], a, sizeof(a));
+        GetClientRect(s.btn[i], &r);
+        if (gp && (dc = GetDC(s.btn[i]))) { c = gp(dc, 6, r.bottom / 2); ReleaseDC(s.btn[i], dc); }
+        logf("  %s '%s' colour %06X", (DWORD)(UINT_PTR)cls, (DWORD)(UINT_PTR)a, c);
+        // Controls of other groups (EB-150 / EB-250 engine dynamometers) also lie in this area, hidden
+        // (clipped away): nothing of them can be read, so they are skipped.
+        if (c == CLR_INVALID) { logf(" -> hidden, skipped %u %u %u\r\n", 0, 0, 0); continue; }
+        g = GetGValue(c) >= 160 && GetRValue(c) < 100 && GetBValue(c) < 100;
+        if (k < N_OPT) on[k] = g;
+        logf(" -> %s %s %u\r\n", (DWORD)(UINT_PTR)(k < N_OPT ? g_optname[k] : "?"), (DWORD)(UINT_PTR)(g ? "picked" : "not picked"), 0);
+        k++;
+    }
+    if (k != N_OPT) { logf("optional features: expected %u buttons, found %u %u\r\n", N_OPT, k, 0); return FALSE; }
+    return TRUE;
+}
+
+static BOOL has_value(const char *key, const char *name)
+{
+    HKEY k; BOOL r = FALSE;
+    if (!RegOpenKeyExA(HKEY_CURRENT_USER, key, 0, KEY_QUERY_VALUE, &k)) {
+        r = !RegQueryValueExA(k, name, NULL, NULL, NULL, NULL);
+        RegCloseKey(k);
+    }
+    return r;
+}
+
+static void enable_options(const BOOL *on)
+{
+    HKEY k; int i, j;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, SETUP_KEY, 0, KEY_SET_VALUE, &k)) {
+        logf("optional features: cannot open System_Setup %u %u %u\r\n", 0, 0, 0);
+        return;
+    }
+    for (i = 0; i < N_OPT; i++)
+        for (j = 0; on[i] && g_optval[i][j]; j++)
+            logf("enabled %s: System_Setup\\%s = \"-1\" (%s)\r\n", (DWORD)(UINT_PTR)g_optname[i], (DWORD)(UINT_PTR)g_optval[i][j],
+                 (DWORD)(UINT_PTR)(RegSetValueExA(k, g_optval[i][j], 0, REG_SZ, (const BYTE *)"-1", 3) ? "failed" : "ok"));
+    RegCloseKey(k);
+}
+
 static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR params, LPCSTR dir, INT show)
 {
     typedef HINSTANCE (WINAPI *se_t)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
@@ -163,7 +282,25 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
         if ((p == file || p[-1] == '\\') && lstrlenA(p) >= 6 &&
             CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, p, 6, "Setup_", 6) == CSTR_EQUAL) {
             SHELLEXECUTEINFOA se; sx_t sx = (sx_t)GetProcAddress(GetModuleHandleA("shell32.dll"), "ShellExecuteExA"); MSG m;
+            char lang[64]; DWORD n = sizeof(lang) - 1, t; HKEY k; BOOL on[N_OPT];
             if (!sx) break;
+            // Picked optional features, read while the selection form is still open. If its buttons cannot be
+            // read, the climate monitor / AFR analyser count as picked when their model dialog stored a model.
+            for (i = 0; i < N_OPT; i++) on[i] = FALSE;
+            if (!read_options(on)) {
+                for (i = 0; i < N_OPT; i++) on[i] = FALSE;
+                on[0] = has_value(CAL_KEY, "Auto_Climate_Model");
+                on[3] = has_value(CAL_KEY, "Air_Fuel_Model");
+                logf("optional features from the stored models: climate %u AFR %u %u\r\n", on[0], on[3], 0);
+            }
+            // The helper writes Operation_Data\Default_Language = "English", over the language DynaRun stored
+            // from the first-start language dialog a moment earlier; put DynaRun's value back afterwards.
+            lang[0] = 0;
+            if (!RegOpenKeyExA(HKEY_CURRENT_USER, LANG_KEY, 0, KEY_QUERY_VALUE, &k)) {
+                if (RegQueryValueExA(k, "Default_Language", NULL, &t, (BYTE *)lang, &n) || t != REG_SZ) n = 0;
+                lang[n] = 0;
+                RegCloseKey(k);
+            }
             { volatile char *z = (volatile char *)&se; for (i = 0; i < (int)sizeof(se); i++) z[i] = 0; }
             se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC; se.hwnd = w;
             se.lpVerb = verb; se.lpFile = file; se.lpParameters = params; se.lpDirectory = dir; se.nShow = show;
@@ -175,6 +312,15 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
                 CloseHandle(se.hProcess);
             }
             logf("setup helper finished %u %u %u\r\n", 0, 0, 0);
+            if (lang[0] && !RegOpenKeyExA(HKEY_CURRENT_USER, LANG_KEY, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &k)) {
+                char now[64]; DWORD m2 = sizeof(now) - 1;
+                if (RegQueryValueExA(k, "Default_Language", NULL, &t, (BYTE *)now, &m2) || t != REG_SZ) m2 = 0;
+                now[m2] = 0;
+                if (lstrcmpA(now, lang) && !RegSetValueExA(k, "Default_Language", 0, REG_SZ, (const BYTE *)lang, lstrlenA(lang) + 1))
+                    logf("kept the chosen language %s (helper had set %s) %u\r\n", (DWORD)(UINT_PTR)lang, (DWORD)(UINT_PTR)now, 0);
+                RegCloseKey(k);
+            }
+            enable_options(on);
             restart_dynarun();
             return (HINSTANCE)42;
         }
