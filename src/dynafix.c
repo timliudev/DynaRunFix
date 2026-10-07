@@ -24,6 +24,9 @@
 // waits for the helper to finish (one UAC prompt) and restarts DynaRun through the launcher. The helper
 // also resets DynaRun's language to English; the language chosen in the first-start dialog is restored,
 // and it switches off all optional features; the ones picked on the selection screen are switched on again.
+//
+// Fourth fix: the maximized main form (no caption) covers the taskbar, which hides its bottom status bar;
+// it is kept inside the monitor's work area (see fit_minmax).
 #include <windows.h>
 #include <shellapi.h>
 #include <intrin.h>
@@ -42,6 +45,7 @@
 typedef BOOL (WINAPI *PostMessageA_t)(HWND, UINT, WPARAM, LPARAM);
 
 static HINSTANCE g_self;
+static BOOL g_fullscreen, g_waclip;   // DYNAFIX_FULLSCREEN=1: off; DYNAFIX_WORKAREA=clip: shrink the height only
 static BOOL g_pinned, g_patched, g_vbpatched, g_fsopatched, g_fontpatched;
 static LONG g_skipped, g_masked;
 static PostMessageA_t g_realPost;
@@ -326,6 +330,8 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
         }
     return ((se_t)r_shexec)(w, verb, file, params, dir, show);
 }
+
+static void patch_vb_screen(void);
 
 static FARPROC WINAPI H_GetProcAddress(HMODULE m, LPCSTR name)
 {
@@ -643,6 +649,7 @@ static void patch_attr(void)
         patch_imports("MSVBVM60.DLL", g_attr_hooks);
         resolve(g_proc_hooks);
         patch_imports("MSVBVM60.DLL", g_proc_hooks);
+        patch_vb_screen();
     }
     if (g_vbpatched && !g_fsopatched && GetModuleHandleA("scrrun.dll")) {
         g_fsopatched = TRUE;
@@ -1005,6 +1012,233 @@ static void note_size(HWND h, WPARAM w, LPARAM l)
     if (dup) SetPropA(h, P_DUP, (HANDLE)1); else RemovePropA(h, P_DUP);
 }
 
+// ---- keep the main form off the taskbar ----
+// DynaRun's main form is maximized (WindowState) but has no caption; Windows maximizes such a window
+// over the whole monitor, so the taskbar covers DynaRun's bottom status bar. The hook rewrites the
+// MINMAXINFO the form is about to get and a subclass clips its WINDOWPOS (see fit_pos), so the maximized
+// form fills the monitor's work area instead. On an edge with an auto-hide taskbar 2 px are left free,
+// or the taskbar could not pop up over it. DYNAFIX_FULLSCREEN=1 keeps DynaRun's own behaviour.
+
+#ifndef ABM_GETAUTOHIDEBAREX
+#define ABM_GETAUTOHIDEBAREX 0x0000000b
+#endif
+
+static HWND g_dumpform;
+static UINT_PTR g_dumptimer;
+static LONG g_dumps;
+
+// Diagnosis: 3 s after the main form was last resized, log where its direct children are (first 4 times).
+static void CALLBACK dump_children(HWND unused, UINT m, UINT_PTR id, DWORD t)
+{
+    HWND c; RECT r; POINT o = { 0, 0 }; char cls[40], tx[40], line[160]; WCHAR w[20]; int n = 0;
+    KillTimer(NULL, id); g_dumptimer = 0;
+    if (!IsWindow(g_dumpform) || InterlockedIncrement(&g_dumps) > 4) return;
+    ClientToScreen(g_dumpform, &o); GetClientRect(g_dumpform, &r);
+    logf("children of form %08X, client %ux%u:\r\n", (DWORD)(UINT_PTR)g_dumpform, r.right, r.bottom);
+    for (c = GetWindow(g_dumpform, GW_CHILD); c && n < 150; c = GetWindow(c, GW_HWNDNEXT), n++) {
+        if (!GetClassNameA(c, cls, sizeof(cls))) cls[0] = 0;
+        w[0] = 0; GetWindowTextW(c, w, 20);
+        WideCharToMultiByte(CP_UTF8, 0, w, -1, tx, sizeof(tx), NULL, NULL);
+        GetWindowRect(c, &r); OffsetRect(&r, -o.x, -o.y);
+        wsprintfA(line, "%s '%s' %d,%d %dx%d%s", cls, tx, r.left, r.top, r.right - r.left, r.bottom - r.top, IsWindowVisible(c) ? "" : " hidden");
+        logf("  %s %u %u\r\n", (DWORD)(UINT_PTR)line, 0, 0);
+    }
+}
+
+static void arm_dump(HWND h)
+{
+    if (g_dumps >= 4 || !IsWindowVisible(h)) return;
+    g_dumpform = h;
+    if (g_dumptimer) KillTimer(NULL, g_dumptimer);
+    g_dumptimer = SetTimer(NULL, 0, 3000, dump_children);
+}
+static LONG g_walog;
+typedef UINT_PTR (WINAPI *SHAppBarMessage_t)(DWORD, PAPPBARDATA);
+
+static BOOL is_main_form(HWND h, BOOL any)
+{
+    char cls[32];
+    return (any || !g_fullscreen) && !(GetWindowLongA(h, GWL_STYLE) & WS_CHILD)
+        && GetClassNameA(h, cls, sizeof(cls)) && !lstrcmpA(cls, "ThunderRT6FormDC");
+}
+
+// Work area of monitor m (and its full rect), less 2 px on every edge that has an auto-hide taskbar.
+static BOOL work_area(HMONITOR m, RECT *wa, RECT *mon)
+{
+    static SHAppBarMessage_t sab; static BOOL tried;
+    MONITORINFO mi; APPBARDATA ab; UINT e;
+    mi.cbSize = sizeof(mi);
+    if (!m || !GetMonitorInfoA(m, &mi)) return FALSE;
+    *wa = mi.rcWork; *mon = mi.rcMonitor;
+    if (!tried) { HMODULE s = LoadLibraryA("shell32.dll"); tried = TRUE; if (s) sab = (SHAppBarMessage_t)GetProcAddress(s, "SHAppBarMessage"); }
+    if (!sab) return TRUE;
+    for (e = ABE_LEFT; e <= ABE_BOTTOM; e++) {
+        HWND bar;
+        SecureZeroMemory(&ab, sizeof(ab)); ab.cbSize = sizeof(ab); ab.uEdge = e; ab.rc = mi.rcMonitor;
+        bar = (HWND)sab(ABM_GETAUTOHIDEBAREX, &ab);                   // Vista and later: per monitor
+        if (!bar && (mi.dwFlags & MONITORINFOF_PRIMARY)) {            // XP: primary monitor only
+            SecureZeroMemory(&ab, sizeof(ab)); ab.cbSize = sizeof(ab); ab.uEdge = e;
+            bar = (HWND)sab(ABM_GETAUTOHIDEBAR, &ab);
+        }
+        if (!bar) continue;
+        if (e == ABE_LEFT   && wa->left   - mon->left   < 2) wa->left   = mon->left + 2;
+        if (e == ABE_TOP    && wa->top    - mon->top    < 2) wa->top    = mon->top + 2;
+        if (e == ABE_RIGHT  && mon->right  - wa->right  < 2) wa->right  = mon->right - 2;
+        if (e == ABE_BOTTOM && mon->bottom - wa->bottom < 2) wa->bottom = mon->bottom - 2;
+    }
+    return TRUE;
+}
+
+// VB's Screen.Width / Height come from two globals in MSVBVM60 that its start-up code fills with
+// GetSystemMetrics(SM_CXSCREEN / SM_CYSCREEN), before dynafix is loaded. DynaRun sets THBResize's maximum form
+// size from them (MaxHeight = Screen.Height in pixels, MaxWidth = 4:3 of it) and draws the dashboard for that
+// size. The globals are found from that start-up code (push 0 / call / push 1 / mov [cx],eax / call /
+// push 20h / mov [cy],eax), checked against the real screen size and set to the primary monitor's work area,
+// so DynaRun lays out everything as on a monitor of that size.
+static void patch_vb_screen(void)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA("MSVBVM60.DLL");
+    IMAGE_NT_HEADERS *nt; IMAGE_SECTION_HEADER *sec; WORD i;
+    POINT o = { 0, 0 }; RECT wa, mon; int scx, scy; static BOOL done;
+    if (!base || g_fullscreen || g_waclip || done) return;
+    done = TRUE;
+    if (!work_area(MonitorFromPoint(o, MONITOR_DEFAULTTOPRIMARY), &wa, &mon) || EqualRect(&wa, &mon)) return;
+    scx = GetSystemMetrics(SM_CXSCREEN); scy = GetSystemMetrics(SM_CYSCREEN);
+    nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        BYTE *c, *e;
+        if (!(sec->Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+        c = base + sec->VirtualAddress;
+        e = c + sec->Misc.VirtualSize - 24;
+        for (; c < e; c++) {
+            int *px, *py; DWORD old;
+            if (c[0] != 0x6A || c[1] != 0x00 || c[2] != 0xA3 || c[7] != 0xFF || c[9] != 0x6A || c[10] != 0x01 || c[11] != 0xA3
+                || c[16] != 0xFF || c[18] != 0x6A || c[19] != 0x20 || c[20] != 0xA3) continue;
+            px = *(int **)(c + 12); py = *(int **)(c + 21);
+            if ((BYTE *)px < base || (BYTE *)px >= base + nt->OptionalHeader.SizeOfImage
+                || (BYTE *)py < base || (BYTE *)py >= base + nt->OptionalHeader.SizeOfImage) continue;
+            if (*px != scx || *py != scy) {
+                logf("VB's screen size %ux%u is not the screen size, left alone %u\r\n", *px, *py, 0);
+                return;
+            }
+            VirtualProtect(px, sizeof(int), PAGE_READWRITE, &old); *px = wa.right - wa.left; VirtualProtect(px, sizeof(int), old, &old);
+            VirtualProtect(py, sizeof(int), PAGE_READWRITE, &old); *py = wa.bottom - wa.top; VirtualProtect(py, sizeof(int), old, &old);
+            {
+                char t[40]; wsprintfA(t, "%ux%u -> %ux%u", scx, scy, *px, *py);
+                logf("VB's screen size %s (work area), globals at %08X %u\r\n", (DWORD)(UINT_PTR)t, (DWORD)(UINT_PTR)px, 0);
+            }
+            return;
+        }
+    }
+    logf("VB's screen size not found in MSVBVM60.DLL %u %u %u\r\n", 0, 0, 0);
+}
+
+static void fit_minmax(HWND h, MINMAXINFO *mm)
+{
+    RECT wa, mon; LONG bx, by;
+    if (!work_area(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &wa, &mon) || EqualRect(&wa, &mon)) return;
+    bx = mm->ptMaxPosition.x < 0 ? -mm->ptMaxPosition.x : 0;   // the frame Windows puts off-screen
+    by = mm->ptMaxPosition.y < 0 ? -mm->ptMaxPosition.y : 0;
+    mm->ptMaxPosition.x = wa.left - mon.left - bx;              // relative to the monitor
+    mm->ptMaxPosition.y = wa.top - mon.top - by;
+    mm->ptMaxSize.x = wa.right - wa.left + 2 * bx;
+    mm->ptMaxSize.y = wa.bottom - wa.top + 2 * by;
+    if (InterlockedIncrement(&g_walog) <= 10)
+        logf("form %08X maximizes to the work area %ux%u\r\n", (DWORD)(UINT_PTR)h, mm->ptMaxSize.x, mm->ptMaxSize.y);
+}
+
+// THBResize, in the form's window procedure, sets every WINDOWPOS of the maximized form back to the full
+// screen height (and 4:3 width), so the hook alone cannot change it: the form is subclassed once, when it
+// is first maximized (THBResize has subclassed it by then), and the WINDOWPOS is clipped after THBResize.
+#define P_WP  "dynafix.wp"
+#define P_WPU "dynafix.wpu"
+static UINT g_refit;
+static LONG g_cliplog, g_replog;
+static HWND g_repform;
+static UINT_PTR g_reptimer;
+
+// Shrinking keeps the old pixels below the new layout (the form class has no CS_VREDRAW), and DynaRun only
+// repaints part of it: a band of plain background and a strip of the old full-height gradient stay. Once the
+// size has settled, the whole form is repainted.
+static void CALLBACK repaint_form(HWND unused, UINT m, UINT_PTR id, DWORD t)
+{
+    KillTimer(NULL, id); g_reptimer = 0;
+    if (!IsWindow(g_repform)) return;
+    RedrawWindow(g_repform, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+    if (InterlockedIncrement(&g_replog) <= 10) logf("form %08X repainted after the resize %u %u\r\n", (DWORD)(UINT_PTR)g_repform, 0, 0);
+}
+
+static BOOL fit_pos(HWND h, WINDOWPOS *p)
+{
+    RECT r, wa, mon, f = { 0, 0, 0, 0 }, cur;
+    if ((p->flags & SWP_NOSIZE) || !(GetWindowLongA(h, GWL_STYLE) & WS_MAXIMIZE)) return FALSE;
+    if (p->flags & SWP_NOMOVE) { if (!GetWindowRect(h, &cur)) return FALSE; p->x = cur.left; p->y = cur.top; }
+    SetRect(&r, p->x, p->y, p->x + p->cx, p->y + p->cy);
+    if (!work_area(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &wa, &mon) || EqualRect(&wa, &mon)) return FALSE;
+    AdjustWindowRectEx(&f, GetWindowLongA(h, GWL_STYLE) & ~WS_MAXIMIZE, FALSE, GetWindowLongA(h, GWL_EXSTYLE));
+    wa.left += f.left; wa.top += f.top; wa.right += f.right; wa.bottom += f.bottom;
+    if (r.left >= wa.left && r.top >= wa.top && r.right <= wa.right && r.bottom <= wa.bottom) return FALSE;
+    if (r.left < wa.left) OffsetRect(&r, wa.left - r.left, 0);     // taskbar on the left / top: move first
+    if (r.top < wa.top) OffsetRect(&r, 0, wa.top - r.top);
+    if (r.right > wa.right) r.right = wa.right;
+    if (r.bottom > wa.bottom) r.bottom = wa.bottom;
+    if (!g_waclip && p->cx > 0 && p->cy > 0) {                        // keep THBResize's aspect ratio, like a smaller screen
+        int w = r.right - r.left, hh = r.bottom - r.top;
+        if (w * p->cy > hh * p->cx) w = MulDiv(hh, p->cx, p->cy); else hh = MulDiv(w, p->cy, p->cx);
+        r.right = r.left + w; r.bottom = r.top + hh;
+    }
+    if (InterlockedIncrement(&g_cliplog) <= 20) {
+        char t[40]; wsprintfA(t, "%ux%u -> %ux%u", p->cx, p->cy, r.right - r.left, r.bottom - r.top);
+        logf("form %08X clipped to the work area %s %u\r\n", (DWORD)(UINT_PTR)h, (DWORD)(UINT_PTR)t, 0);
+    }
+    p->flags = (p->flags & ~SWP_NOMOVE) | SWP_NOCOPYBITS;
+    p->x = r.left; p->y = r.top; p->cx = r.right - r.left; p->cy = r.bottom - r.top;
+    return TRUE;
+}
+
+static LRESULT CALLBACK FormProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    WNDPROC old = (WNDPROC)GetPropA(h, P_WP);
+    BOOL u = GetPropA(h, P_WPU) != NULL;
+    LRESULT r;
+    if (!old) return u ? DefWindowProcW(h, m, w, l) : DefWindowProcA(h, m, w, l);
+    if (m == g_refit) {   // first fit after subclassing: re-apply the current size, clipped
+        RECT c;
+        if ((GetWindowLongA(h, GWL_STYLE) & WS_MAXIMIZE) && GetWindowRect(h, &c))
+            SetWindowPos(h, NULL, c.left, c.top, c.right - c.left, c.bottom - c.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        return 0;
+    }
+    if (m == WM_NCDESTROY) {
+        if ((WNDPROC)GetWindowLongPtrA(h, GWLP_WNDPROC) == FormProc)
+            u ? SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)old) : SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)old);
+        RemovePropA(h, P_WP); RemovePropA(h, P_WPU);   // FormProc stays in the chain if someone sits above it
+        return u ? CallWindowProcW(old, h, m, w, l) : CallWindowProcA(old, h, m, w, l);
+    }
+    r = u ? CallWindowProcW(old, h, m, w, l) : CallWindowProcA(old, h, m, w, l);
+    if (m == WM_WINDOWPOSCHANGING && fit_pos(h, (WINDOWPOS *)l)) {
+        g_repform = h;
+        if (g_reptimer) KillTimer(NULL, g_reptimer);
+        g_reptimer = SetTimer(NULL, 0, 500, repaint_form);
+    }
+    return r;
+}
+
+static void subclass_form(HWND h)
+{
+    BOOL u; LONG_PTR old;
+    if (GetPropA(h, P_WP) || !(GetWindowLongA(h, GWL_STYLE) & WS_MAXIMIZE)) return;
+    if (!g_refit) g_refit = RegisterWindowMessageA("dynafix.refit");
+    u = IsWindowUnicode(h);
+    old = u ? GetWindowLongPtrW(h, GWLP_WNDPROC) : GetWindowLongPtrA(h, GWLP_WNDPROC);
+    if (!old || old == (LONG_PTR)FormProc) return;
+    SetPropA(h, P_WPU, (HANDLE)(UINT_PTR)u);
+    SetPropA(h, P_WP, (HANDLE)old);
+    u ? SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)FormProc) : SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)FormProc);
+    logf("form %08X subclassed (window procedure was %08X) %u\r\n", (DWORD)(UINT_PTR)h, (DWORD)old, 0);
+    PostMessageA(h, g_refit, 0, 0);
+}
+
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -1027,7 +1261,9 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
         if (!g_fsopatched) patch_attr();
         // once MSVBVM60 is there, then whenever a window is made (a new form may have loaded new controls)
         if ((!g_fontpatched || c->message == WM_NCCREATE) && GetModuleHandleA("MSVBVM60.DLL")) { g_fontpatched = TRUE; patch_font(); }
-        if (c->message == WM_SIZE) note_size(c->hwnd, c->wParam, c->lParam);
+        if (c->message == WM_SIZE) { note_size(c->hwnd, c->wParam, c->lParam); if (c->wParam == SIZE_MAXIMIZED && is_main_form(c->hwnd, TRUE)) arm_dump(c->hwnd); }
+        else if (c->message == WM_GETMINMAXINFO) { if (is_main_form(c->hwnd, FALSE)) fit_minmax(c->hwnd, (MINMAXINFO *)c->lParam); }
+        else if (c->message == WM_WINDOWPOSCHANGING) { if (is_main_form(c->hwnd, FALSE)) subclass_form(c->hwnd); }
         else if (c->message == WM_ACTIVATE && LOWORD(c->wParam) != WA_INACTIVE) sweep_fonts(c->hwnd);
         else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_SWEPT); }
     }
@@ -1042,6 +1278,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
         if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
+        { char v[8]; g_fullscreen = GetEnvironmentVariableA("DYNAFIX_FULLSCREEN", v, sizeof(v)) && v[0] == '1';
+          g_waclip = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)) && !lstrcmpiA(v, "clip"); }
         g_fontoff = !lstrcmpiW(g_fontW, L"off") || !lstrcmpiW(g_fontW, L"none") || !lstrcmpW(g_fontW, L"0");
         {
             char v[8]; int i, n = 0;
