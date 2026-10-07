@@ -59,21 +59,27 @@ static BOOL is_admin(void)
     return r;
 }
 
-// DBCS system locale whose FontAssoc key does not map ANSI_CHARSET fonts (Windows installed in English,
-// locale changed later): DynaRun's Big5 labels would be drawn as Latin letters. dynafix then creates
-// those fonts with the locale's charset (DYNAFIX_CHARSET) and, for zh-TW, a face with the glyphs.
-static void charset_env(void)
+// TRUE if FontAssoc maps ANSI_CHARSET fonts to the locale's charset (Windows installed in that language)
+static BOOL fontassoc(void)
 {
-    static const struct { UINT cp; const char *cs; } t[] = { { 950, "136" }, { 936, "134" }, { 932, "128" }, { 949, "129" } };
-    char v[8]; HKEY k; DWORD n = sizeof(v); UINT acp = GetACP(); int i; BOOL assoc = FALSE;
+    char v[8]; HKEY k; DWORD n = sizeof(v); BOOL assoc = FALSE;
     if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\FontAssoc\\Associated Charset", 0, KEY_QUERY_VALUE, &k)) {
         assoc = !RegQueryValueExA(k, "ANSI(00)", NULL, NULL, (BYTE *)v, &n) && !lstrcmpiA(v, "YES");
         RegCloseKey(k);
     }
-    if (assoc) return;
+    return assoc;
+}
+
+// DBCS system locale whose FontAssoc key does not map ANSI_CHARSET fonts (Windows installed in English,
+// locale changed later): DynaRun's Big5 labels would be drawn as Latin letters. dynafix then creates
+// those fonts with the locale's charset (DYNAFIX_CHARSET); the face is swapped for the UI font anyway.
+static void charset_env(void)
+{
+    static const struct { UINT cp; const char *cs; } t[] = { { 950, "136" }, { 936, "134" }, { 932, "128" }, { 949, "129" } };
+    UINT acp = GetACP(); int i;
+    if (fontassoc()) return;
     for (i = 0; i < 4; i++) if (t[i].cp == acp) {
         if (!GetEnvironmentVariableA("DYNAFIX_CHARSET", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_CHARSET", t[i].cs);
-        if (acp == 950 && !GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
     }
 }
 
@@ -190,11 +196,13 @@ void WinMainCRTStartup(void)
         // Other locales get just the manifest, which selects their own legacy code page.
         lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
         if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
-        if (GetACP() == CP_UTF8 && !lstrcmpA(ev, "950") && GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
+        // Also for a zh-TW system locale whose FontAssoc lacks ANSI(00)=YES (Windows installed in English,
+        // locale changed later): LE gives DynaRun the Big5 code page and charset for every window, including
+        // tooltips and OCX controls that dynafix's font hooks do not reach.
+        if (!lstrcmpA(ev, "950") && (GetACP() == CP_UTF8 || (GetACP() == 950 && !fontassoc())) &&
+            GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
             // LEProc cannot raise DynaRun itself; elevate first if DynaRun is set to run as administrator.
             if (runasadmin(exe)) elevate(args);
-            // dynafix swaps Arial/MingLiU for this face (inherited by DynaRun through LEProc)
-            if (!GetEnvironmentVariableA("DYNAFIX_FONT", NULL, 0)) SetEnvironmentVariableA("DYNAFIX_FONT", "Microsoft JhengHei UI");
             wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
             // LE creates DynaRun suspended (to load its own dll) and resumes it: catch it right away. LEProc runs in a
             // job, so DynaRun's creation is reported at once (polling the process list can be late: VB reads the
