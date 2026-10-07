@@ -33,13 +33,15 @@ typedef struct {
     DWORD csize, usize, crc, flags, method, dostime;
 } zipent;
 
-BOOL pkg_find_local(WCHAR *out);            // a downloaded "Dyna Pro Dynamometers*.zip" or a Setup.msi next to us
+BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .msi inside, in Downloads/Desktop/Documents or next to us
+void pkg_reject(const WCHAR *path);         // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 BOOL zip_password_plausible(const zipent *e, const char *pw);
 int zip_extract(const zipent *e, const char *pw, const WCHAR *out, progress_fn cb, volatile LONG *cancel);
 char *msi_license_rtf(const WCHAR *msi);    // RTF of the setup's license page (heap) or NULL
-BOOL msi_is_dynarun(const WCHAR *msi, WCHAR *version, int cch);
+enum { MSI_NONE, MSI_OTHER, MSI_DYNARUN };
+int msi_check(const WCHAR *msi, WCHAR *version, int cch);   // MSI_NONE: not an MSI at all. DynaRun: by UpgradeCode
 int run_msiexec(const WCHAR *msi);          // msiexec exit code
 void pkg_temp_dir(WCHAR *out);              // %TEMP%\DynaRunFix (created)
 int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only" copies the setup overwrites

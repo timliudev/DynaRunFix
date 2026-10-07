@@ -56,6 +56,9 @@ log in `%TEMP%\dynafix.log`.
 Nothing of Dyna Pro's is included in DynaRunFix: the setup comes from Dyna Pro's site and the password from
 Dyna Pro. The DynaRun setup runs with basic UI (`msiexec /qb`), so its wizard pages, the only part of it
 that uses VBScript, are not shown. The password is used only to open the zip and is not stored.
+The setup is recognised by its content, not its file name: only an MSI whose UpgradeCode is DynaRun's
+(`{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}`, the same in every version) is ever installed; for the zip this is
+checked after the password has opened it. Any other file is refused with a clear message.
 
 What the installer does for the fix:
 - installs `DynaRunFix.exe` and `dynafix.dll` to `Program Files\DynaRunFix`;
@@ -255,6 +258,8 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 
 DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網，密碼由 Dyna Pro 提供。DynaRun 安裝檔以基本介面
 （`msiexec /qb`）執行，所以不會出現它的精靈頁面（安裝檔裡唯一用到 VBScript 的部分）。密碼只用來打開 zip，不會被儲存。
+安裝檔是依內容辨識，不看檔名：只有 UpgradeCode 是 DynaRun 的（`{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}`，每個版本都相同）
+MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案會被拒絕，並清楚告訴你原因。
 
 安裝修正時會做這些事：
 - 把 `DynaRunFix.exe`、`dynafix.dll` 安裝到 `Program Files\DynaRunFix`；

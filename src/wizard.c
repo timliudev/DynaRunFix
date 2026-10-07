@@ -2,9 +2,10 @@
 //
 //   DynaRun V3 installed:  Hello -> Install (one UAC prompt) -> Done
 //   not installed:         Hello -> get "Dyna Pro Dynamometers.zip" (found in Downloads/Desktop, or
-//                          downloaded from dynapro.co.uk; if that fails: open the site / choose file)
-//                          -> password -> extract -> Dyna Pro's license -> Install (msiexec /qb and
-//                          the fix, one UAC prompt) -> Done -> "Start DynaRun"
+//                          downloaded from dynapro.co.uk; the site's download page is one click away)
+//                          -> password -> extract -> check it is DynaRun (by the MSI's UpgradeCode, never by
+//                          file name) -> Dyna Pro's license -> Install (msiexec /qb and the fix, one UAC prompt)
+//                          -> Done -> "Start DynaRun"
 // Long steps run on a worker thread and report back with WM_PROGRESS / WM_JOBDONE.
 #define COBJMACROS
 #include <windows.h>
@@ -26,13 +27,13 @@ enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 
 static int g_page, g_job, g_dpi, g_lastpct = -1;
 static volatile LONG g_cancel;
-static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err;
+static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile;
 static HANDLE g_thread;
 static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[300];
 static zipent g_zip;
 static char g_pw[256];
 static char *g_rtf;
-static DWORD g_neterr;
+static DWORD g_neterr, g_total;
 static HFONT g_font, g_big;
 static HBRUSH g_white, g_grey;
 static void layout(void);
@@ -73,6 +74,27 @@ static UINT legacy_acp(void)
     return GetLocaleInfoW(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, b, 8) ? StrToUint(b) : GetACP();
 }
 
+static const WCHAR *file_name(const WCHAR *path)
+{
+    const WCHAR *n = path;
+    for (; *path; path++) if (*path == '\\' || *path == '/') n = path + 1;
+    return n;
+}
+
+// The size is the server's (Content-Length), shown once the download has started.
+static void fetch_body(DWORD total)
+{
+    WCHAR size[40], b[400];
+    size[0] = 0;
+    if (total) wsprintfW(size, T(L" (%lu.%lu MB)", L"（%lu.%lu MB）"), total / 1048576, total % 1048576 / 104858);
+    wsprintfW(b, T(L"Downloading the DynaRun V3 setup from the Dyna Pro website%s.\nThis can take a few minutes.\n\n"
+                   L"If it does not work, click \"Download manually\" to get it from the website yourself.",
+                   L"正在從 Dyna Pro 官網下載 DynaRun V3 安裝檔%s，可能需要幾分鐘。\n\n"
+                   L"如果下載不順利，可以按「開啟官網手動下載」，自己從官網下載。"), size);
+    g_total = total;
+    text(ID_BODY, b);
+}
+
 static void set_page(int p)
 {
     static WCHAR b[1200];
@@ -107,13 +129,14 @@ static void set_page(int p)
         break;
     case P_FETCH:
         text(ID_TITLE, T(L"Downloading the setup", L"正在下載安裝檔"));
-        text(ID_BODY, T(L"Downloading the DynaRun V3 setup from the Dyna Pro website (about 82 MB).\nThis can take a few minutes.",
-                        L"正在從 Dyna Pro 官網下載 DynaRun V3 安裝檔（約 82 MB），可能需要幾分鐘。"));
+        fetch_body(0);
         progress(FALSE); status(L" ", FALSE);
-        buttons(NULL, T(L"Cancel", L"取消"), NULL);
+        buttons(NULL, T(L"Cancel", L"取消"), T(L"Download manually", L"開啟官網手動下載"));
         break;
     case P_FAIL:
-        text(ID_TITLE, T(L"The setup could not be downloaded", L"無法自動下載安裝檔"));
+        text(ID_TITLE, g_badfile ? T(L"This is not the DynaRun V3 setup", L"這不是 DynaRun V3 安裝檔")
+                                 : T(L"The setup could not be downloaded", L"無法自動下載安裝檔"));
+        g_badfile = FALSE;
         wsprintfW(b, T(L"%s\n\nDownload it yourself:\n   1.  click \"Open website\"\n   2.  on the page, click the download for \"Dyna Run V3 Software\"\n"
                        L"   3.  come back here and click \"Retry\" (or \"Choose file...\")",
                        L"%s\n\n請自己下載：\n   1.  按「開啟官網」\n   2.  在網頁上下載「Dyna Run V3 Software」\n"
@@ -123,10 +146,11 @@ static void set_page(int p)
         break;
     case P_PASSWORD:
         text(ID_TITLE, T(L"Enter the setup password", L"輸入安裝密碼"));
-        text(ID_BODY, T(L"Type the password that Dyna Pro gave you for the DynaRun V3 setup.\n(It is used only to open the setup file and is not saved.)",
-                        L"請輸入 Dyna Pro 給你的 DynaRun V3 安裝密碼。\n（只用來打開安裝檔，不會被儲存。）"));
+        wsprintfW(b, T(L"Type the password that Dyna Pro gave you for the DynaRun V3 setup.\n(It is used only to open the setup file and is not saved.)\n\nSetup file: %s",
+                       L"請輸入 Dyna Pro 給你的 DynaRun V3 安裝密碼。\n（只用來打開安裝檔，不會被儲存。）\n\n安裝檔：%s"), file_name(g_pkg));
+        text(ID_BODY, b);
         vis(ID_EDIT, TRUE);
-        buttons(T(L"Next", L"下一步"), T(L"Cancel", L"取消"), NULL);
+        buttons(T(L"Next", L"下一步"), T(L"Cancel", L"取消"), T(L"Other file...", L"選擇其他檔案…"));
         if (g_note[0]) status(g_note, TRUE);
         SetFocus(H(ID_EDIT)); SendMessageW(H(ID_EDIT), EM_SETSEL, 0, -1);
         break;
@@ -228,13 +252,23 @@ static void fetch(void)
     start_job(JOB_DOWNLOAD, P_FETCH);
 }
 
+// Whatever the file is called: only the real DynaRun setup is ever installed.
+static void not_dynarun(void)
+{
+    WCHAR m[MAX_PATH];
+    wsprintfW(g_note, T(L"\"%s\" is not the DynaRun V3 setup, so it will not be installed.",
+                        L"「%s」不是 DynaRun V3 的安裝檔，所以不會安裝它。"), file_name(g_pkg));
+    pkg_reject(g_pkg);
+    pkg_temp_dir(m); lstrcatW(m, L"\\Setup.msi");
+    if (!lstrcmpiW(g_msi, m)) DeleteFileW(g_msi);   // our extracted copy
+    if (g_pkg_ours) DeleteFileW(g_pkg);
+    g_badfile = TRUE;
+    set_page(P_FAIL);
+}
+
 static void after_extract(void)
 {
-    if (!msi_is_dynarun(g_msi, g_ver, 64)) {
-        lstrcpyW(g_note, T(L"This file is not the DynaRun V3 setup.", L"這個檔案不是 DynaRun V3 的安裝檔。"));
-        set_page(P_FAIL);
-        return;
-    }
+    if (msi_check(g_msi, g_ver, 64) != MSI_DYNARUN) { not_dynarun(); return; }
     release(g_rtf);
     if ((g_rtf = msi_license_rtf(g_msi))) {
         rtfsrc src; EDITSTREAM es;
@@ -248,14 +282,8 @@ static void after_extract(void)
 
 static void open_package(void)
 {
-    WCHAR *e = g_pkg + lstrlenW(g_pkg) - 4;
-    if (e > g_pkg && !lstrcmpiW(e, L".msi")) { lstrcpyW(g_msi, g_pkg); after_extract(); return; }
-    if (zip_open(g_pkg, &g_zip) != PK_OK) {
-        lstrcpyW(g_note, T(L"The file is not the DynaRun V3 setup, or it is damaged.", L"這個檔案不是 DynaRun V3 安裝檔，或檔案已損毀。"));
-        if (g_pkg_ours) DeleteFileW(g_pkg);
-        set_page(P_FAIL);
-        return;
-    }
+    if (msi_check(g_pkg, NULL, 0) != MSI_NONE) { lstrcpyW(g_msi, g_pkg); after_extract(); return; }   // by content, not by extension
+    if (zip_open(g_pkg, &g_zip) != PK_OK) { g_msi[0] = 0; not_dynarun(); return; }
     pkg_temp_dir(g_msi); lstrcatW(g_msi, L"\\Setup.msi");
     if (g_zip.flags & 1) set_page(P_PASSWORD);
     else { g_pw[0] = 0; start_job(JOB_EXTRACT, P_EXTRACT); }
@@ -283,6 +311,7 @@ static void choose_file(void)
     of.lpstrFile = f; of.nMaxFile = MAX_PATH;
     of.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameW(&of)) return;
+    if (g_pkg_ours && lstrcmpiW(g_pkg, f)) DeleteFileW(g_pkg);   // the download that turned out not to be wanted
     lstrcpyW(g_pkg, f); g_pkg_ours = FALSE;
     open_package();
 }
@@ -316,8 +345,8 @@ static void job_done(int job, int rc)
     switch (job) {
     case JOB_DOWNLOAD:
         if (rc == PK_OK) { open_package(); break; }
-        if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); break; }
-        if (rc == PK_HTTP) wsprintfW(g_note, T(L"The Dyna Pro website answered with error %lu.", L"Dyna Pro 官網回應錯誤 %lu。"), g_neterr);
+        if (rc == PK_CANCEL) lstrcpyW(g_note, T(L"The download was stopped.", L"已停止下載。"));
+        else if (rc == PK_HTTP) wsprintfW(g_note, T(L"The Dyna Pro website answered with error %lu.", L"Dyna Pro 官網回應錯誤 %lu。"), g_neterr);
         else if (rc == PK_IO) wsprintfW(g_note, T(L"The file could not be saved (error %lu).", L"無法儲存檔案（錯誤 %lu）。"), g_neterr);
         else wsprintfW(g_note, T(L"No connection to the Dyna Pro website (error %lu). Check the internet connection.",
                                 L"連不上 Dyna Pro 官網（錯誤 %lu），請確認網路是否正常。"), g_neterr);
@@ -353,7 +382,11 @@ static void on_primary(void)
         break;
     case P_FAIL: fetch(); break;
     case P_PASSWORD:
-        if (!take_password()) { status(T(L"Wrong password. Please check it (upper/lower case matters).", L"密碼不正確，請再確認（大小寫有差別）。"), TRUE); SetFocus(H(ID_EDIT)); break; }
+        if (!take_password()) {
+            status(T(L"Wrong password. Please check it (upper/lower case matters).\nIf the setup file above is not the DynaRun setup, click \"Other file...\".",
+                     L"密碼不正確，請再確認（大小寫有差別）。\n如果上面的安裝檔不是 DynaRun 的，請按「選擇其他檔案…」。"), TRUE);
+            SetFocus(H(ID_EDIT)); break;
+        }
         start_job(JOB_EXTRACT, P_EXTRACT);
         break;
     case P_LICENSE: start_job(JOB_INSTALL_ALL, P_INSTALL); break;
@@ -469,10 +502,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDOK: case ID_PRIMARY: if (IsWindowVisible(H(ID_PRIMARY)) && IsWindowEnabled(H(ID_PRIMARY))) on_primary(); break;
         case IDCANCEL: case ID_SECOND:
             if (g_page == P_FAIL && LOWORD(w) == ID_SECOND) choose_file();
+            else if (g_page == P_FETCH && LOWORD(w) == ID_SECOND) InterlockedExchange(&g_cancel, 1);   // stop, then offer the other ways
             else if (g_page != P_INSTALL) on_close();
             break;
         case ID_EXTRA:
-            if (g_page == P_FAIL) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            if (g_page == P_FAIL || g_page == P_FETCH) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            else if (g_page == P_PASSWORD) choose_file();
             else if (g_page == P_HELLO) choose_exe();
             break;
         case ID_CHECK: EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED); break;
@@ -483,6 +518,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         DWORD done = (DWORD)w, total = (DWORD)l;
         SendMessageW(H(ID_PROG), PBM_SETPOS, total ? MulDiv(done, 1000, total) : 0, 0);
         if (g_page == P_FETCH) {
+            if (total != g_total) { fetch_body(total); layout(); }
             wsprintfW(b, total ? L"%lu.%lu / %lu.%lu MB" : L"%lu.%lu MB", done / 1048576, done % 1048576 / 104858,
                       total / 1048576, total % 1048576 / 104858);
             status(b, FALSE);

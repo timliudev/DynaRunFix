@@ -14,6 +14,12 @@
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 #define CHUNK 65536
+#ifndef FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS 0x00400000
+#endif
+#ifndef FILE_ATTRIBUTE_RECALL_ON_OPEN
+#define FILE_ATTRIBUTE_RECALL_ON_OPEN 0x00040000
+#endif
 
 static DWORD StrToIntW_(const WCHAR *s) { DWORD v = 0; while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0'); return v; }
 static BOOL StrStrW_(const WCHAR *h, const WCHAR *n)
@@ -32,25 +38,61 @@ void pkg_temp_dir(WCHAR *out)
 
 /* ---------- finding a package the user already has ---------- */
 
-static BOOL newest(const WCHAR *dir, const WCHAR *pattern, WCHAR *best, FILETIME *bt)
+// The setup is recognised by what it is, not by its file name: an MSI must pass msi_check, a zip must
+// hold an .msi (that one can only be checked after the password, see the wizard). Files the wizard
+// found to be something else are remembered here and not offered again.
+static WCHAR g_rejected[8][MAX_PATH];
+static int g_nrejected;
+
+void pkg_reject(const WCHAR *path)
 {
-    WCHAR p[MAX_PATH * 2]; WIN32_FIND_DATAW fd; HANDLE f; BOOL r = FALSE;
-    if (!dir[0] || lstrlenW(dir) + lstrlenW(pattern) + 2 >= MAX_PATH) return FALSE;
-    lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, pattern);
-    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
+    lstrcpynW(g_rejected[g_nrejected % 8], path, MAX_PATH);
+    g_nrejected++;
+}
+
+static BOOL rejected(const WCHAR *path)
+{
+    int i;
+    for (i = 0; i < 8 && i < g_nrejected; i++) if (!lstrcmpiW(g_rejected[i], path)) return TRUE;
+    return FALSE;
+}
+
+typedef struct { WCHAR path[MAX_PATH]; int score; FILETIME t; } candidate;
+
+// Ranking: a checked DynaRun MSI first, then a zip named like Dyna Pro's download, then any other zip
+// with an .msi inside; newest first within each. The name only orders the zips, it proves nothing.
+static void scan(const WCHAR *dir, BOOL subdirs, candidate *best)
+{
+    WCHAR p[MAX_PATH * 2], *e; WIN32_FIND_DATAW fd; HANDLE f; int score; zipent z;
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) return;
+    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
+    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return;
     do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || CompareFileTime(&fd.ftLastWriteTime, bt) <= 0) continue;
-        if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(best, dir); lstrcatW(best, L"\\"); lstrcatW(best, fd.cFileName);
-        *bt = fd.ftLastWriteTime; r = TRUE;
+        if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
+        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (subdirs && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) scan(p, FALSE, best);
+            continue;
+        }
+        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) continue;  // cloud-only: do not download it just to look
+        e = fd.cFileName + lstrlenW(fd.cFileName) - 4;
+        if (e < fd.cFileName) continue;
+        if (!lstrcmpiW(e, L".msi")) score = 3;
+        else if (!lstrcmpiW(e, L".zip")) score = CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd.cFileName, 4, L"dyna", 4) == CSTR_EQUAL ? 2 : 1;
+        else continue;
+        if (score < best->score || (score == best->score && CompareFileTime(&fd.ftLastWriteTime, &best->t) <= 0)) continue;
+        if (rejected(p)) continue;
+        if (score == 3 ? msi_check(p, NULL, 0) != MSI_DYNARUN : zip_open(p, &z) != PK_OK) continue;
+        lstrcpyW(best->path, p); best->score = score; best->t = fd.ftLastWriteTime;
     } while (FindNextFileW(f, &fd));
     FindClose(f);
-    return r;
 }
 
 BOOL pkg_find_local(WCHAR *out)
 {
-    WCHAR dirs[4][MAX_PATH], raw[MAX_PATH], *e; FILETIME bt = { 0, 0 }; HKEY k; DWORD n = sizeof(raw), i;
+    WCHAR dirs[4][MAX_PATH], raw[MAX_PATH], *e; HKEY k; DWORD n = sizeof(raw), i; candidate *best = alloc(sizeof(candidate));
+    out[0] = 0;
+    if (!best) return FALSE;
     lstrcpyW(dirs[0], g_self); for (e = dirs[0] + lstrlenW(dirs[0]); e > dirs[0] && *e != '\\'; e--); *e = 0;
     dirs[1][0] = dirs[2][0] = dirs[3][0] = 0;
     // Downloads: the user's (possibly moved) folder, else %USERPROFILE%\Downloads
@@ -61,9 +103,10 @@ BOOL pkg_find_local(WCHAR *out)
     if (!dirs[1][0] && ExpandEnvironmentStringsW(L"%USERPROFILE%\\Downloads", dirs[1], MAX_PATH) == 0) dirs[1][0] = 0;
     SHGetSpecialFolderPathW(NULL, dirs[2], CSIDL_DESKTOPDIRECTORY, FALSE);
     SHGetSpecialFolderPathW(NULL, dirs[3], CSIDL_PERSONAL, FALSE);
-    out[0] = 0;
-    for (i = 0; i < 4; i++) newest(dirs[i], L"Dyna Pro Dynamometers*.zip", out, &bt);
-    if (!out[0]) newest(dirs[0], L"Setup.msi", out, &bt);      // an extracted setup right next to us
+    zero(best, sizeof(*best));
+    for (i = 0; i < 4; i++) scan(dirs[i], i == 1, best);   // also one level into Downloads (e.g. Downloads\Compressed)
+    lstrcpyW(out, best->path);
+    release(best);
     return out[0] != 0;
 }
 
@@ -301,17 +344,36 @@ char *msi_license_rtf(const WCHAR *msi)
     return rtf;
 }
 
-BOOL msi_is_dynarun(const WCHAR *msi, WCHAR *version, int cch)
+// DynaRun V3 is recognised by the UpgradeCode of its MSI, which stays the same in every version of the
+// product; the ProductName must also still name it (any version). Never by file name or hash.
+#define DYNARUN_UPGRADE_CODE "{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}"
+
+static BOOL names_dynarun(const char *s)          // "Dyna Run V3", "DynaRun 4", ...: "dynarun" ignoring spaces and case
 {
-    MSIHANDLE db; char *name, *ver; BOOL ok;
-    if (MsiOpenDatabaseW(msi, (LPCWSTR)MSIDBOPEN_READONLY, &db)) return FALSE;
+    static const char want[] = "dynarun";
+    int i = 0;
+    for (; s && *s; s++) {
+        char c = *s >= 'A' && *s <= 'Z' ? *s + 32 : *s;
+        if (c == ' ') continue;
+        if (c == want[i]) { if (!want[++i]) return TRUE; }
+        else i = c == want[0];
+    }
+    return FALSE;
+}
+
+int msi_check(const WCHAR *msi, WCHAR *version, int cch)
+{
+    MSIHANDLE db; char *code, *name, *ver; int r;
+    if (version) version[0] = 0;
+    if (MsiOpenDatabaseW(msi, (LPCWSTR)MSIDBOPEN_READONLY, &db)) return MSI_NONE;
+    code = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'UpgradeCode'", NULL);
     name = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'ProductName'", NULL);
     ver = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'ProductVersion'", NULL);
     MsiCloseHandle(db);
-    ok = name && !lstrcmpiA(name, "Dyna Run V3");
-    if (version) { version[0] = 0; if (ver) MultiByteToWideChar(CP_ACP, 0, ver, -1, version, cch); }
-    release(name); release(ver);
-    return ok;
+    r = code && !lstrcmpiA(code, DYNARUN_UPGRADE_CODE) && names_dynarun(name) ? MSI_DYNARUN : MSI_OTHER;
+    if (version && ver) MultiByteToWideChar(CP_ACP, 0, ver, -1, version, cch);
+    release(code); release(name); release(ver);
+    return r;
 }
 
 // Basic UI only (/qb): the wizard pages of this Wise setup, the only part that uses VBScript, are skipped.
@@ -331,12 +393,6 @@ int run_msiexec(const WCHAR *msi)
 
 /* ---------- OneDrive placeholders the setup will overwrite ---------- */
 
-#ifndef FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
-#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS 0x00400000
-#endif
-#ifndef FILE_ATTRIBUTE_RECALL_ON_OPEN
-#define FILE_ATTRIBUTE_RECALL_ON_OPEN 0x00040000
-#endif
 
 static BOOL name_listed(const WCHAR *list, const WCHAR *name)
 {
