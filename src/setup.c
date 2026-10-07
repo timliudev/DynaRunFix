@@ -2,7 +2,9 @@
 //
 //   DynaRunFix-Setup.exe                      wizard (wizard.c): installs DynaRun V3 first when it is
 //                                             missing (official download, password, license), then the fix
-//   DynaRunFix-Setup.exe /quiet               install the fix only, no UI (DynaRun must be installed)
+//   DynaRunFix-Setup.exe /quiet               install the fix only, no UI (DynaRun must be installed);
+//                                             exit code 6 (RC_RUNNING), nothing changed, while DynaRun runs;
+//   DynaRunFix-Setup.exe /quiet /close        the same, but closes a running DynaRun first
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
@@ -23,6 +25,7 @@
 #include <shellapi.h>
 #include <commdlg.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 #include "setup.h"
 #include "version.h"
 
@@ -42,7 +45,7 @@ static const WCHAR *COM_FILES[] = {
     L"filev090.ocx", L"mscomctl.ocx", L"mscomm32.ocx", L"msdatgrd.ocx", L"msflxgrd.ocx", L"mshflxgd.ocx",
     L"numled.ocx", L"pesgo32e.ocx", L"richtx32.ocx", L"shcmb090.ocx", L"tabctl32.ocx", L"thbres25.dll" };
 
-BOOL g_zh, g_quiet;
+BOOL g_zh, g_quiet, g_close;
 HWND g_hwnd;
 WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define TITLE T(L"DynaRunFix Setup", L"DynaRunFix 安裝程式")
@@ -58,7 +61,7 @@ BOOL exists(const WCHAR *p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRI
 int msg(const WCHAR *text, UINT flags) { return MessageBoxW(g_hwnd, text, TITLE, flags | MB_SETFOREGROUND); }
 static void info(const WCHAR *text) { if (!g_quiet) msg(text, MB_ICONINFORMATION); }
 static void error2(const WCHAR *text, const WCHAR *what)
-{ static WCHAR b[1024]; lstrcpynW(b, text, 600); if (what) { lstrcatW(b, L"\n\n"); lstrcatW(b, what); } msg(b, MB_ICONERROR); }
+{ static WCHAR b[1024]; if (g_quiet) return; lstrcpynW(b, text, 600); if (what) { lstrcatW(b, L"\n\n"); lstrcatW(b, what); } msg(b, MB_ICONERROR); }
 
 BOOL is_admin(void)
 {
@@ -124,10 +127,27 @@ static void append_line(const WCHAR *p, const WCHAR *line)
     CloseHandle(h);
 }
 
-static BOOL extract(int id, const WCHAR *p)
+static BOOL same_bytes(const WCHAR *p, const void *d, DWORD n)   // the file on disk is exactly d
 {
-    HRSRC r = FindResourceW(NULL, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA);
-    return r && write_file(p, LockResource(LoadResource(NULL, r)), SizeofResource(NULL, r));
+    DWORD got, i; BYTE *f = read_file(p, &got); BOOL r = f && got == n;
+    for (i = 0; r && i < n; i++) r = f[i] == ((const BYTE *)d)[i];
+    release(f);
+    return r;
+}
+
+static BOOL same_file(const WCHAR *a, const WCHAR *b)
+{
+    DWORD n; void *d = read_file(a, &n); BOOL r = d && same_bytes(b, d, n);
+    release(d);
+    return r;
+}
+
+static BOOL extract(int id, const WCHAR *p)     // written and read back: the installed file is the payload
+{
+    HRSRC r = FindResourceW(NULL, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA); const void *d; DWORD n;
+    if (!r) return FALSE;
+    d = LockResource(LoadResource(NULL, r)); n = SizeofResource(NULL, r);
+    return write_file(p, d, n) && same_bytes(p, d, n);
 }
 
 static void touch(const WCHAR *p)    // makes Windows re-read the exe's external manifest
@@ -194,6 +214,95 @@ BOOL locate_dynarun(void)
         if (GetEnvironmentVariableW(vars[i], pf, MAX_PATH) && exists(cat3(g_exe, pf, DYNARUN_REL, NULL))) return TRUE;
     g_exe[0] = 0;
     return FALSE;
+}
+
+/* ---------- programs that hold the files the setup replaces ---------- */
+
+typedef BOOL (WINAPI *QueryFullProcessImageNameW_t)(HANDLE, DWORD, LPWSTR, PDWORD);
+
+static void process_path(DWORD pid, WCHAR *out, DWORD cch)   // the exe of a process, or "" when it cannot be read
+{
+    static QueryFullProcessImageNameW_t q; static BOOL tried; HANDLE h; MODULEENTRY32W me;
+    out[0] = 0;
+    if (!tried) { tried = TRUE; q = (QueryFullProcessImageNameW_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryFullProcessImageNameW"); }
+    // Vista and later: also for an elevated process when this one is not (PROCESS_QUERY_LIMITED_INFORMATION)
+    if (q && (h = OpenProcess(0x1000, FALSE, pid))) {
+        if (!q(h, 0, out, &cch)) out[0] = 0;
+        CloseHandle(h);
+        if (out[0]) return;
+    }
+    h = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);       // XP: the first module is the exe
+    if (h == INVALID_HANDLE_VALUE) return;
+    me.dwSize = sizeof(me);
+    if (Module32FirstW(h, &me)) lstrcpynW(out, me.szExePath, cch);
+    CloseHandle(h);
+}
+
+// A running DynaRun V3 has dynafix.dll (and under Locale Emulator LoaderDll.dll / LocaleEmulator.dll)
+// of the install folder loaded. Windows lets the setup rename such files and put new ones in place,
+// but that DynaRun keeps the old code, and "Start DynaRun" would only find it already running, so
+// DynaRun is closed first (the user agrees in the wizard, or passes /close). DynaRun is matched by
+// name (any folder; it may run elevated), the launcher and LEProc only when they run from the install folder.
+typedef struct { DWORD pid; int bit; } runproc;
+
+static int scan_programs(runproc *list, int max, int *count)
+{
+    PROCESSENTRY32W pe; HANDLE s; WCHAR path[MAX_PATH], dir[MAX_PATH + 2]; int r = 0, bit, len;
+    *count = 0;
+    s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (s == INVALID_HANDLE_VALUE) return 0;
+    cat3(dir, g_dir, L"\\", NULL); len = lstrlenW(dir);
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(s, &pe)) do {
+        bit = !lstrcmpiW(pe.szExeFile, L"DynaRun V3.exe") ? RUN_DYNARUN : !lstrcmpiW(pe.szExeFile, L"DynaRunFix.exe") ? RUN_LAUNCHER :
+              !lstrcmpiW(pe.szExeFile, L"LEProc.exe") ? RUN_LEPROC : 0;
+        if (!bit) continue;
+        if (bit != RUN_DYNARUN) {
+            process_path(pe.th32ProcessID, path, MAX_PATH);
+            // a path that cannot be read counts as ours: better than a half-updated install
+            if (path[0] && !(lstrlenW(path) > len && CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, path, len, dir, len) == CSTR_EQUAL)) continue;
+        }
+        r |= bit;
+        if (*count < max) { list[*count].pid = pe.th32ProcessID; list[*count].bit = bit; (*count)++; }
+    } while (Process32NextW(s, &pe));
+    CloseHandle(s);
+    return r;
+}
+
+int running_programs(void)
+{ runproc l[16]; int n; return scan_programs(l, 16, &n); }
+
+static BOOL CALLBACK close_window(HWND h, LPARAM pid)
+{
+    DWORD p;
+    GetWindowThreadProcessId(h, &p);
+    if (p == (DWORD)pid && IsWindowVisible(h)) PostMessageW(h, WM_CLOSE, 0, 0);
+    return TRUE;
+}
+
+static void wait_gone(runproc *l, int n, int bits, DWORD ms)
+{
+    HANDLE h[16]; int i, k = 0;
+    for (i = 0; i < n; i++) if ((l[i].bit & bits) && (h[k] = OpenProcess(SYNCHRONIZE, FALSE, l[i].pid))) k++;
+    if (k) WaitForMultipleObjects(k, h, TRUE, ms);
+    while (k) CloseHandle(h[--k]);
+}
+
+// Closes DynaRun as if its window were closed (WM_CLOSE); what is still running 10 s later (e.g. a
+// question DynaRun asks on exit) is ended. Runs in the elevated stage: an elevated DynaRun accepts
+// neither messages nor TerminateProcess from a process that is not elevated.
+static void close_programs(void)
+{
+    runproc l[16]; int n, i; HANDLE h;
+    if (!scan_programs(l, 16, &n)) return;
+    for (i = 0; i < n; i++) if (l[i].bit == RUN_DYNARUN) EnumWindows(close_window, l[i].pid);
+    wait_gone(l, n, RUN_DYNARUN, 10000);
+    wait_gone(l, n, RUN_LAUNCHER | RUN_LEPROC, 2000);     // LEProc waits for DynaRun, the launcher ends by itself
+    scan_programs(l, 16, &n);
+    for (i = 0; i < n; i++)
+        if ((h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, l[i].pid))) {
+            TerminateProcess(h, 1); WaitForSingleObject(h, 5000); CloseHandle(h);
+        }
 }
 
 /* ---------- COM registrations: HKU\<sid>\Software\Classes -> HKLM\SOFTWARE\Classes ---------- */
@@ -438,6 +547,8 @@ static int machine_install(const WCHAR *sid)
 {
     static WCHAR p[MAX_PATH + 16];
     HKEY k;
+    if (g_close) close_programs();
+    if (running_programs()) return RC_RUNNING;          // checked again here: DynaRun may have been started since
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL))) {
         error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
@@ -455,7 +566,7 @@ static int machine_install(const WCHAR *sid)
             }
     }
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
-    if (lstrcmpiW(p, g_self) && !CopyFileW(g_self, p, FALSE) && !(move_aside(p) && CopyFileW(g_self, p, FALSE))) {
+    if (lstrcmpiW(p, g_self) && ((!CopyFileW(g_self, p, FALSE) && !(move_aside(p) && CopyFileW(g_self, p, FALSE))) || !same_file(g_self, p))) {
         error2(T(L"Cannot copy the uninstaller.", L"無法複製解除安裝程式。"), p);
         return 1;
     }
@@ -514,15 +625,26 @@ static int machine_uninstall(void)
 // Runs "<self> <args>" elevated (one UAC prompt) and returns its exit code; 2 = cancelled.
 static int run_elevated(const WCHAR *args)
 {
-    SHELLEXECUTEINFOW se; DWORD rc = 1; static WCHAR a[1024];
-    lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet");
+    SHELLEXECUTEINFOW se; DWORD rc = 1, err; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = g_self;
+    lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
+    // Mapped network drives (e.g. a VM's shared folder) do not exist for the elevated process: run a copy in %TEMP%
+    lstrcpynW(root, g_self, 4);
+    if (root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && GetTempPathW(MAX_PATH - 40, tmp)) {
+        wsprintfW(tmp + lstrlenW(tmp), L"DynaRunFix-Setup-%lu.exe", GetTickCount());
+        if (CopyFileW(g_self, tmp, FALSE)) exe = tmp;
+    }
     zero(&se, sizeof(se));
     se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
-    se.hwnd = g_hwnd; se.lpVerb = L"runas"; se.lpFile = g_self; se.lpParameters = a; se.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&se)) return GetLastError() == ERROR_CANCELLED ? 2 : 1;
+    se.hwnd = g_hwnd; se.lpVerb = L"runas"; se.lpFile = exe; se.lpParameters = a; se.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&se)) {
+        err = GetLastError();
+        if (exe != g_self) DeleteFileW(exe);
+        return err == ERROR_CANCELLED ? 2 : 1;
+    }
     WaitForSingleObject(se.hProcess, INFINITE);
     GetExitCodeProcess(se.hProcess, &rc);
     CloseHandle(se.hProcess);
+    if (exe != g_self) DeleteFileW(exe);
     return (int)rc;
 }
 
@@ -536,6 +658,8 @@ static int machine_full(const WCHAR *sid, const WCHAR *msi)
 {
     static WCHAR me[200], txt[300]; int rc;
     if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return 3;
+    if (g_close) close_programs();
+    if (running_programs()) return RC_RUNNING;
     rc = run_msiexec(msi);
     if (rc != 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
         if (rc == ERROR_INSTALL_USEREXIT) return 2;
@@ -571,6 +695,7 @@ int install_fix(void)
 {
     static WCHAR sid[200], args[600]; int rc;
     if (!user_sid(sid, 200)) return 1;
+    if (running_programs() && !g_close) return RC_RUNNING;   // before the UAC prompt; /quiet without /close ends here
     CoInitialize(NULL);
     if (is_admin()) rc = machine_install(sid);
     else {
@@ -586,6 +711,7 @@ int install_all(const WCHAR *msi)
 {
     static WCHAR sid[200], args[MAX_PATH + 300]; int rc;
     if (!user_sid(sid, 200)) return 1;
+    if (running_programs() && !g_close) return RC_RUNNING;
     CoInitialize(NULL);
     pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
     if (is_admin()) rc = machine_full(sid, msi);
@@ -646,7 +772,7 @@ void WinMainCRTStartup(void)
     int argc, i, rc; WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
     init_paths();
-    for (i = 1; i < argc; i++) if (!lstrcmpiW(argv[i], L"/quiet")) g_quiet = TRUE;
+    for (i = 1; i < argc; i++) if (!lstrcmpiW(argv[i], L"/quiet")) g_quiet = TRUE; else if (!lstrcmpiW(argv[i], L"/close")) g_close = TRUE;
     if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
         lstrcpynW(g_exe, argv[3], MAX_PATH);
         CoInitialize(NULL);
@@ -661,5 +787,7 @@ void WinMainCRTStartup(void)
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall();
     else if (g_quiet) rc = locate_dynarun() ? install_fix() : 1;
     else rc = wizard();
+    // the elevated part (/machine, /full) ends here: let the wizard that started it take the foreground back
+    AllowSetForegroundWindow(ASFW_ANY);
     ExitProcess(rc);
 }

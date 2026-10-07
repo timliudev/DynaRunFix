@@ -2,6 +2,9 @@
 #include <winver.h>
 #include "version.h"
 
+// Icon (tools\make-icon.py); 10 is what the wizard window class loads
+10 ICON "src\dynarunfix.ico"
+
 1 RCDATA "build\DynaRunFix.exe"
 2 RCDATA "build\dynafix.dll"
 3 RCDATA "manifest\DynaRun V3.exe.manifest"

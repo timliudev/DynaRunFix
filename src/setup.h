@@ -1,7 +1,7 @@
 // Shared declarations of DynaRunFix-Setup.exe (setup.c, wizard.c, package.c).
 #include <windows.h>
 
-extern BOOL g_zh, g_quiet;
+extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
@@ -17,6 +17,9 @@ BOOL user_sid(WCHAR *out, int cch);
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
 int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
+#define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed
+enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4 };
+int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces
 
 /* wizard.c */
 int wizard(void);

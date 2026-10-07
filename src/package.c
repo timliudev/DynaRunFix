@@ -384,6 +384,7 @@ int run_msiexec(const WCHAR *msi)
     GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
     wsprintfW(cmd, L"\"%s\" /i \"%s\" /qb! REBOOT=ReallySuppress", exe, msi);
     zero(&si, sizeof(si)); si.cb = sizeof(si);
+    AllowSetForegroundWindow(ASFW_ANY);   // msiexec's progress window may come to the front
     if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &rc);
