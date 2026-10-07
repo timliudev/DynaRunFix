@@ -96,5 +96,7 @@ the redundant `0x591` messages are suppressed.
 ## 5. Notes for running elevated
 
 A hook can only be installed into a process of the same or lower integrity level. If DynaRun has to run
-as administrator (for example to reach its setup/initialisation screens), run `DynaRunFix.exe` as
-administrator as well.
+as administrator (for example to reach its setup/initialisation screens), `DynaRunFix.exe` has to run
+elevated as well. It elevates itself when needed: when DynaRun's compatibility setting *Run as
+administrator* is on, when Windows refuses to start DynaRun without elevation, or when an elevated DynaRun
+is already running.
