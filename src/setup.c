@@ -920,7 +920,7 @@ static int machine_install(const WCHAR *sid)
 
     if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, UNINSTKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
         set_str(k, L"DisplayName", L"DynaRunFix");
-        set_str(k, L"DisplayVersion", WIDEN(DRF_VERSION));
+        set_str(k, L"DisplayVersion", WIDEN(DRF_DISPLAY));
         set_str(k, L"Publisher", L"DynaRunFix (github.com/timliudev/DynaRunFix)");
         set_str(k, L"URLInfoAbout", L"https://github.com/timliudev/DynaRunFix");
         set_str(k, L"InstallLocation", g_dir);

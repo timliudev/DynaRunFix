@@ -20,6 +20,13 @@
   installs it (one administrator prompt) and opens DynaRun; the taskbar pin, the start at sign-in and the desktop
   shortcut stay as they are (`/keep`). *No*, a cancelled prompt or a failed update asks again a day later. Offline,
   or on Windows XP (no TLS 1.2), nothing happens. Versions before this one do not check: install it once by hand.
+- **Log:** every line in `%TEMP%\dynafix.log` now starts with the date and time (`YYYY-MM-DD HH:MM:SS.mmm`). The
+  launcher logs how it was started (arguments, `/autostart`, `/restart` or plain, parent process, start-up flags
+  and show command, working folder, DynaRunFix version); each DynaRun process logs a header line with the DynaRunFix
+  version and commit, the version of `DynaRun V3.exe` and the Windows version with its update revision. The log is
+  kept below 10 MB: the oldest lines are dropped first (the newest 8 MB stay), checked at each start.
+- **Dev builds** show the short commit hash (`-dirty` with uncommitted changes) instead of `dev` in the installer
+  title, Programs and Features and the log; they still never check for updates.
 - `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
   window are a little taller; the last page says what was set up.
 
@@ -96,6 +103,8 @@
   有新版就在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問；過程記錄在 `%TEMP%\dynafix.log`）。按「是」只會從本專案下載該版本的 `DynaRunFix-Setup.exe`，
   用 GitHub 列出的 SHA-256 核對後安裝（一次系統管理員確認），然後開啟 DynaRun；工作列釘選、開機自動啟動和桌面捷徑維持原樣（`/keep`）。
   按「否」、取消確認或更新失敗，隔天會再問。沒有網路或 Windows XP（不支援 TLS 1.2）時什麼都不做。這一版之前的版本不會檢查，需要手動安裝一次。
+- **Log:** `%TEMP%\dynafix.log` 每行開頭都有日期和時間(`YYYY-MM-DD HH:MM:SS.mmm`);啟動器會記錄自己是怎麼被啟動的(參數、`/autostart`、`/restart` 或一般啟動、父行程、啟動旗標與顯示方式、工作資料夾、DynaRunFix 版本);每個 DynaRun 行程另有一行標頭:DynaRunFix 版本與 commit、`DynaRun V3.exe` 的版本、Windows 版本與更新修訂號。log 保持在 10 MB 以下,最舊的行先被丟掉(留下最新的 8 MB,每次啟動時檢查)。
+- **開發版**在安裝程式標題、「程式和功能」與 log 顯示短 commit hash(有未提交變更時加 `-dirty`)而不是 `dev`;仍然不會檢查更新。
 - `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07
