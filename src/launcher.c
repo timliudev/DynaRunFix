@@ -153,6 +153,23 @@ static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
     llog("launcher: early hook did not report in %u %u\r\n", 0, 0);
 }
 
+// Waits until Shell_TrayWnd exists and the screen size and work area have not changed for 3 s (polled every 250 ms);
+// starts anyway after 60 s.
+static void wait_desktop(void)
+{
+    DWORD t0 = GetTickCount(), still = t0, now; int sx = 0, sy = 0, x, y; RECT wa, w0 = { 0, 0, 0, 0 };
+    for (;;) {
+        now = GetTickCount();
+        wa.left = wa.top = wa.right = wa.bottom = 0;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
+        x = GetSystemMetrics(SM_CXSCREEN); y = GetSystemMetrics(SM_CYSCREEN);
+        if (x != sx || y != sy || !EqualRect(&wa, &w0)) { sx = x; sy = y; w0 = wa; still = now; }
+        if ((FindWindowA("Shell_TrayWnd", NULL) && now - still >= 3000) || now - t0 >= 60000) break;
+        Sleep(250);
+    }
+    llog("launcher: autostart waited %u ms for the desktop (%u = gave up)\r\n", now - t0, now - t0 >= 60000);
+}
+
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
@@ -164,6 +181,12 @@ void WinMainCRTStartup(void)
     cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
+    // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
+    // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
+    if (!lstrcmpiA(cmd, "/autostart") || (cmd[0] == '/' && cmd[10] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL)) {
+        for (cmd += 10; *cmd == ' '; cmd++);
+        if (!running()) wait_desktop();
+    }
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
     if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
         DWORD old = 0; HANDLE h0;

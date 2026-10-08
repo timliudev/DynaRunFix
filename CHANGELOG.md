@@ -12,6 +12,11 @@
   running DynaRun groups under the pinned icon (explicit AppUserModelID on the launcher shortcuts and in DynaRun).
 - **Start at sign-in:** second check box, on by default (`/noautostart` turns it off): a `Run` value for the
   current user starts DynaRun through the launcher. Uninstall removes it (also for other accounts).
+- **Screen after a start at sign-in / display changes:** the sign-in start (`DynaRunFix.exe /autostart`) waits
+  until the taskbar exists and the screen size and work area have been unchanged for 3 s (at most 60 s) before it
+  starts DynaRun. While DynaRun runs, a change of resolution, DPI or work area makes its maximized main window fit the
+  new work area again (once the changes stop for 0.5 s; a restored window is left alone). If DynaRun's screen
+  ever looks wrong, close DynaRun and start it again: the last page of the installer and the README say so.
 - `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
   window are a little taller; the last page says what was set up.
 
@@ -83,6 +88,10 @@
   執行中的 DynaRun 會歸在釘選的圖示下(啟動器捷徑和 DynaRun 使用相同的明確 AppUserModelID)。
 - **開機自動啟動:** 第二個勾選項,預設勾選(`/noautostart` 可關閉):在目前使用者的 `Run` 登錄值經由啟動器啟動 DynaRun。
   解除安裝時會移除(其他帳號也一併處理)。
+- **登入啟動後與顯示變更的畫面:** 登入時的自動啟動(`DynaRunFix.exe /autostart`)會等到工作列出現、螢幕大小與工作區連續 3 秒沒變
+  (最多 60 秒)才啟動 DynaRun。DynaRun 執行中如果解析度、DPI 或工作區改變,最大化的主視窗會重新貼合新的工作區
+  (變更停止 0.5 秒後執行;使用者還原過的視窗不會被動)。如果 DynaRun 的畫面顯示不正常,關掉 DynaRun 再開一次即可
+  (安裝程式最後一頁和 README 都有說明)。
 - `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07

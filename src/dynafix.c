@@ -1197,6 +1197,61 @@ static BOOL fit_pos(HWND h, WINDOWPOS *p)
     return TRUE;
 }
 
+// When the display or the work area changes (resolution, taskbar moved or resized, DPI), the form is fitted
+// again like at start-up: THBResize works from the screen size it was given then, so the form would stay at
+// the old size. Only a form that is still maximized and subclassed is touched (not one the user has restored).
+// Changes come in bursts: one timer, the fit runs once they have stopped for 500 ms. FormProc sets the
+// target into the WINDOWPOS of that one SetWindowPos (force_pos), after THBResize has had its say.
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+static HWND g_forceh;
+static RECT g_force;
+static BOOL g_forcing;
+static UINT_PTR g_disptimer;
+static LONG g_fitlog;
+
+static BOOL force_pos(HWND h, WINDOWPOS *p)
+{
+    if (!g_forcing || h != g_forceh) return FALSE;
+    p->flags = (p->flags & ~(SWP_NOMOVE | SWP_NOSIZE)) | SWP_NOCOPYBITS;
+    p->x = g_force.left; p->y = g_force.top; p->cx = g_force.right - g_force.left; p->cy = g_force.bottom - g_force.top;
+    return TRUE;
+}
+
+static BOOL CALLBACK refit_enum(HWND h, LPARAM l)
+{
+    RECT wa, mon, f = { 0, 0, 0, 0 }, cur, t; LONG st = GetWindowLongA(h, GWL_STYLE);
+    if (!GetPropA(h, P_WP) || !(st & WS_MAXIMIZE) || !(st & WS_VISIBLE) || !GetWindowRect(h, &cur)) return TRUE;
+    if (!work_area(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &wa, &mon)) return TRUE;
+    AdjustWindowRectEx(&f, st & ~WS_MAXIMIZE, FALSE, GetWindowLongA(h, GWL_EXSTYLE));
+    wa.left += f.left; wa.top += f.top; wa.right += f.right; wa.bottom += f.bottom;
+    t = wa;
+    if (g_waclip) { if (cur.right - cur.left < wa.right - wa.left) t.right = wa.left + cur.right - cur.left; }
+    else if (MulDiv(wa.bottom - wa.top, 4, 3) < wa.right - wa.left) t.right = wa.left + MulDiv(wa.bottom - wa.top, 4, 3);   // THBResize's 4:3
+    if (EqualRect(&t, &cur)) return TRUE;
+    g_forceh = h; g_force = t; g_forcing = TRUE;
+    SetWindowPos(h, NULL, t.left, t.top, t.right - t.left, t.bottom - t.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    g_forcing = FALSE;
+    if (InterlockedIncrement(&g_fitlog) <= 20) {
+        char s[40]; wsprintfA(s, "%ux%u -> %ux%u", cur.right - cur.left, cur.bottom - cur.top, t.right - t.left, t.bottom - t.top);
+        logf("form %08X fitted again after a display change %s %u\r\n", (DWORD)(UINT_PTR)h, (DWORD)(UINT_PTR)s, 0);
+    }
+    return TRUE;
+}
+
+static void CALLBACK refit_timer(HWND unused, UINT m, UINT_PTR id, DWORD t)
+{
+    KillTimer(NULL, id); g_disptimer = 0;
+    EnumThreadWindows(GetCurrentThreadId(), refit_enum, 0);
+}
+
+static void arm_refit(void)
+{
+    if (g_disptimer) KillTimer(NULL, g_disptimer);
+    g_disptimer = SetTimer(NULL, 0, 500, refit_timer);
+}
+
 static LRESULT CALLBACK FormProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     WNDPROC old = (WNDPROC)GetPropA(h, P_WP);
@@ -1216,7 +1271,7 @@ static LRESULT CALLBACK FormProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return u ? CallWindowProcW(old, h, m, w, l) : CallWindowProcA(old, h, m, w, l);
     }
     r = u ? CallWindowProcW(old, h, m, w, l) : CallWindowProcA(old, h, m, w, l);
-    if (m == WM_WINDOWPOSCHANGING && fit_pos(h, (WINDOWPOS *)l)) {
+    if (m == WM_WINDOWPOSCHANGING && (force_pos(h, (WINDOWPOS *)l) || fit_pos(h, (WINDOWPOS *)l))) {
         g_repform = h;
         if (g_reptimer) KillTimer(NULL, g_reptimer);
         g_reptimer = SetTimer(NULL, 0, 500, repaint_form);
@@ -1264,6 +1319,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
         if (c->message == WM_SIZE) { note_size(c->hwnd, c->wParam, c->lParam); if (c->wParam == SIZE_MAXIMIZED && is_main_form(c->hwnd, TRUE)) arm_dump(c->hwnd); }
         else if (c->message == WM_GETMINMAXINFO) { if (is_main_form(c->hwnd, FALSE)) fit_minmax(c->hwnd, (MINMAXINFO *)c->lParam); }
         else if (c->message == WM_WINDOWPOSCHANGING) { if (is_main_form(c->hwnd, FALSE)) subclass_form(c->hwnd); }
+        else if (c->message == WM_DISPLAYCHANGE || c->message == WM_DPICHANGED || (c->message == WM_SETTINGCHANGE && c->wParam == SPI_SETWORKAREA)) { if (is_main_form(c->hwnd, FALSE)) arm_refit(); }
         else if (c->message == WM_ACTIVATE && LOWORD(c->wParam) != WA_INACTIVE) sweep_fonts(c->hwnd);
         else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_SWEPT); }
     }

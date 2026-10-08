@@ -1025,7 +1025,7 @@ static void user_stage(void)
     }
     RegCloseKey(b);
     if (!RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
-        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\""));
+        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         else RegDeleteValueW(s, L"DynaRunFix");
         RegCloseKey(s);
     }

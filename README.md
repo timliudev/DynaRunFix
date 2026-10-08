@@ -120,7 +120,7 @@ Two options on the first page of the wizard, both on by default (`/quiet` applie
   and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*).
   A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID).
 - **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-  starts the launcher at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
+  starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
   (and the policy values, and the pins of the launcher, which point back at `DynaRun V3.exe`).
 
 DynaRun must be closed while the fix is installed or updated: a running DynaRun keeps the old
@@ -301,6 +301,14 @@ window; `DYNAFIX_WORKAREA=clip` only keeps the window inside the work area witho
 Status: verified on Windows 11 (1920x1080, taskbar at the bottom) and on a Windows 11 PC at 2560x1600 / 125 %,
 both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups not tested yet.
 
+### DynaRun's screen looks wrong
+
+If DynaRun's screen ever looks wrong (for example after it started by itself at sign-in, while Windows was still
+setting up the desktop), close DynaRun and start it again. The start at sign-in waits until the taskbar is there and
+the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`),
+and while DynaRun runs, a change of resolution, DPI or taskbar makes its main window fit the new work area again
+(`fitted again after a display change` in the log). If a window you restored by hand is moved, it is left alone.
+
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
 Files stored in OneDrive and marked *Always keep on this device* carry the attribute `0x80000`
@@ -435,7 +443,7 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
   設定 `StartLayoutFile`／`LockedStartLayout`）：登出再登入後圖示才會出現。組織已經設定配置檔時不會去動它，
   最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。
   執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。
-- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器。
+- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
   取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值（以及原則值；釘選的啟動器捷徑改回指向 `DynaRun V3.exe`）。
 
 安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。
@@ -552,6 +560,13 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 *Win11,2560x1600、125%。*
 
 狀態:已在 Win11(1920x1080、工作列在底部)及 Win11 2560x1600 / 125% 的電腦上驗證,兩者都經 Locale Emulator。XP、工作列自動隱藏、多螢幕尚未測試。
+
+### DynaRun 的畫面顯示不正常
+
+如果 DynaRun 的畫面顯示不正常（例如開機登入後自動啟動、Windows 還在準備桌面時就開了），關掉 DynaRun 再開一次即可。
+登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；`%TEMP%\dynafix.log` 會有
+`launcher: autostart waited ...`）；DynaRun 執行中如果解析度、DPI 或工作列改變，主視窗會重新貼合新的工作區
+（log 會有 `fitted again after a display change`）。你自己還原並移動過的視窗不會被動。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
