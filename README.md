@@ -106,8 +106,22 @@ shortcuts that still start the fix are pointed back at `DynaRun V3.exe`. It asks
 DynaRun V3 too (*Remove all* then runs Dyna Pro's own uninstaller of DynaRun V3). The machine-wide
 ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
 and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
-`/uninstall`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit code 1 if
-it is not found).
+`/uninstall`, `/notaskbar`, `/noautostart`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit
+code 1 if it is not found).
+
+Two options on the first page of the wizard, both on by default (`/quiet` applies both unless switched off with
+`/notaskbar` / `/noautostart`):
+- **Pin DynaRun to the taskbar.** Windows 7 to 10 pin the launcher shortcut directly; Windows XP / Vista add it to
+  Quick Launch. Windows 11 lets no program pin itself, so the installer uses Microsoft's
+  [taskbar layout policy](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps) for the user
+  (`TaskbarLayout.xml` in the install folder; `StartLayoutFile` / `LockedStartLayout` under
+  `HKEY_USERS\<user>\Software\Policies\Microsoft\Windows\Explorer`, set by the administrator step): the icon
+  appears after the next sign-out / sign-in. If an organization has already set a layout file it is left alone,
+  and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*).
+  A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID).
+- **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+  starts the launcher at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
+  (and the policy values, and the pins of the launcher, which point back at `DynaRun V3.exe`).
 
 DynaRun must be closed while the fix is installed or updated: a running DynaRun keeps the old
 `dynafix.dll` (and Locale Emulator's dlls) loaded. The installer checks for a running `DynaRun V3.exe`
@@ -412,7 +426,17 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
 解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
-不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
+不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`、`/notaskbar`、`/noautostart`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
+
+精靈第一頁有兩個選項，預設都勾選（`/quiet` 也預設套用，可用 `/notaskbar`、`/noautostart` 關閉）：
+- **釘選到工作列。** Windows 7 到 10 直接釘選啟動器捷徑；Windows XP / Vista 放進「快速啟動」。Windows 11 不允許程式自行釘選，
+  所以安裝程式改用微軟的[工作列配置原則](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps)
+  （安裝資料夾裡的 `TaskbarLayout.xml`；系統管理員那一步會在 `HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer`
+  設定 `StartLayoutFile`／`LockedStartLayout`）：登出再登入後圖示才會出現。組織已經設定配置檔時不會去動它，
+  最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。
+  執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。
+- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器。
+  取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值（以及原則值；釘選的啟動器捷徑改回指向 `DynaRun V3.exe`）。
 
 安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。
 安裝程式在改動任何東西之前，會先檢查是否有執行中的 `DynaRun V3.exe`（以及從安裝資料夾執行的 `DynaRunFix.exe`／`LEProc.exe`）。
