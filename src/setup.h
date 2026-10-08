@@ -2,6 +2,8 @@
 #include <windows.h>
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
+extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
+extern int g_pinresult;                                 // after the install: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
@@ -13,6 +15,7 @@ void release(void *p);
 BOOL exists(const WCHAR *p);
 int msg(const WCHAR *text, UINT flags);
 BOOL is_admin(void);
+DWORD os_build(void);                       // Windows build number (real, not the compatibility-shimmed one)
 BOOL user_sid(WCHAR *out, int cch);
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled

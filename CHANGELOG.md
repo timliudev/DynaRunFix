@@ -2,6 +2,19 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## Unreleased
+
+- **Taskbar:** the installer pins DynaRun to the taskbar (check box on the first page, on by default;
+  `/notaskbar` turns it off). Windows 7 to 10 pin the launcher shortcut directly, Windows XP / Vista put it
+  in Quick Launch, and Windows 11, which lets no program pin itself, gets it through Microsoft's taskbar layout
+  policy (needs the administrator prompt the installer shows anyway; the icon appears after the next sign-in; an
+  existing layout policy of an organization is left alone and the last page tells how to pin by hand). The
+  running DynaRun groups under the pinned icon (explicit AppUserModelID on the launcher shortcuts and in DynaRun).
+- **Start at sign-in:** second check box, on by default (`/noautostart` turns it off): a `Run` value for the
+  current user starts DynaRun through the launcher. Uninstall removes it (also for other accounts).
+- `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
+  window are a little taller; the last page says what was set up.
+
 ## v1.2.3 — 2026-10-07
 
 - **Removed `tools/msi-novbs`:** DynaRunFix no longer ships anything that changes Dyna Pro's setup. If Windows
@@ -61,6 +74,16 @@
 ---
 
 ## 更新紀錄
+
+### 未發布
+
+- **工作列:** 安裝程式會把 DynaRun 釘選到工作列(第一頁的勾選項,預設勾選;`/notaskbar` 可關閉)。Windows 7 到 10 直接釘選
+  啟動器捷徑,Windows XP / Vista 放進「快速啟動」,Windows 11 不允許程式自行釘選,改用微軟的工作列配置原則
+  (使用安裝程式本來就會出現的系統管理員確認;登出再登入後才會出現圖示;組織已設定配置原則時不會動它,最後一頁會說明如何手動釘選)。
+  執行中的 DynaRun 會歸在釘選的圖示下(啟動器捷徑和 DynaRun 使用相同的明確 AppUserModelID)。
+- **開機自動啟動:** 第二個勾選項,預設勾選(`/noautostart` 可關閉):在目前使用者的 `Run` 登錄值經由啟動器啟動 DynaRun。
+  解除安裝時會移除(其他帳號也一併處理)。
+- `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07
 
