@@ -313,9 +313,7 @@ both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups no
 
 If DynaRun's screen ever looks wrong (for example after it started by itself at sign-in, while Windows was still
 setting up the desktop), close DynaRun and start it again. The start at sign-in waits until the taskbar is there and
-the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`),
-and while DynaRun runs, a change of resolution, DPI or taskbar makes its main window fit the new work area again
-(`fitted again after a display change` in the log). If a window you restored by hand is moved, it is left alone.
+the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`).
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
@@ -578,8 +576,7 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 
 如果 DynaRun 的畫面顯示不正常（例如開機登入後自動啟動、Windows 還在準備桌面時就開了），關掉 DynaRun 再開一次即可。
 登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；`%TEMP%\dynafix.log` 會有
-`launcher: autostart waited ...`）；DynaRun 執行中如果解析度、DPI 或工作列改變，主視窗會重新貼合新的工作區
-（log 會有 `fitted again after a display change`）。你自己還原並移動過的視窗不會被動。
+`launcher: autostart waited ...`））。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
