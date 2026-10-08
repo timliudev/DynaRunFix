@@ -229,6 +229,7 @@ static void set_page(int p)
             : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
                 L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
         if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
+        lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
         text(ID_BODY, b);
         buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
         if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
@@ -467,7 +468,7 @@ static void on_primary(void)
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
-        ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, NULL, SW_SHOWNORMAL);
+        start_dynarun();
         DestroyWindow(g_hwnd);
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;
@@ -732,7 +733,7 @@ int wizard(void)
     RegisterClassW(&wc);
     r.left = r.top = 0; r.right = S(620); r.bottom = S(528);                                  // the first page: text, disclaimer, the two options and a one-line note
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_VERSION));
+    wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_DISPLAY));
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                              (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2, (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);

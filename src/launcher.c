@@ -2,6 +2,7 @@
 // Usage: DynaRunFix.exe ["path\to\DynaRun V3.exe"]
 #include <windows.h>
 #include <tlhelp32.h>
+#include "version.h"
 
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
 #define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
@@ -37,14 +38,55 @@ static BOOL is_dynarun(DWORD pid)
 // one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
 static void llog(const char *fmt, DWORD a, DWORD b)
 {
-    char path[MAX_PATH], line[200]; DWORD n; HANDLE h;
+    char path[MAX_PATH], line[1100]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
     lstrcatA(path, "\\dynafix.log");
-    wsprintfA(line, fmt, a, b);
+    GetLocalTime(&t);
+    n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    wsprintfA(line + n, fmt, a, b);
     h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     WriteFile(h, line, lstrlenA(line), &n, NULL);
     CloseHandle(h);
+}
+
+// above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (dynafix.dll does the same; whichever runs first)
+static void trim_log(void)
+{
+    HANDLE h; char path[MAX_PATH]; DWORD size, n, i; char *buf;
+    if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
+    lstrcatA(path, "\\dynafix.log");
+    h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    size = GetFileSize(h, NULL);
+    if (size != INVALID_FILE_SIZE && size > 10485760 && (buf = (char *)HeapAlloc(GetProcessHeap(), 0, 8388608))) {
+        SetFilePointer(h, size - 8388608, NULL, FILE_BEGIN);
+        if (ReadFile(h, buf, 8388608, &n, NULL)) {
+            for (i = 0; i < n && buf[i] != '\n'; i++);
+            if (i < n) { i++; SetFilePointer(h, 0, NULL, FILE_BEGIN); WriteFile(h, buf + i, n - i, &n, NULL); SetEndOfFile(h); }
+        }
+        HeapFree(GetProcessHeap(), 0, buf);
+    }
+    CloseHandle(h);
+}
+
+// the log line for this start: how we were called and by whom
+static void log_start(const char *cmd)
+{
+    PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD me = GetCurrentProcessId(), pp = 0;
+    char parent[64], args[160], cwd[160], msg[700]; STARTUPINFOA st;
+    const char *how = "a plain start";
+    lstrcpyA(parent, "?"); pe.dwSize = sizeof(pe);
+    if (Process32First(s, &pe)) do { if (pe.th32ProcessID == me) pp = pe.th32ParentProcessID; } while (!pp && Process32Next(s, &pe));
+    if (pp && Process32First(s, &pe)) do { if (pe.th32ProcessID == pp) lstrcpynA(parent, pe.szExeFile, sizeof(parent)); } while (lstrcmpA(parent, "?") == 0 && Process32Next(s, &pe));
+    CloseHandle(s);
+    if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL && (!cmd[10] || cmd[10] == ' ')) how = "/autostart";
+    else if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL && (!cmd[8] || cmd[8] == ' ')) how = "/restart";
+    lstrcpynA(args, cmd, sizeof(args));
+    { volatile char *z = (volatile char *)&st; int i; for (i = 0; i < (int)sizeof(st); i++) z[i] = 0; } st.cb = sizeof(st); GetStartupInfoA(&st);
+    if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) lstrcpyA(cwd, "?");
+    wsprintfA(msg, "launcher: started pid=%u, DynaRunFix %s (%s), %s, args [%s], parent %s (pid %u), startup flags %08X show %u, cwd [%s]\r\n", me, DRF_DISPLAY, DRF_COMMIT, how, args, parent, pp, st.dwFlags, st.wShowWindow, cwd);
+    llog("%s", (DWORD)(UINT_PTR)msg, 0);
 }
 
 static void fail(const char *msg) { MessageBoxA(NULL, msg, "DynaRunFix", MB_ICONERROR); ExitProcess(1); }
@@ -215,6 +257,23 @@ static BOOL prefix(char **cmd, const char *name)
     return TRUE;
 }
 
+// Waits until Shell_TrayWnd exists and the screen size and work area have not changed for 3 s (polled every 250 ms);
+// starts anyway after 60 s.
+static void wait_desktop(void)
+{
+    DWORD t0 = GetTickCount(), still = t0, tk; int sx = 0, sy = 0, x, y; RECT wa, w0 = { 0, 0, 0, 0 };
+    for (;;) {
+        tk = GetTickCount();
+        wa.left = wa.top = wa.right = wa.bottom = 0;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
+        x = GetSystemMetrics(SM_CXSCREEN); y = GetSystemMetrics(SM_CYSCREEN);
+        if (x != sx || y != sy || !EqualRect(&wa, &w0)) { sx = x; sy = y; w0 = wa; still = tk; }
+        if ((FindWindowA("Shell_TrayWnd", NULL) && tk - still >= 3000) || tk - t0 >= 60000) break;
+        Sleep(250);
+    }
+    llog("launcher: autostart waited %u ms for the desktop (%u = gave up)\r\n", tk - t0, tk - t0 >= 60000);
+}
+
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
@@ -226,7 +285,15 @@ void WinMainCRTStartup(void)
     cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
+    trim_log();
+    log_start(cmd);
     ask = !prefix(&cmd, "/noupdate");   // "/noupdate" (from the setup's /update): it has just asked
+    // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
+    // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
+    if (!lstrcmpiA(cmd, "/autostart") || (cmd[0] == '/' && cmd[10] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL)) {
+        for (cmd += 10; *cmd == ' '; cmd++);
+        if (!running()) wait_desktop();
+    }
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
     if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
         DWORD old = 0; HANDLE h0;

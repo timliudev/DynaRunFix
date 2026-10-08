@@ -40,7 +40,7 @@ Full analysis, message traces and the tools used: [docs/ROOT_CAUSE.md](docs/ROOT
 process only, it redirects THBRes25.dll's import of `PostMessageA` and drops the `0x591` message when it
 was triggered by a `WM_SIZE` that is identical to the previous one for the same form. That restores the
 Windows 7 behaviour; genuine size changes still go through. No file is changed; the dll only writes a
-small log, `%TEMP%\dynafix.log` (and, on the very first start, DynaRun's own language and feature settings,
+small log, `%TEMP%\dynafix.log` (every line starts with the date and time; the file is kept below 10 MB, the oldest lines are dropped first; and, on the very first start, DynaRun's own language and feature settings,
 see below). The same dll also fixes the [first-time setup](#first-time-setup) and
 [OneDrive files that will not open](#some-dpr-files-will-not-open-empty-file-run-properties-no-curves).
 
@@ -120,7 +120,7 @@ Two options on the first page of the wizard, both on by default (`/quiet` applie
   and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*).
   A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID).
 - **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-  starts the launcher at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
+  starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
   (and the policy values, and the pins of the launcher, which point back at `DynaRun V3.exe`).
 
 **Updates.** Once a day, when DynaRun is started, the installed setup asks GitHub's API for the latest release
@@ -169,7 +169,7 @@ After a forced restart the language is English (the helper overwrites it) and th
 (the helper writes their enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
 it waits for the helper, puts the chosen language back, switches on the picked features with the same values
 *Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
-`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log`.
+`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (every line starts with the date and time, the file is kept below 10 MB, the oldest lines are dropped first).
 
 | Language | System selection (climate monitor and AFR analyser picked) | After the automatic restart |
 |---|---|---|
@@ -309,6 +309,12 @@ window; `DYNAFIX_WORKAREA=clip` only keeps the window inside the work area witho
 Status: verified on Windows 11 (1920x1080, taskbar at the bottom) and on a Windows 11 PC at 2560x1600 / 125 %,
 both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups not tested yet.
 
+### DynaRun's screen looks wrong
+
+If DynaRun's screen ever looks wrong (for example after it started by itself at sign-in, while Windows was still
+setting up the desktop), close DynaRun and start it again. The start at sign-in waits until the taskbar is there and
+the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`).
+
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
 Files stored in OneDrive and marked *Always keep on this device* carry the attribute `0x80000`
@@ -388,7 +394,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 修正方式
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
-不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
+不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
 v1.2.3:
@@ -443,7 +449,7 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
   設定 `StartLayoutFile`／`LockedStartLayout`）：登出再登入後圖示才會出現。組織已經設定配置檔時不會去動它，
   最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。
   執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。
-- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器。
+- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
   取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值（以及原則值；釘選的啟動器捷徑改回指向 `DynaRun V3.exe`）。
 
 **更新。** 每天一次，開啟 DynaRun 時，安裝好的安裝程式會向 GitHub API 查詢本專案的最新版本（不會送出其他資料；啟動器最多等 5 秒）。
@@ -475,7 +481,7 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest、`LICENS
 沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:選擇視窗不消失、CPU 一核 100%,因為 DynaRun 啟動設定程式後進入無限迴圈。
 強制重新啟動後語言變成英文(被設定程式蓋掉),選購功能也是關閉的(設定程式把啟用旗標寫成 `0`)。
 `dynafix.dll` 只在記憶體中包裝 DynaRun 的 `ShellExecuteA`:等設定程式結束、寫回選的語言、以和「工程模式 → 系統組態設定 → 存檔並離開」相同的值啟用勾選的功能,
-再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`。
+再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`(每行有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉)。
 
 | 語言 | 系統選擇(勾選大氣監測、空燃比分析儀) | 自動重新啟動後 |
 |---|---|---|
@@ -565,6 +571,12 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 *Win11,2560x1600、125%。*
 
 狀態:已在 Win11(1920x1080、工作列在底部)及 Win11 2560x1600 / 125% 的電腦上驗證,兩者都經 Locale Emulator。XP、工作列自動隱藏、多螢幕尚未測試。
+
+### DynaRun 的畫面顯示不正常
+
+如果 DynaRun 的畫面顯示不正常（例如開機登入後自動啟動、Windows 還在準備桌面時就開了），關掉 DynaRun 再開一次即可。
+登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；`%TEMP%\dynafix.log` 會有
+`launcher: autostart waited ...`））。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。

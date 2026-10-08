@@ -807,6 +807,22 @@ static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to p
     return TRUE;
 }
 
+// The wizard's "Start DynaRun": started the way a double click on the shortcut does it (the shortcut gives the
+// process the AppUserModelID that groups it with the pinned icon, its working folder and show command), not by
+// running the launcher directly. Falls back to the launcher with DynaRun's folder as working directory.
+void start_dynarun(void)
+{
+    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
+    static WCHAR lnk[MAX_PATH], dir[MAX_PATH], d[MAX_PATH];
+    int i; WCHAR *q; BOOL have = FALSE;
+    for (i = 0; i < 4 && !have; i++)
+        have = SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, lnk);
+    if (!have && exists(cat3(lnk, g_dir, L"\\DynaRun V3.lnk", NULL))) have = TRUE;
+    if (have) { ShellExecuteW(g_hwnd, NULL, lnk, NULL, NULL, SW_SHOWNORMAL); return; }
+    lstrcpyW(dir, g_exe); q = dir + lstrlenW(dir); while (q > dir && *q != '\\') q--; *q = 0;
+    ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, dir[0] ? dir : NULL, SW_SHOWNORMAL);
+}
+
 static BOOL enable_privilege(const WCHAR *name)
 {
     HANDLE t; TOKEN_PRIVILEGES tp; BOOL r = FALSE;
@@ -920,7 +936,7 @@ static int machine_install(const WCHAR *sid)
 
     if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, UNINSTKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
         set_str(k, L"DisplayName", L"DynaRunFix");
-        set_str(k, L"DisplayVersion", WIDEN(DRF_VERSION));
+        set_str(k, L"DisplayVersion", WIDEN(DRF_DISPLAY));
         set_str(k, L"Publisher", L"DynaRunFix (github.com/timliudev/DynaRunFix)");
         set_str(k, L"URLInfoAbout", L"https://github.com/timliudev/DynaRunFix");
         set_str(k, L"InstallLocation", g_dir);
@@ -1032,7 +1048,7 @@ static void user_stage(void)
     }
     RegCloseKey(b);
     if (!g_keep && !RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
-        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\""));
+        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         else RegDeleteValueW(s, L"DynaRunFix");
         RegCloseKey(s);
     }

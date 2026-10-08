@@ -1,7 +1,7 @@
 @echo off
 rem Builds DynaRunFix (x86, no CRT dependency, runs on Windows XP .. Windows 11).
 rem Requires Visual Studio (any edition with the "Desktop development with C++" workload).
-rem DRF_VERSION (e.g. 1.1.0) sets the version shown in "Programs and Features"; default "dev".
+rem DRF_VERSION (e.g. 1.1.0) sets the version shown in "Programs and Features"; default "dev" (shown as the commit hash).
 setlocal
 set VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
 if not exist "%VSWHERE%" (echo vswhere.exe not found - install Visual Studio & exit /b 1)
@@ -11,8 +11,20 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul || exit /b 1
 
 cd /d "%~dp0"
 if not exist build mkdir build
+rem DRF_COMMIT = short git hash, "-dirty" if the work tree has changes, "unknown" without git.
+rem DRF_DISPLAY = what is shown (wizard title, Programs and Features, dynafix.log): DRF_VERSION, or DRF_COMMIT for a dev build.
+rem DRF_VERSION stays "dev" in a dev build: the update check treats that as "not a release" and never updates.
+set DRF_COMMIT=unknown
+set DRF_DIRTY=
+for /f "delims=" %%i in ('git rev-parse --short HEAD 2^>nul') do set DRF_COMMIT=%%i
+if not "%DRF_COMMIT%"=="unknown" for /f "delims=" %%i in ('git status --porcelain 2^>nul') do set DRF_DIRTY=1
+if defined DRF_DIRTY set DRF_COMMIT=%DRF_COMMIT%-dirty
+set DRF_DISPLAY=%DRF_VERSION%
 if not defined DRF_VERSION set DRF_VERSION=dev
+if not defined DRF_DISPLAY set DRF_DISPLAY=%DRF_COMMIT%
 > build\version.h echo #define DRF_VERSION "%DRF_VERSION%"
+>> build\version.h echo #define DRF_COMMIT "%DRF_COMMIT%"
+>> build\version.h echo #define DRF_DISPLAY "%DRF_DISPLAY%"
 set CFLAGS=/nologo /O1 /GS- /W3 /utf-8 /Ibuild /Fobuild\
 set LFLAGS=/nologo /NODEFAULTLIB
 

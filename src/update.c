@@ -65,7 +65,7 @@ static void uplog(const char *fmt, const char *a, int b)
     if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
     lstrcatA(path, "\\dynafix.log");
     GetLocalTime(&t);
-    n = wsprintfA(line, "%02d:%02d:%02d.%03d update (v" DRF_VERSION "): ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    n = wsprintfA(line, "%04d-%02d-%02d %02d:%02d:%02d.%03d update (v" DRF_DISPLAY "): ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     wsprintfA(line + n, fmt, a, b); lstrcatA(line, "\r\n");
     h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
