@@ -39,6 +39,8 @@
 #define P_L     "dynafix.l"
 #define P_DUP   "dynafix.dup"
 #define P_ALT   "dynafix.alt"   // dynafix changed this form's size: the WM_SIZE that follows is not a duplicate
+#define P_ALTT  "dynafix.altt"  // tick count (| 1) of the last relayout allowed after our own resize
+#define P_ALTR  "dynafix.altr"  // a refused allowance was logged for this form
 #define LANG_KEY "Software\\DynaPro\\Operation_Data"
 
 // FILE_ATTRIBUTE_RECALL_ON_OPEN | PINNED | UNPINNED | RECALL_ON_DATA_ACCESS
@@ -1076,8 +1078,16 @@ static void note_size(HWND h, WPARAM w, LPARAM l)
     dup = GetPropA(h, P_W) == (HANDLE)(w + 1) && GetPropA(h, P_L) == (HANDLE)l;
     if (GetPropA(h, P_ALT)) {   // our own clip / refit made this size: THBResize has to lay the controls out for it
         RemovePropA(h, P_ALT);
-        if (dup) logf("relayout allowed after dynafix changed the size of form %08X %u %u\r\n", (DWORD)(UINT_PTR)h, 0, 0);
-        dup = FALSE;
+        if (dup) {   // at most once per form within 5 s, or a form that asks for its old size again loops (clip, relayout, ask, ...)
+            DWORD now = GetTickCount(), last = (DWORD)(UINT_PTR)GetPropA(h, P_ALTT);
+            if (last && now - (last & ~1u) < 5000) {
+                if (!GetPropA(h, P_ALTR)) { SetPropA(h, P_ALTR, (HANDLE)1); logf("relayout after dynafix changed the size of form %08X refused: allowed %u ms ago %u\r\n", (DWORD)(UINT_PTR)h, now - (last & ~1u), 0); }
+            } else {
+                SetPropA(h, P_ALTT, (HANDLE)(UINT_PTR)(now | 1)); RemovePropA(h, P_ALTR);
+                logf("relayout allowed after dynafix changed the size of form %08X %u %u\r\n", (DWORD)(UINT_PTR)h, 0, 0);
+                dup = FALSE;
+            }
+        } else dup = FALSE;
     }
     SetPropA(h, P_W, (HANDLE)(w + 1));
     SetPropA(h, P_L, (HANDLE)l);
@@ -1368,6 +1378,66 @@ static void subclass_form(HWND h)
     PostMessageA(h, g_refit, 0, 0);
 }
 
+// ---- diagnosis: why does a main form ask for a non-maximized size? ----
+// For the main form, in the first 15 s of the process: the size, show, activation and system commands it gets,
+// and the state of the screen and the foreground window when it asks for a 4:3 size.
+static DWORD g_t0;
+static LONG g_askn;
+
+static void log_ask(HWND h, const WINDOWPOS *p)
+{
+    char img[MAX_PATH], *b, det[160]; HWND fg = GetForegroundWindow(); DWORD pid = 0; HANDLE ph; RECT wa;
+    lstrcpyA(img, "?");
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    if (pid && (ph = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid))) {
+        typedef BOOL (WINAPI *QFPIN_t)(HANDLE, DWORD, LPSTR, PDWORD);
+        typedef DWORD (WINAPI *GMFNE_t)(HANDLE, HMODULE, LPSTR, DWORD);
+        QFPIN_t q = (QFPIN_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "QueryFullProcessImageNameA");
+        DWORD n = MAX_PATH; HMODULE ps;
+        if (!(q && q(ph, 0, img, &n))) {
+            GMFNE_t g = (ps = LoadLibraryA("psapi.dll")) ? (GMFNE_t)GetProcAddress(ps, "GetModuleFileNameExA") : NULL;
+            if (!(g && g(ph, NULL, img, MAX_PATH))) lstrcpyA(img, "?");
+        }
+        CloseHandle(ph);
+    }
+    for (b = img; *b; b++) ; while (b > img && b[-1] != '\\') b--;
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) SetRect(&wa, 0, 0, 0, 0);
+    wsprintfA(det, "screen %dx%d maximized-height %d work area %d,%d-%d,%d", GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+              GetSystemMetrics(SM_CYMAXIMIZED), wa.left, wa.top, wa.right, wa.bottom);
+    logf("form %08X asks for %u x %u\r\n", (DWORD)(UINT_PTR)h, p->cx, p->cy);
+    logf("form %08X ask context: %s %u\r\n", (DWORD)(UINT_PTR)h, (DWORD)(UINT_PTR)det, 0);
+    logf("form %08X ask foreground: %s pid %u\r\n", (DWORD)(UINT_PTR)h, (DWORD)(UINT_PTR)b, pid);
+}
+
+static void diag_form(const CWPSTRUCT *c)
+{
+    UINT m = c->message; char t[100];
+    if (!g_t0 || GetTickCount() - g_t0 > 15000) return;
+    switch (m) {
+    case WM_SIZE: case WM_WINDOWPOSCHANGING: case WM_SYSCOMMAND: case WM_SHOWWINDOW: case WM_ACTIVATEAPP: case WM_ACTIVATE: break;
+    default: return;
+    }
+    if (!is_main_form(c->hwnd, TRUE)) return;
+    if (m == WM_SIZE) {
+        wsprintfA(t, "%s %u x %u", c->wParam == SIZE_MAXIMIZED ? "MAXIMIZED" : c->wParam == SIZE_MINIMIZED ? "MINIMIZED" : c->wParam == SIZE_RESTORED ? "RESTORED" : "other", LOWORD(c->lParam), HIWORD(c->lParam));
+        logf("form %08X WM_SIZE %s\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)(UINT_PTR)t, 0);
+    } else if (m == WM_WINDOWPOSCHANGING) {
+        const WINDOWPOS *p = (const WINDOWPOS *)c->lParam;
+        wsprintfA(t, "%d,%d %ux%u flags %04X zoomed %u", p->x, p->y, p->cx, p->cy, p->flags, IsZoomed(c->hwnd) ? 1 : 0);
+        logf("form %08X WM_WINDOWPOSCHANGING %s\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)(UINT_PTR)t, 0);
+        if (!(p->flags & SWP_NOSIZE) && p->cy >= 500 && p->cx * 3 >= p->cy * 4 - p->cy / 25 && p->cx * 3 <= p->cy * 4 + p->cy / 25 && InterlockedIncrement(&g_askn) <= 6)
+            log_ask(c->hwnd, p);
+    } else if (m == WM_SYSCOMMAND) {
+        logf("form %08X WM_SYSCOMMAND %s (%04X)\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)(UINT_PTR)((c->wParam & 0xFFF0) == SC_RESTORE ? "SC_RESTORE" : (c->wParam & 0xFFF0) == SC_MAXIMIZE ? "SC_MAXIMIZE" : (c->wParam & 0xFFF0) == SC_MINIMIZE ? "SC_MINIMIZE" : "other"), (DWORD)c->wParam);
+    } else if (m == WM_SHOWWINDOW) {
+        logf("form %08X WM_SHOWWINDOW show %u status %u\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)c->wParam, (DWORD)c->lParam);
+    } else if (m == WM_ACTIVATEAPP) {
+        logf("form %08X WM_ACTIVATEAPP %s\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)(UINT_PTR)(c->wParam ? "activated" : "deactivated"), 0);
+    } else {
+        logf("form %08X WM_ACTIVATE %s%s\r\n", (DWORD)(UINT_PTR)c->hwnd, (DWORD)(UINT_PTR)(LOWORD(c->wParam) == WA_INACTIVE ? "inactive" : LOWORD(c->wParam) == WA_ACTIVE ? "active" : "click-active"), (DWORD)(UINT_PTR)(HIWORD(c->wParam) ? " (minimized)" : ""));
+    }
+}
+
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -1376,7 +1446,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             // Keep ourselves loaded and hooked after the launcher exits.
             char self[MAX_PATH], ev[64];
             HANDLE e;
-            g_pinned = TRUE;
+            g_pinned = TRUE; g_t0 = GetTickCount() | 1;
             GetModuleFileNameA(g_self, self, MAX_PATH);
             LoadLibraryA(self);
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
@@ -1388,6 +1458,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
             if (e) SetEvent(e);   // handle stays open: a later launcher sees the fix is already active
         }
+        diag_form(c);
         if (!g_patched) patch_thbresize();
         if (!g_fsopatched) patch_attr();
         // once MSVBVM60 is there, then whenever a window is made (a new form may have loaded new controls)
@@ -1397,7 +1468,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
         else if (c->message == WM_WINDOWPOSCHANGING) { if (is_main_form(c->hwnd, FALSE)) subclass_form(c->hwnd); }
         else if (c->message == WM_DISPLAYCHANGE || c->message == WM_DPICHANGED || (c->message == WM_SETTINGCHANGE && c->wParam == SPI_SETWORKAREA)) { if (is_main_form(c->hwnd, FALSE)) arm_refit(); }
         else if (c->message == WM_ACTIVATE && LOWORD(c->wParam) != WA_INACTIVE) sweep_fonts(c->hwnd);
-        else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_ALT); RemovePropA(c->hwnd, P_SWEPT); }
+        else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_ALT); RemovePropA(c->hwnd, P_ALTT); RemovePropA(c->hwnd, P_ALTR); RemovePropA(c->hwnd, P_SWEPT); }
     }
     return CallNextHookEx(NULL, code, w, l);
 }
