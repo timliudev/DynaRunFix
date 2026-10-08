@@ -38,10 +38,12 @@ static BOOL is_dynarun(DWORD pid)
 // one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
 static void llog(const char *fmt, DWORD a, DWORD b)
 {
-    char path[MAX_PATH], line[512]; DWORD n; HANDLE h;
+    char path[MAX_PATH], line[1100]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
     lstrcatA(path, "\\dynafix.log");
-    wsprintfA(line, fmt, a, b);
+    GetLocalTime(&t);
+    n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    wsprintfA(line + n, fmt, a, b);
     h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     WriteFile(h, line, lstrlenA(line), &n, NULL);

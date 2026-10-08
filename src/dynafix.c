@@ -54,7 +54,6 @@ static BOOL g_pinned, g_patched, g_vbpatched, g_fsopatched, g_fontpatched;
 static LONG g_skipped, g_masked;
 static PostMessageA_t g_realPost;
 static char g_logpath[MAX_PATH];
-static BOOL g_logdate;   // the next log line also gets the date
 
 // above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (the launcher does the same; whichever runs first)
 static void trim_log(void)
@@ -79,8 +78,7 @@ static void logf(const char *fmt, DWORD a, DWORD b, DWORD c)
     char line[256]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!g_logpath[0]) return;
     GetLocalTime(&t);
-    n = g_logdate ? wsprintfA(line, "%04u-%02u-%02u ", t.wYear, t.wMonth, t.wDay) : 0; g_logdate = FALSE;
-    n += wsprintfA(line + n, "%02u:%02u:%02u.%03u ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     wsprintfA(line + n, fmt, a, b, c);
     h = CreateFileA(g_logpath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -1026,10 +1024,13 @@ static void set_ui_font(HWND h, HFONT f, LPARAM redraw)
     g_settingfont = FALSE;
 }
 
+static void recheck_vb_screen(UINT msg);
+
 static LRESULT CALLBACK RetProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
         CWPRETSTRUCT *c = (CWPRETSTRUCT *)l;
+        if (c->message == WM_SETTINGCHANGE || c->message == WM_DISPLAYCHANGE || c->message == WM_SYSCOLORCHANGE) recheck_vb_screen(c->message);
         if (c->message == WM_SETFONT && c->wParam && !g_fontoff) set_ui_font(c->hwnd, (HFONT)c->wParam, c->lParam);
     }
     return CallNextHookEx(NULL, code, w, l);
@@ -1177,6 +1178,8 @@ static BOOL work_area(HMONITOR m, RECT *wa, RECT *mon)
 // size. The globals are found from that start-up code (push 0 / call / push 1 / mov [cx],eax / call /
 // push 20h / mov [cy],eax), checked against the real screen size and set to the primary monitor's work area,
 // so DynaRun lays out everything as on a monitor of that size.
+static int *g_vbx, *g_vby;   // the two globals, once found
+
 static void patch_vb_screen(void)
 {
     BYTE *base = (BYTE *)GetModuleHandleA("MSVBVM60.DLL");
@@ -1206,6 +1209,7 @@ static void patch_vb_screen(void)
             }
             VirtualProtect(px, sizeof(int), PAGE_READWRITE, &old); *px = wa.right - wa.left; VirtualProtect(px, sizeof(int), old, &old);
             VirtualProtect(py, sizeof(int), PAGE_READWRITE, &old); *py = wa.bottom - wa.top; VirtualProtect(py, sizeof(int), old, &old);
+            g_vbx = px; g_vby = py;
             {
                 char t[40]; wsprintfA(t, "%ux%u -> %ux%u", scx, scy, *px, *py);
                 logf("VB's screen size %s (work area), globals at %08X %u\r\n", (DWORD)(UINT_PTR)t, (DWORD)(UINT_PTR)px, 0);
@@ -1214,6 +1218,25 @@ static void patch_vb_screen(void)
         }
     }
     logf("VB's screen size not found in MSVBVM60.DLL %u %u %u\r\n", 0, 0, 0);
+}
+
+// The VB runtime re-reads the screen size when it gets WM_SETTINGCHANGE / WM_DISPLAYCHANGE / WM_SYSCOLORCHANGE (Explorer
+// broadcasts them right after a setup and at sign-in), which undoes the patch above. After the runtime has handled one,
+// look again and put the current work area back.
+static void recheck_vb_screen(UINT msg)
+{
+    POINT o = { 0, 0 }; RECT wa, mon; DWORD old; int w, h;
+    if (!g_vbx || !g_vby || g_fullscreen || g_waclip) return;
+    if (!work_area(MonitorFromPoint(o, MONITOR_DEFAULTTOPRIMARY), &wa, &mon)) return;
+    w = wa.right - wa.left; h = wa.bottom - wa.top;
+    if (*g_vbx == w && *g_vby == h) return;
+    {
+        char t[40], u[40]; wsprintfA(t, "%dx%d", *g_vbx, *g_vby); wsprintfA(u, "%dx%d", w, h);
+        VirtualProtect(g_vbx, sizeof(int), PAGE_READWRITE, &old); *g_vbx = w; VirtualProtect(g_vbx, sizeof(int), old, &old);
+        VirtualProtect(g_vby, sizeof(int), PAGE_READWRITE, &old); *g_vby = h; VirtualProtect(g_vby, sizeof(int), old, &old);
+        logf("VB's screen size was reset to %s by %s; patched back to work area %s\r\n", (DWORD)(UINT_PTR)t,
+             (DWORD)(UINT_PTR)(msg == WM_SETTINGCHANGE ? "WM_SETTINGCHANGE" : msg == WM_DISPLAYCHANGE ? "WM_DISPLAYCHANGE" : "WM_SYSCOLORCHANGE"), (DWORD)(UINT_PTR)u);
+    }
 }
 
 static void fit_minmax(HWND h, MINMAXINFO *mm)
@@ -1438,6 +1461,23 @@ static void diag_form(const CWPSTRUCT *c)
     }
 }
 
+// one line per broadcast (it reaches every top-level window of the thread: repeats within 100 ms are skipped)
+static void log_settings(const CWPSTRUCT *c)
+{
+    static UINT lm; static WPARAM lw; static LPARAM ll; static DWORD lt;
+    DWORD now = GetTickCount(); char s[48];
+    if (c->message == lm && c->wParam == lw && c->lParam == ll && now - lt < 100) return;
+    lm = c->message; lw = c->wParam; ll = c->lParam; lt = now;
+    s[0] = 0;
+    if (c->message == WM_SETTINGCHANGE && c->lParam) {   // a string such as "intl" or "ImmersiveColorSet", or a pointer that is not one
+        const char *p = (const char *)c->lParam; int i; SIZE_T n;
+        for (i = 0; i < 40 && ReadProcessMemory(GetCurrentProcess(), p + i, &s[i], 1, &n) && n == 1 && s[i] >= 32 && s[i] < 127; i++);
+        s[i] = 0;
+        if (!s[0]) lstrcpyA(s, "(string)");
+    }
+    logf("%s wParam %X lParam %s\r\n", (DWORD)(UINT_PTR)(c->message == WM_SETTINGCHANGE ? "WM_SETTINGCHANGE" : c->message == WM_DISPLAYCHANGE ? "WM_DISPLAYCHANGE" : "WM_SYSCOLORCHANGE"), (DWORD)c->wParam, (DWORD)(UINT_PTR)(s[0] ? s : "-"));
+}
+
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -1451,7 +1491,6 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             LoadLibraryA(self);
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
-            g_logdate = TRUE;
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
             log_versions();
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
@@ -1459,6 +1498,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             if (e) SetEvent(e);   // handle stays open: a later launcher sees the fix is already active
         }
         diag_form(c);
+        if (c->message == WM_SETTINGCHANGE || c->message == WM_DISPLAYCHANGE || c->message == WM_SYSCOLORCHANGE) log_settings(c);
         if (!g_patched) patch_thbresize();
         if (!g_fsopatched) patch_attr();
         // once MSVBVM60 is there, then whenever a window is made (a new form may have loaded new controls)
