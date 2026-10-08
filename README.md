@@ -99,7 +99,9 @@ What the installer does for the fix:
   (used only on a Traditional Chinese system with the UTF-8 option on, or whose FontAssoc lacks `ANSI(00)=YES`);
 - registers an uninstaller in *Programs and Features* / *Installed apps*.
 
-Uninstalling restores the original shortcut files and removes the manifest it added. The machine-wide
+Uninstalling restores the original shortcut files and removes the manifest it added; other accounts'
+shortcuts that still start the fix are pointed back at `DynaRun V3.exe`. It asks whether to remove the fix only or
+DynaRun V3 too (*Remove all* then runs Dyna Pro's own uninstaller of DynaRun V3). The machine-wide
 ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
 and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
 `/uninstall`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit code 1 if
@@ -406,7 +408,7 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
 - 把 [Locale Emulator](#開啟系統-utf-8-選項時中文亂碼) 放到 `DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到）；
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
-解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
+解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
 不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
 
 安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。

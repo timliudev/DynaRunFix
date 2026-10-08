@@ -46,5 +46,7 @@ char *msi_license_rtf(const WCHAR *msi);    // RTF of the setup's license page (
 enum { MSI_NONE, MSI_OTHER, MSI_DYNARUN };
 int msi_check(const WCHAR *msi, WCHAR *version, int cch);   // MSI_NONE: not an MSI at all. DynaRun: by UpgradeCode
 int run_msiexec(const WCHAR *msi);          // msiexec exit code
+BOOL dynarun_product(WCHAR *out);           // product code of the installed DynaRun V3 (39 chars)
+int remove_dynarun(void);                   // Dyna Pro's uninstall of DynaRun V3; msiexec exit code, -1 none
 void pkg_temp_dir(WCHAR *out);              // %TEMP%\DynaRunFix (created)
 int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only" copies the setup overwrites
