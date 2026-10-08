@@ -507,9 +507,10 @@ static int scan(const WCHAR *dir, BOOL recurse, HKEY backup)   // returns number
 
 static int fix_shortcuts(BOOL common, HKEY backup)
 {
-    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_PROGRAMS, CSIDL_APPDATA },
-                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_PROGRAMS };
-    WCHAR d[MAX_PATH]; int i, desk = 0, n = common ? 2 : 3, csidl;
+    // the Start menu root (not just Programs): some DynaRun installs put their shortcut there
+    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_PROGRAMS, CSIDL_APPDATA },
+                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_STARTMENU, CSIDL_COMMON_PROGRAMS };
+    WCHAR d[MAX_PATH]; int i, desk = 0, n = common ? 3 : 4, csidl;
     HMODULE msi = LoadLibraryW(L"msi.dll");
     if (msi) {
         pMsiGetShortcutTarget = (MsiGetShortcutTargetW_t)GetProcAddress(msi, "MsiGetShortcutTargetW");
@@ -520,7 +521,8 @@ static int fix_shortcuts(BOOL common, HKEY backup)
         csidl = common ? all[i] : user[i];
         if (!SHGetSpecialFolderPathW(NULL, d, csidl, FALSE)) continue;
         if (csidl == CSIDL_APPDATA) lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");  // incl. pinned taskbar items
-        if (i == 0) desk = scan(d, FALSE, backup); else scan(d, TRUE, backup);
+        if (i == 0) desk = scan(d, FALSE, backup);
+        else scan(d, csidl != CSIDL_STARTMENU && csidl != CSIDL_COMMON_STARTMENU, backup);  // Programs is scanned on its own
     }
     return desk;
 }
