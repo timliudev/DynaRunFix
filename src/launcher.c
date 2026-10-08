@@ -257,6 +257,23 @@ static BOOL prefix(char **cmd, const char *name)
     return TRUE;
 }
 
+// Waits until Shell_TrayWnd exists and the screen size and work area have not changed for 3 s (polled every 250 ms);
+// starts anyway after 60 s.
+static void wait_desktop(void)
+{
+    DWORD t0 = GetTickCount(), still = t0, tk; int sx = 0, sy = 0, x, y; RECT wa, w0 = { 0, 0, 0, 0 };
+    for (;;) {
+        tk = GetTickCount();
+        wa.left = wa.top = wa.right = wa.bottom = 0;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
+        x = GetSystemMetrics(SM_CXSCREEN); y = GetSystemMetrics(SM_CYSCREEN);
+        if (x != sx || y != sy || !EqualRect(&wa, &w0)) { sx = x; sy = y; w0 = wa; still = tk; }
+        if ((FindWindowA("Shell_TrayWnd", NULL) && tk - still >= 3000) || tk - t0 >= 60000) break;
+        Sleep(250);
+    }
+    llog("launcher: autostart waited %u ms for the desktop (%u = gave up)\r\n", tk - t0, tk - t0 >= 60000);
+}
+
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
@@ -271,6 +288,12 @@ void WinMainCRTStartup(void)
     trim_log();
     log_start(cmd);
     ask = !prefix(&cmd, "/noupdate");   // "/noupdate" (from the setup's /update): it has just asked
+    // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
+    // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
+    if (!lstrcmpiA(cmd, "/autostart") || (cmd[0] == '/' && cmd[10] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL)) {
+        for (cmd += 10; *cmd == ' '; cmd++);
+        if (!running()) wait_desktop();
+    }
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
     if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
         DWORD old = 0; HANDLE h0;
