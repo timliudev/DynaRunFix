@@ -40,7 +40,7 @@ Full analysis, message traces and the tools used: [docs/ROOT_CAUSE.md](docs/ROOT
 process only, it redirects THBRes25.dll's import of `PostMessageA` and drops the `0x591` message when it
 was triggered by a `WM_SIZE` that is identical to the previous one for the same form. That restores the
 Windows 7 behaviour; genuine size changes still go through. No file is changed; the dll only writes a
-small log, `%TEMP%\dynafix.log` (and, on the very first start, DynaRun's own language and feature settings,
+small log, `%TEMP%\dynafix.log` (every line has a time stamp; the file is kept below 10 MB, the oldest lines are dropped first; and, on the very first start, DynaRun's own language and feature settings,
 see below). The same dll also fixes the [first-time setup](#first-time-setup) and
 [OneDrive files that will not open](#some-dpr-files-will-not-open-empty-file-run-properties-no-curves).
 
@@ -161,7 +161,7 @@ After a forced restart the language is English (the helper overwrites it) and th
 (the helper writes their enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
 it waits for the helper, puts the chosen language back, switches on the picked features with the same values
 *Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
-`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log`.
+`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (every line starts with the time of day, the file is kept below 10 MB, the oldest lines are dropped first).
 
 | Language | System selection (climate monitor and AFR analyser picked) | After the automatic restart |
 |---|---|---|
@@ -388,7 +388,7 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 修正方式
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
-不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
+不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有時間戳記,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
 v1.2.3:
@@ -470,7 +470,7 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest、`LICENS
 沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:選擇視窗不消失、CPU 一核 100%,因為 DynaRun 啟動設定程式後進入無限迴圈。
 強制重新啟動後語言變成英文(被設定程式蓋掉),選購功能也是關閉的(設定程式把啟用旗標寫成 `0`)。
 `dynafix.dll` 只在記憶體中包裝 DynaRun 的 `ShellExecuteA`:等設定程式結束、寫回選的語言、以和「工程模式 → 系統組態設定 → 存檔並離開」相同的值啟用勾選的功能,
-再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`。
+再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`(每行有時間戳記,保持在 10 MB 以下,最舊的行先被丟掉)。
 
 | 語言 | 系統選擇(勾選大氣監測、空燃比分析儀) | 自動重新啟動後 |
 |---|---|---|

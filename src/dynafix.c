@@ -50,12 +50,34 @@ static BOOL g_pinned, g_patched, g_vbpatched, g_fsopatched, g_fontpatched;
 static LONG g_skipped, g_masked;
 static PostMessageA_t g_realPost;
 static char g_logpath[MAX_PATH];
+static BOOL g_logdate;   // the next log line also gets the date
+
+// above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (the launcher does the same; whichever runs first)
+static void trim_log(void)
+{
+    HANDLE h; DWORD size, n, i; char *buf;
+    h = CreateFileA(g_logpath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    size = GetFileSize(h, NULL);
+    if (size != INVALID_FILE_SIZE && size > 10485760 && (buf = (char *)HeapAlloc(GetProcessHeap(), 0, 8388608))) {
+        SetFilePointer(h, size - 8388608, NULL, FILE_BEGIN);
+        if (ReadFile(h, buf, 8388608, &n, NULL)) {
+            for (i = 0; i < n && buf[i] != '\n'; i++);
+            if (i < n) { i++; SetFilePointer(h, 0, NULL, FILE_BEGIN); WriteFile(h, buf + i, n - i, &n, NULL); SetEndOfFile(h); }
+        }
+        HeapFree(GetProcessHeap(), 0, buf);
+    }
+    CloseHandle(h);
+}
 
 static void logf(const char *fmt, DWORD a, DWORD b, DWORD c)
 {
-    char line[256]; DWORD n; HANDLE h;
+    char line[256]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!g_logpath[0]) return;
-    wsprintfA(line, fmt, a, b, c);
+    GetLocalTime(&t);
+    n = g_logdate ? wsprintfA(line, "%04u-%02u-%02u ", t.wYear, t.wMonth, t.wDay) : 0; g_logdate = FALSE;
+    n += wsprintfA(line + n, "%02u:%02u:%02u.%03u ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    wsprintfA(line + n, fmt, a, b, c);
     h = CreateFileA(g_logpath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     SetFilePointer(h, 0, NULL, FILE_END);
@@ -1307,6 +1329,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             LoadLibraryA(self);
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
+            g_logdate = TRUE;
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
@@ -1340,6 +1363,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
         }
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
+        trim_log();
         if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
         { char v[8]; g_fullscreen = GetEnvironmentVariableA("DYNAFIX_FULLSCREEN", v, sizeof(v)) && v[0] == '1';
           g_waclip = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)) && !lstrcmpiA(v, "clip"); }
