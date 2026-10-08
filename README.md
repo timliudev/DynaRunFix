@@ -10,7 +10,8 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 > This project is not affiliated with or endorsed by Dyna Pro Dynamometers Ltd or THB Componentware.
 > It does not contain, modify or redistribute any of their files, and it does not touch licensing or
 > copy-protection in any way. You need your own legally installed copy of DynaRun V3, and it is up to you to
-> make sure that using this fix is consistent with your licence agreement with Dyna Pro.
+> make sure that using this fix is consistent with your licence agreement with Dyna Pro. DynaRun V3 is licensed
+> to you by Dyna Pro under their own terms; the MIT licence of this project covers only DynaRunFix.
 
 ## Symptom
 
@@ -66,8 +67,9 @@ All versions: [CHANGELOG.md](CHANGELOG.md).
    [Dyna Pro's website](https://dynapro.co.uk/Software_Release.htm) (or uses a
    DynaRun setup zip or `Setup.msi` already in *Downloads*, on the desktop, in *Documents* or next to the
    installer), asks for the **setup password you got
-   from Dyna Pro**, shows Dyna Pro's license and installs DynaRun V3 and the fix. If DynaRun V3 is already
-   installed, it only installs the fix. Windows asks once for permission: click **Yes**.
+   from Dyna Pro**, shows Dyna Pro's license and installs DynaRun V3 and the fix only after you accept it (if the
+   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead).
+   If DynaRun V3 is already installed, it only installs the fix. Windows asks once for permission: click **Yes**.
 3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
    once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
 
@@ -86,7 +88,7 @@ The setup is recognised by its content, not its file name: only an MSI whose Upg
 checked after the password has opened it. Any other file is refused with a clear message.
 
 What the installer does for the fix:
-- installs `DynaRunFix.exe`, `dynafix.dll`, `LICENSE-miniz.txt` and a copy of `DynaRunFix-Setup.exe` (the
+- installs `DynaRunFix.exe`, `dynafix.dll`, `LICENSE.txt`, `LICENSE-miniz.txt` and a copy of `DynaRunFix-Setup.exe` (the
   uninstaller) to `Program Files\DynaRunFix` (`Program Files (x86)\DynaRunFix` on 64-bit Windows);
 - points the existing DynaRun V3 shortcuts (desktop, Start menu, pinned taskbar, all users and current
   user) to the launcher, keeping their name, icon and *Run as administrator* setting; creates a desktop
@@ -347,6 +349,7 @@ MIT, see [LICENSE](LICENSE).
 
 > 本專案與 Dyna Pro Dynamometers Ltd、THB Componentware 無任何關係,不包含、不修改、不散布原廠任何檔案,
 > 也完全不碰授權或防拷機制。你必須自備合法安裝的 DynaRun V3,並請自行確認使用本修正符合你與 Dyna Pro 之間的授權條款。
+> DynaRun V3 由 Dyna Pro 依其條款另行授權給你;本專案的 MIT 授權只涵蓋 DynaRunFix 本身。
 
 ### 症狀
 Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一套安裝在 XP / Win7 正常。
@@ -383,7 +386,7 @@ v1.2.2:
    因為檔案沒有數位簽章，Windows SmartScreen 可能顯示「Windows 已保護您的電腦」：請按 **其他資訊 → 仍要執行**。
 2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
-   顯示 Dyna Pro 的授權合約，然後安裝 DynaRun V3 和修正。已經裝好 DynaRun V3 時，只會安裝修正。
+   顯示 Dyna Pro 的授權合約，你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。
    Windows 會詢問一次是否允許變更，請按 **是**。
 3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
    請按 **是**，DynaRun 會自己重新啟動。
@@ -401,7 +404,7 @@ DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網�
 MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案會被拒絕，並清楚告訴你原因。
 
 安裝修正時會做這些事：
-- 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
+- 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE.txt`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
 - 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
 - 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見[下方](#以系統管理員執行卡在system-initializing-please-wait-115)）；
 - 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上[字碼頁 manifest](#開啟系統-utf-8-選項時中文亂碼)；
