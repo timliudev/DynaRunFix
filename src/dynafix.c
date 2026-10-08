@@ -30,6 +30,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <intrin.h>
+#include "version.h"
 
 #pragma comment(linker, "/EXPORT:CwpProc=_CwpProc@12")
 
@@ -83,6 +84,49 @@ static void logf(const char *fmt, DWORD a, DWORD b, DWORD c)
     SetFilePointer(h, 0, NULL, FILE_END);
     WriteFile(h, line, lstrlenA(line), &n, NULL);
     CloseHandle(h);
+}
+
+// second header line: DynaRunFix version, DynaRun's file version, Windows version (version.dll is loaded on demand: no static import)
+typedef BOOL (WINAPI *GFVIA_t)(LPCSTR, LPDWORD);
+typedef BOOL (WINAPI *GFVA_t)(LPCSTR, DWORD, DWORD, LPVOID);
+typedef BOOL (WINAPI *VQVA_t)(LPCVOID, LPCSTR, LPVOID *, PUINT);
+typedef LONG (WINAPI *RtlGetVersion_t)(OSVERSIONINFOW *);
+
+static void log_versions(void)
+{
+    char exe[MAX_PATH], app[40], win[48], msg[200]; DWORD h, sz, ubr, n = sizeof(ubr); HKEY k; HMODULE v, nt;
+    lstrcpyA(app, "?"); lstrcpyA(win, "?");
+    GetModuleFileNameA(NULL, exe, MAX_PATH);
+    if ((v = LoadLibraryA("version.dll"))) {
+        GFVIA_t gsz = (GFVIA_t)GetProcAddress(v, "GetFileVersionInfoSizeA");
+        GFVA_t get = (GFVA_t)GetProcAddress(v, "GetFileVersionInfoA");
+        VQVA_t q = (VQVA_t)GetProcAddress(v, "VerQueryValueA");
+        if (gsz && get && q && (sz = gsz(exe, &h))) {
+            void *buf = HeapAlloc(GetProcessHeap(), 0, sz); VS_FIXEDFILEINFO *fi; UINT fl;
+            if (buf) {
+                if (get(exe, 0, sz, buf) && q(buf, "\\", (LPVOID *)&fi, &fl) && fl >= sizeof(*fi))
+                    wsprintfA(app, "%u.%u.%u.%u", HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS), HIWORD(fi->dwFileVersionLS), LOWORD(fi->dwFileVersionLS));
+                HeapFree(GetProcessHeap(), 0, buf);
+            }
+        }
+        FreeLibrary(v);
+    }
+    if ((nt = GetModuleHandleA("ntdll.dll"))) {
+        RtlGetVersion_t rgv = (RtlGetVersion_t)GetProcAddress(nt, "RtlGetVersion");
+        OSVERSIONINFOW vi;
+        vi.dwOSVersionInfoSize = sizeof(vi);
+        if (rgv && rgv(&vi) == 0) {
+            n = wsprintfA(win, "%u.%u.%u", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber);
+            n = sizeof(ubr);
+            if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_QUERY_VALUE, &k)) {
+                DWORD type = 0;
+                if (!RegQueryValueExA(k, "UBR", NULL, &type, (BYTE *)&ubr, &n) && type == REG_DWORD) wsprintfA(win + lstrlenA(win), ".%u", ubr);
+                RegCloseKey(k);
+            }
+        }
+    }
+    wsprintfA(msg, "DynaRunFix %s (%s), DynaRun V3.exe %s, Windows %s\r\n", DRF_VERSION, DRF_COMMIT, app, win);
+    logf("%s", (DWORD)(UINT_PTR)msg, 0, 0);
 }
 
 static BOOL WINAPI HookedPostMessageA(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -1331,6 +1375,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
             g_logdate = TRUE;
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
+            log_versions();
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
             if (e) SetEvent(e);   // handle stays open: a later launcher sees the fix is already active

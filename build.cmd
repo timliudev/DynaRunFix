@@ -12,7 +12,14 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul || exit /b 1
 cd /d "%~dp0"
 if not exist build mkdir build
 if not defined DRF_VERSION set DRF_VERSION=dev
+rem DRF_COMMIT = short git hash, "-dirty" if the work tree has changes, "unknown" without git (shown in dynafix.log)
+set DRF_COMMIT=unknown
+set DRF_DIRTY=
+for /f "delims=" %%i in ('git rev-parse --short HEAD 2^>nul') do set DRF_COMMIT=%%i
+if not "%DRF_COMMIT%"=="unknown" for /f "delims=" %%i in ('git status --porcelain 2^>nul') do set DRF_DIRTY=1
+if defined DRF_DIRTY set DRF_COMMIT=%DRF_COMMIT%-dirty
 > build\version.h echo #define DRF_VERSION "%DRF_VERSION%"
+>> build\version.h echo #define DRF_COMMIT "%DRF_COMMIT%"
 set CFLAGS=/nologo /O1 /GS- /W3 /utf-8 /Ibuild /Fobuild\
 set LFLAGS=/nologo /NODEFAULTLIB
 

@@ -19,7 +19,7 @@
   ever looks wrong, close DynaRun and start it again: the last page of the installer and the README say so.
 - **Log:** every line in `%TEMP%\dynafix.log` now starts with the time of day (the first line of each DynaRun
   process also with the date); the launcher logs how it was started (arguments, `/autostart`, `/restart` or plain,
-  and its parent process). The log is kept below 10 MB; the oldest lines are dropped first (checked at each start).
+  and its parent process). The log is kept below 10 MB; the oldest lines are dropped first (checked at each start). Version info: the launcher' start line carries `DynaRunFix <version> (<commit>)`, and the second line of each DynaRun process names the DynaRunFix version and git commit (`-dirty` = built with uncommitted changes), the file version of `DynaRun V3.exe` and the Windows version (major.minor.build, plus the update revision where Windows has one).
 - `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
   window are a little taller; the last page says what was set up.
 
@@ -95,7 +95,7 @@
   (最多 60 秒)才啟動 DynaRun。DynaRun 執行中如果解析度、DPI 或工作區改變,最大化的主視窗會重新貼合新的工作區
   (變更停止 0.5 秒後執行;使用者還原過的視窗不會被動)。如果 DynaRun 的畫面顯示不正常,關掉 DynaRun 再開一次即可
   (安裝程式最後一頁和 README 都有說明)。
-- **Log:** `%TEMP%\dynafix.log` 每行開頭都有時間(每個 DynaRun 行程的第一行另有日期);啟動器會記錄自己是怎麼被啟動的(參數、`/autostart`、`/restart` 或一般啟動,以及父行程)。log 保持在 10 MB 以下,最舊的行先被丟掉(每次啟動時檢查)。
+- **Log:** `%TEMP%\dynafix.log` 每行開頭都有時間(每個 DynaRun 行程的第一行另有日期);啟動器會記錄自己是怎麼被啟動的(參數、`/autostart`、`/restart` 或一般啟動,以及父行程)。log 保持在 10 MB 以下,最舊的行先被丟掉(每次啟動時檢查)。版本資訊:啟動器的起始行帶有 `DynaRunFix <版本> (<commit>)`;每個 DynaRun 行程的第二行寫出 DynaRunFix 版本與 git commit(`-dirty` 表示建置時有未提交的修改)、`DynaRun V3.exe` 的檔案版本,以及 Windows 版本(主.次.組建編號,有更新修訂號的 Windows 會再加上)。
 - `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07
