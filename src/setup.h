@@ -3,6 +3,7 @@
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
+extern BOOL g_keep;                                     // /keep: leave the pin, the sign-in start and the desktop shortcut as they are
 extern int g_pinresult;                                 // after the install: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
@@ -24,6 +25,10 @@ int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then instal
 enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4 };
 int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces
 
+/* update.c */
+int update_check(void);                     // /checkupdate: notes a newer release in HKCU\Software\DynaRunFix; no UI
+int update_run(const WCHAR *args);          // /update <launcher args>: asks, installs a noted release, starts the launcher
+
 /* wizard.c */
 int wizard(void);
 
@@ -42,6 +47,7 @@ typedef struct {
 BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .msi inside, in Downloads/Desktop/Documents or next to us
 void pkg_reject(const WCHAR *path);         // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
+int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 BOOL zip_password_plausible(const zipent *e, const char *pw);
 int zip_extract(const zipent *e, const char *pw, const WCHAR *out, progress_fn cb, volatile LONG *cancel);

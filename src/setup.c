@@ -8,7 +8,10 @@
 //   /notaskbar, /noautostart                  with any install: do not pin DynaRun to the taskbar /
 //                                             do not start it when the user signs in (both are on by default,
 //                                             also with /quiet; the wizard's first page has the two check boxes)
+//   /keep                                     with any install: leave the taskbar pin, the sign-in start and the
+//                                             desktop shortcut as they are (an update, see update.c)
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
+//   DynaRunFix-Setup.exe /checkupdate         /update <args>: the installed copy, run by the launcher (update.c)
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
 // administrator's credentials are typed into the UAC prompt:
@@ -66,7 +69,7 @@ static const WCHAR *COM_FILES[] = {
     L"filev090.ocx", L"mscomctl.ocx", L"mscomm32.ocx", L"msdatgrd.ocx", L"msflxgrd.ocx", L"mshflxgd.ocx",
     L"numled.ocx", L"pesgo32e.ocx", L"richtx32.ocx", L"shcmb090.ocx", L"tabctl32.ocx", L"thbres25.dll" };
 
-BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE;
+BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE, g_keep;
 int g_pinresult;
 HWND g_hwnd;
 WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
@@ -682,6 +685,7 @@ static void taskbar_policy(const WCHAR *sid, HKEY app)
     static WCHAR x[MAX_PATH], l[MAX_PATH], xml[2400], path[300], v[MAX_PATH]; static char u[7200];
     DWORD ma, mi, b, ubr = 0, n = 4; HKEY k; BOOL gen;
     os_ver(&ma, &mi, &b);
+    if (g_keep) return;
     if (!g_pin) {                                       // reinstalled without the pin: take our policy back
         if (reg_str(app, NULL, L"TaskbarPolicySid", v, MAX_PATH, 0) && !RegOpenKeyExW(HKEY_USERS, v, 0, KEY_READ | KEY_WRITE, &k)) { drop_policy(k); RegCloseKey(k); }
         RegDeleteValueW(app, L"TaskbarPolicy"); RegDeleteValueW(app, L"TaskbarPolicySid");
@@ -958,6 +962,7 @@ static int run_elevated(const WCHAR *args)
     SHELLEXECUTEINFOW se; DWORD rc = 1, err; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = g_self;
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
     if (g_pin) lstrcatW(a, L" /pin");                // the elevated stage sets up the Windows 11 pin
+    if (g_keep) lstrcatW(a, L" /keep");
     // Mapped network drives (e.g. a VM's shared folder) do not exist for the elevated process: run a copy in %TEMP%
     lstrcpynW(root, g_self, 4);
     if (root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && GetTempPathW(MAX_PATH - 40, tmp)) {
@@ -1010,21 +1015,23 @@ static void user_stage(void)
     static WCHAR p[MAX_PATH]; HKEY b, s;
     g_pinresult = 0;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) return;
+    // another version is installed now: what update.c noted no longer applies; the first start of DynaRun looks again
+    RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
         int desk = fix_shortcuts(FALSE, s);
         if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-        if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
+        if (!desk && !g_keep && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
             save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
-        if (g_pin) {
+        if (g_pin && !g_keep) {
             g_pinresult = 3;
             if (desktop_link(p, s) && pin_taskbar(p) && g_pinresult == 3) g_pinresult = 1;
         }
         RegCloseKey(s);
     }
     RegCloseKey(b);
-    if (!RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
+    if (!g_keep && !RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
         if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\""));
         else RegDeleteValueW(s, L"DynaRunFix");
         RegCloseKey(s);
@@ -1150,6 +1157,18 @@ static int uninstall(void)
     return 0;
 }
 
+// the command line after its first n arguments, as typed (the launcher's arguments for /update)
+static const WCHAR *after_args(int n)
+{
+    const WCHAR *c = GetCommandLineW(); BOOL q = FALSE;
+    while (n--) {
+        while (*c == ' ' || *c == '\t') c++;
+        for (; *c && (q || (*c != ' ' && *c != '\t')); c++) if (*c == '"') q = !q;
+    }
+    while (*c == ' ' || *c == '\t') c++;
+    return c;
+}
+
 void WinMainCRTStartup(void)
 {
     int argc, i, rc; BOOL pin = FALSE; WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -1161,6 +1180,7 @@ void WinMainCRTStartup(void)
         else if (!lstrcmpiW(argv[i], L"/notaskbar")) g_pin = FALSE;
         else if (!lstrcmpiW(argv[i], L"/noautostart")) g_autostart = FALSE;
         else if (!lstrcmpiW(argv[i], L"/pin")) pin = TRUE;
+        else if (!lstrcmpiW(argv[i], L"/keep")) g_keep = TRUE;
     }
     if (argc >= 2 && (!lstrcmpiW(argv[1], L"/machine") || !lstrcmpiW(argv[1], L"/full"))) g_pin = pin;   // the elevated stage: as asked
     if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
@@ -1175,6 +1195,8 @@ void WinMainCRTStartup(void)
         CoInitialize(NULL);
         rc = machine_uninstall();
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall();
+    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/checkupdate")) rc = update_check();
+    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/update")) rc = update_run(after_args(2));
     else if (g_quiet) rc = locate_dynarun() ? install_fix() : 1;
     else rc = wizard();
     // the elevated part (/machine, /full) ends here: let the wizard that started it take the foreground back

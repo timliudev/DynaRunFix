@@ -153,10 +153,72 @@ static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
     llog("launcher: early hook did not report in %u %u\r\n", 0, 0);
 }
 
+static ULONGLONG now(void)
+{
+    FILETIME f; ULARGE_INTEGER u;
+    GetSystemTimeAsFileTime(&f);
+    u.LowPart = f.dwLowDateTime; u.HighPart = f.dwHighDateTime;
+    return u.QuadPart;
+}
+
+static ULONGLONG reg_time(HKEY k, const char *name)
+{
+    ULONGLONG t = 0; DWORD n = sizeof(t), type;
+    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)&t, &n) || type != REG_QWORD) t = 0;
+    return t;
+}
+
+// "DynaRunFix-Setup.exe <what> <args>" next to this launcher (the installed copy), waiting up to wait ms for it:
+// 0 when it is not there or did not start, 1 still running after wait, 2 ended
+static int run_setup(const char *what, const char *args, DWORD wait)
+{
+    char setup[MAX_PATH], line[4 * MAX_PATH], *p; STARTUPINFOA si; PROCESS_INFORMATION pi; int i, r;
+    GetModuleFileNameA(NULL, setup, MAX_PATH); p = setup + lstrlenA(setup); while (p > setup && *p != '\\') p--; lstrcpyA(p, "\\DynaRunFix-Setup.exe");
+    if (GetFileAttributesA(setup) == INVALID_FILE_ATTRIBUTES) return 0;
+    wsprintfA(line, "\"%s\" %s %s", setup, what, args);
+    { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
+    if (!CreateProcessA(setup, line, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return 0;
+    AllowSetForegroundWindow(pi.dwProcessId);
+    r = WaitForSingleObject(pi.hProcess, wait) == WAIT_OBJECT_0 ? 2 : 1;
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return r;
+}
+
+// A newer release was noted (DynaRunFix-Setup.exe /checkupdate) and DynaRun is not running: the setup asks
+// whether to update, installs it, and starts this launcher again with "/noupdate <args>".
+static void offer_update(const char *args)
+{
+    char v[64]; DWORD n = sizeof(v), type; HKEY k; BOOL due;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) return;
+    due = !RegQueryValueExA(k, "UpdateVersion", NULL, &type, (BYTE *)v, &n) && type == REG_SZ && n > 1 && now() >= reg_time(k, "UpdateAsk");
+    RegCloseKey(k);
+    if (due && run_setup("/update", args, 0)) { llog("launcher: handed over to the update %u %u\r\n", 0, 0); ExitProcess(0); }
+}
+
+// Once a day, before DynaRun starts: look for a newer release. Waits up to 5 s so that this start can already ask;
+// a slower answer (or none, offline) is left to finish in the background and is asked at the next start.
+static void check_update(void)
+{
+    HKEY k; ULONGLONG t = 0, n = now();
+    if (!RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) { t = reg_time(k, "UpdateChecked"); RegCloseKey(k); }
+    if (t <= n && n - t < 864000000000ULL) return;
+    llog("launcher: looking for an update (0 no setup, 1 still looking after 5 s, 2 done): %u %u\r\n", run_setup("/checkupdate", "", 5000), 0);
+}
+
+// "/name" at the start of *cmd: skipped, with the spaces after it
+static BOOL prefix(char **cmd, const char *name)
+{
+    int n = lstrlenA(name);
+    if (lstrlenA(*cmd) < n || ((*cmd)[n] && (*cmd)[n] != ' ') ||
+        CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, *cmd, n, name, n) != CSTR_EQUAL) return FALSE;
+    for (*cmd += n; **cmd == ' '; (*cmd)++);
+    return TRUE;
+}
+
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
-    STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i;
+    STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i; BOOL ask;
 
     // dynafix.dll lives next to this launcher
     GetModuleFileNameA(NULL, dll, MAX_PATH); p = dll + lstrlenA(dll); while (p > dll && *p != '\\') p--; lstrcpyA(p, "\\dynafix.dll");
@@ -164,6 +226,7 @@ void WinMainCRTStartup(void)
     cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
+    ask = !prefix(&cmd, "/noupdate");   // "/noupdate" (from the setup's /update): it has just asked
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
     if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
         DWORD old = 0; HANDLE h0;
@@ -171,8 +234,10 @@ void WinMainCRTStartup(void)
         while (*p >= '0' && *p <= '9') old = old * 10 + (*p++ - '0');
         if (old && (h0 = OpenProcess(SYNCHRONIZE, FALSE, old))) { WaitForSingleObject(h0, 15000); CloseHandle(h0); }
         cmd = p; while (*cmd == ' ') cmd++;
+        ask = FALSE;
     }
     args = cmd;
+    if (ask && !running()) { check_update(); offer_update(args); }
     if (*cmd == '"') { cmd++; lstrcpynA(exe, cmd, MAX_PATH); p = exe; while (*p && *p != '"') p++; *p = 0; }
     else if (*cmd) lstrcpynA(exe, cmd, MAX_PATH);
     else {
