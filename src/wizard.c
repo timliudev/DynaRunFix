@@ -28,7 +28,7 @@ enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 
 static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
-static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile;
+static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static HANDLE g_thread;
 static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[300];
 static zipent g_zip;
@@ -105,6 +105,15 @@ static void fetch_body(DWORD total)
     text(ID_BODY, b);
 }
 
+// Last paragraph of the first page.
+static const WCHAR *disclaimer(void)
+{
+    return T(L"\n\nDynaRunFix is an independent open-source tool, not affiliated with or endorsed by Dyna Pro Dynamometers. "
+             L"It is provided as is, without warranty (MIT license). DynaRun V3 is licensed to you separately by Dyna Pro.",
+             L"\n\nDynaRunFix 是獨立的開源工具，與 Dyna Pro Dynamometers 無關，也未經其認可；依 MIT 授權按現狀提供，不提供任何擔保。"
+             L"DynaRun V3 由 Dyna Pro 另行授權給你。");
+}
+
 static void set_page(int p)
 {
     static WCHAR b[1200];
@@ -117,23 +126,24 @@ static void set_page(int p)
             text(ID_TITLE, T(L"Fix DynaRun V3 for this Windows", L"讓 DynaRun V3 在這台電腦正常運作"));
             wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThis installs the fixes for Windows 10/11 (flickering main screen, .Dpr files "
                            L"in OneDrive that do not open, garbled text, \"Run as administrator\").\n\n"
-                           L"When Windows asks whether to allow changes, click \"Yes\".",
+                           L"When Windows asks whether to allow changes, click \"Yes\".%s",
                            L"已找到 DynaRun V3：\n%s\n\n接下來會安裝 Windows 10/11 的相容性修正（主畫面閃爍、OneDrive 裡的 .Dpr 打不開、"
-                           L"中文亂碼、以系統管理員執行卡住）。\n\nWindows 詢問「是否允許變更」時，請按「是」。"), g_exe);
+                           L"中文亂碼、以系統管理員執行卡住）。\n\nWindows 詢問「是否允許變更」時，請按「是」。%s"), g_exe, disclaimer());
             text(ID_BODY, b);
             buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
         } else {
             text(ID_TITLE, T(L"Install DynaRun V3", L"安裝 DynaRun V3"));
-            text(ID_BODY, T(L"DynaRun V3 is not installed on this computer yet.\n\nThis program will:\n"
+            wsprintfW(b, T(L"DynaRun V3 is not installed on this computer yet.\n\nThis program will:\n"
                             L"   1.  download the DynaRun V3 setup from the Dyna Pro website\n"
                             L"   2.  install DynaRun V3\n"
                             L"   3.  add the fixes for Windows 10/11\n\n"
-                            L"You need the setup password that Dyna Pro gave you.",
+                            L"You need the setup password that Dyna Pro gave you.%s",
                             L"這台電腦還沒有安裝 DynaRun V3。\n\n本程式會自動：\n"
                             L"   1.  從 Dyna Pro 官網下載 DynaRun V3 安裝檔\n"
                             L"   2.  安裝 DynaRun V3\n"
                             L"   3.  加上 Windows 10/11 的相容性修正\n\n"
-                            L"過程中需要輸入 Dyna Pro 給你的安裝密碼。"));
+                            L"過程中需要輸入 Dyna Pro 給你的安裝密碼。%s"), disclaimer());
+            text(ID_BODY, b);
             buttons(T(L"Start", L"開始"), T(L"Cancel", L"取消"), T(L"Installed elsewhere...", L"已裝在其他位置…"));
         }
         if (g_note[0]) status(g_note, TRUE);
@@ -173,9 +183,13 @@ static void set_page(int p)
         break;
     case P_LICENSE:
         text(ID_TITLE, T(L"Dyna Pro license agreement", L"Dyna Pro 授權合約"));
-        text(ID_BODY, T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
+        text(ID_BODY, g_nolicense ? T(L"The license agreement in this DynaRun V3 setup could not be shown.",
+                                      L"無法顯示這個 DynaRun V3 安裝檔裡的授權合約。")
+                                  : T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
+        SetWindowTextW(H(ID_CHECK), g_nolicense ? T(L"I understand and &accept Dyna Pro's license terms", L"我了解並同意 Dyna Pro 的授權條款(&A)")
+                                                : T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
         vis(ID_RICH, TRUE); vis(ID_CHECK, TRUE);
-        buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
+        buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), g_nolicense ? T(L"Open Dyna Pro website", L"開啟 Dyna Pro 官網") : NULL);
         EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
         SetFocus(H(ID_CHECK));                       // the disabled "Install" button cannot hold the keyboard focus
         if (g_note[0]) status(g_note, TRUE);
@@ -304,14 +318,26 @@ static void after_extract(void)
 {
     if (msi_check(g_msi, g_ver, 64) != MSI_DYNARUN) { not_dynarun(); return; }
     release(g_rtf);
-    if ((g_rtf = msi_license_rtf(g_msi))) {
+    g_rtf = msi_license_rtf(g_msi);
+    g_nolicense = !g_rtf;
+    if (g_rtf) {
         rtfsrc src; EDITSTREAM es;
         src.p = g_rtf; src.left = lstrlenA(g_rtf);
         es.dwCookie = (DWORD_PTR)&src; es.dwError = 0; es.pfnCallback = rtf_in;
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
-        SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
-        set_page(P_LICENSE);
-    } else install(JOB_INSTALL_ALL);
+    } else                                       // never install without the user accepting Dyna Pro's terms
+        SetWindowTextW(H(ID_RICH), T(L"DynaRun V3 is licensed to you by Dyna Pro Dynamometers Ltd under their end-user license agreement "
+                                     L"and their terms and conditions of sale. The agreement is part of Dyna Pro's setup, but this "
+                                     L"installer could not read it from this setup file.\r\n\r\n"
+                                     L"To read it, contact Dyna Pro (support@dynapro.co.uk) or see their website "
+                                     L"(\"Open Dyna Pro website\" below).\r\n\r\n"
+                                     L"Install only if you accept Dyna Pro's license terms.",
+                                     L"DynaRun V3 是 Dyna Pro Dynamometers Ltd 依其使用者授權合約及銷售條款授權給你使用的軟體。"
+                                     L"授權合約包含在 Dyna Pro 的安裝檔中，但本安裝程式無法從這個安裝檔讀出合約內容。\r\n\r\n"
+                                     L"如需閱讀合約，請聯絡 Dyna Pro（support@dynapro.co.uk）或參考其官網（下方「開啟 Dyna Pro 官網」）。\r\n\r\n"
+                                     L"請在同意 Dyna Pro 的授權條款後再安裝。"));
+    SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
+    set_page(P_LICENSE);
 }
 
 static void open_package(void)
@@ -599,7 +625,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             else if (g_page != P_INSTALL) on_close();
             break;
         case ID_EXTRA:
-            if (g_page == P_FAIL || g_page == P_FETCH) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            if (g_page == P_FAIL || g_page == P_FETCH || g_page == P_LICENSE) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_PASSWORD) choose_file();
             else if (g_page == P_HELLO) choose_exe();
             break;
