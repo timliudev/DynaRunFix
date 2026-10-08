@@ -12,6 +12,14 @@
   running DynaRun groups under the pinned icon (explicit AppUserModelID on the launcher shortcuts and in DynaRun).
 - **Start at sign-in:** second check box, on by default (`/noautostart` turns it off): a `Run` value for the
   current user starts DynaRun through the launcher. Uninstall removes it (also for other accounts).
+- **Updates:** once a day, when DynaRun is started (and is not already running), the installed copy of the
+  setup asks GitHub (`api.github.com/repos/timliudev/DynaRunFix/releases/latest`) whether there is a newer release;
+  nothing else is sent. The launcher waits up to 5 s for the answer; with a newer release it asks *Update now?*
+  before DynaRun opens (a slower answer is asked at the next start; logged in `%TEMP%\dynafix.log`). *Yes* downloads that
+  release's `DynaRunFix-Setup.exe` from this repository only, checks it against the SHA-256 GitHub lists for it,
+  installs it (one administrator prompt) and opens DynaRun; the taskbar pin, the start at sign-in and the desktop
+  shortcut stay as they are (`/keep`). *No*, a cancelled prompt or a failed update asks again a day later. Offline,
+  or on Windows XP (no TLS 1.2), nothing happens. Versions before this one do not check: install it once by hand.
 - `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
   window are a little taller; the last page says what was set up.
 
@@ -83,6 +91,11 @@
   執行中的 DynaRun 會歸在釘選的圖示下(啟動器捷徑和 DynaRun 使用相同的明確 AppUserModelID)。
 - **開機自動啟動:** 第二個勾選項,預設勾選(`/noautostart` 可關閉):在目前使用者的 `Run` 登錄值經由啟動器啟動 DynaRun。
   解除安裝時會移除(其他帳號也一併處理)。
+- **更新:** 每天一次，開啟 DynaRun（而且它還沒在執行）時，安裝好的安裝程式會向 GitHub
+  （`api.github.com/repos/timliudev/DynaRunFix/releases/latest`）查詢有沒有新版本，不會送出其他資料。啟動器最多等 5 秒，
+  有新版就在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問；過程記錄在 `%TEMP%\dynafix.log`）。按「是」只會從本專案下載該版本的 `DynaRunFix-Setup.exe`，
+  用 GitHub 列出的 SHA-256 核對後安裝（一次系統管理員確認），然後開啟 DynaRun；工作列釘選、開機自動啟動和桌面捷徑維持原樣（`/keep`）。
+  按「否」、取消確認或更新失敗，隔天會再問。沒有網路或 Windows XP（不支援 TLS 1.2）時什麼都不做。這一版之前的版本不會檢查，需要手動安裝一次。
 - `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07
