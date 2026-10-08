@@ -59,8 +59,8 @@ static BOOL rejected(const WCHAR *path)
 
 typedef struct { WCHAR path[MAX_PATH]; int score; FILETIME t; } candidate;
 
-// Ranking: a checked DynaRun MSI first, then a zip named like Dyna Pro's download, then any other zip
-// with an .msi inside; newest first within each. The name only orders the zips, it proves nothing.
+// Ranking: a checked DynaRun MSI first, then a zip named like Dyna Pro's download, then any other
+// password-protected zip with an .msi inside; newest first within each. The name only orders the zips, it proves nothing.
 static void scan(const WCHAR *dir, BOOL subdirs, candidate *best)
 {
     WCHAR p[MAX_PATH * 2], *e; WIN32_FIND_DATAW fd; HANDLE f; int score; zipent z;
@@ -82,7 +82,9 @@ static void scan(const WCHAR *dir, BOOL subdirs, candidate *best)
         else continue;
         if (score < best->score || (score == best->score && CompareFileTime(&fd.ftLastWriteTime, &best->t) <= 0)) continue;
         if (rejected(p)) continue;
-        if (score == 3 ? msi_check(p, NULL, 0) != MSI_DYNARUN : zip_open(p, &z) != PK_OK) continue;
+        // Dyna Pro's zip is password-protected: an unencrypted zip that happens to hold some .msi
+        // (another vendor's tool) is not offered unasked, only through "Other file..."
+        if (score == 3 ? msi_check(p, NULL, 0) != MSI_DYNARUN : zip_open(p, &z) != PK_OK || !(z.flags & 1)) continue;
         lstrcpyW(best->path, p); best->score = score; best->t = fd.ftLastWriteTime;
     } while (FindNextFileW(f, &fd));
     FindClose(f);
