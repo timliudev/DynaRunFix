@@ -18,7 +18,9 @@
 //   user stage (not elevated): retargets the user's DynaRun shortcuts to the launcher (the original
 //     .lnk bytes are kept in the registry and put back on uninstall); creates a desktop shortcut
 //     when there is none.
-// The machine-wide COM keys are kept on uninstall: removing them would break elevated DynaRun again.
+// Uninstall puts back this user's and the all-users shortcuts from the backups and points other accounts'
+// shortcuts that still start the launcher back at DynaRun V3.exe. The machine-wide COM keys are kept:
+// removing them would break elevated DynaRun again.
 #define COBJMACROS
 #include <windows.h>
 #include <shlobj.h>
@@ -445,15 +447,15 @@ static int classify(const WCHAR *p)
     return r;
 }
 
-static BOOL save_link(const WCHAR *p, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
+static BOOL save_link(const WCHAR *p, const WCHAR *target, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
 {
     IShellLinkW *sl; IPersistFile *pf; IShellLinkDataList *dl; WCHAR wd[MAX_PATH], *e; HRESULT hr = E_FAIL; DWORD fl;
     if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) return FALSE;
     lstrcpyW(wd, g_exe); for (e = wd + lstrlenW(wd); e > wd && *e != '\\'; e--); *e = 0;
-    IShellLinkW_SetPath(sl, g_launcher);
+    IShellLinkW_SetPath(sl, target);
     IShellLinkW_SetWorkingDirectory(sl, wd);
     IShellLinkW_SetIconLocation(sl, icon, idx);
-    IShellLinkW_SetDescription(sl, L"DynaRun V3 (DynaRunFix)");
+    if (target == g_launcher) IShellLinkW_SetDescription(sl, L"DynaRun V3 (DynaRunFix)");
     if (hotkey) IShellLinkW_SetHotkey(sl, hotkey);
     if (show) IShellLinkW_SetShowCmd(sl, show);
     if (runas && SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IShellLinkDataList, (void **)&dl))) {
@@ -465,13 +467,12 @@ static BOOL save_link(const WCHAR *p, const WCHAR *icon, int idx, WORD hotkey, i
     return SUCCEEDED(hr);
 }
 
-// Points an existing DynaRun shortcut at the launcher; keeps its name, icon, hotkey and
-// "Run as administrator" flag. The original file is saved in <backup>\Shortcuts.
-static void retarget(const WCHAR *p, HKEY backup)
+// Points shortcut p at target; keeps its name, icon, hotkey and "Run as administrator" flag.
+static BOOL relink(const WCHAR *p, const WCHAR *target)
 {
     IShellLinkW *sl = load_link(p); IShellLinkDataList *dl; WCHAR icon[MAX_PATH]; int idx = 0, show = 0;
-    WORD hotkey = 0; DWORD fl = 0, n; void *orig;
-    if (!sl) return;
+    WORD hotkey = 0; DWORD fl = 0;
+    if (!sl) return FALSE;
     icon[0] = 0;
     IShellLinkW_GetIconLocation(sl, icon, MAX_PATH, &idx);
     IShellLinkW_GetHotkey(sl, &hotkey);
@@ -479,8 +480,15 @@ static void retarget(const WCHAR *p, HKEY backup)
     if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IShellLinkDataList, (void **)&dl))) { IShellLinkDataList_GetFlags(dl, &fl); IShellLinkDataList_Release(dl); }
     IShellLinkW_Release(sl);
     if (!icon[0]) { lstrcpyW(icon, g_exe); idx = 0; }
-    if (!(orig = read_file(p, &n))) return;
-    if (!RegSetValueExW(backup, p, 0, REG_BINARY, orig, n)) save_link(p, icon, idx, hotkey, show, (fl & SLDF_RUNAS_USER) != 0);
+    return save_link(p, target, icon, idx, hotkey, show, (fl & SLDF_RUNAS_USER) != 0);
+}
+
+// Points an existing DynaRun shortcut at the launcher. The original file is saved in <backup>\Shortcuts.
+static void retarget(const WCHAR *p, HKEY backup)
+{
+    DWORD n; void *orig = read_file(p, &n);
+    if (!orig) return;
+    if (!RegSetValueExW(backup, p, 0, REG_BINARY, orig, n)) relink(p, g_launcher);
     release(orig);
 }
 
@@ -543,6 +551,91 @@ static void restore_shortcuts(HKEY root, const WCHAR *key)
     RegDeleteKeyW(root, sub);
 }
 
+// Uninstall, other accounts: their backups are in their own HKCU, so their shortcuts that still start
+// the launcher (which is about to be deleted) are pointed back at DynaRun V3.exe instead. Only files that
+// are our shortcuts are rewritten, so a folder read from another user's registry can do no harm; reparse
+// points (junctions) are not followed.
+static void unretarget(const WCHAR *dir, BOOL recurse)
+{
+    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; WCHAR *ext;
+    if (!p) return;
+    f = FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
+    if (f != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            cat3(p, dir, L"\\", fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) unretarget(p, TRUE); continue; }
+            ext = p + lstrlenW(p) - 4;
+            if (ext >= p && !lstrcmpiW(ext, L".lnk") && classify(p) == LNK_OURS) relink(p, g_exe);
+        } while (FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+    release(p);
+}
+
+static BOOL enable_privilege(const WCHAR *name)
+{
+    HANDLE t; TOKEN_PRIVILEGES tp; BOOL r = FALSE;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &t)) return FALSE;
+    tp.PrivilegeCount = 1; tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(NULL, name, &tp.Privileges[0].Luid))
+        r = AdjustTokenPrivileges(t, FALSE, &tp, 0, NULL, NULL) && GetLastError() == ERROR_SUCCESS;
+    CloseHandle(t);
+    return r;
+}
+
+// One of the user's shell folders, from their registry (redirected or localized folders, e.g. XP's
+// "「開始」功能表"); <profile>\<def> when it is not set.
+static void user_folder(HKEY hive, const WCHAR *profile, const WCHAR *name, const WCHAR *def, WCHAR *out)
+{
+    static WCHAR v[MAX_PATH], t[MAX_PATH];
+    if (hive && reg_str(hive, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders", name, v, MAX_PATH, 0)) {
+        if (!lstrcmpiW(lstrcpynW(t, v, 14), L"%USERPROFILE%")) cat3(t, profile, v + 13, NULL);   // that user's, not ours
+        else lstrcpyW(t, v);
+        if (ExpandEnvironmentStringsW(t, out, MAX_PATH) - 1 < MAX_PATH) return;
+    }
+    cat3(out, profile, L"\\", def);
+}
+
+static void unretarget_user(const WCHAR *sid, const WCHAR *profile)
+{
+    static const WCHAR TMPHIVE[] = L"DynaRunFix-uninstall";
+    static WCHAR p[MAX_PATH + 16], sub[300]; HKEY hive = NULL; BOOL loaded = FALSE;
+    if (RegOpenKeyExW(HKEY_USERS, sid, 0, KEY_READ | KEY_WRITE, &hive)) {          // not signed in: load their hive
+        hive = NULL;
+        if (!RegLoadKeyW(HKEY_USERS, TMPHIVE, cat3(p, profile, L"\\NTUSER.DAT", NULL)) &&
+            !RegOpenKeyExW(HKEY_USERS, TMPHIVE, 0, KEY_READ | KEY_WRITE, &hive)) loaded = TRUE;
+        else hive = NULL;
+    }
+    user_folder(hive, profile, L"Desktop", L"Desktop", p);                          unretarget(p, FALSE);
+    user_folder(hive, profile, L"Start Menu", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu", p); unretarget(p, FALSE);
+    user_folder(hive, profile, L"Programs", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs", p); unretarget(p, TRUE);
+    user_folder(hive, profile, L"AppData", L"AppData\\Roaming", p);
+    lstrcatW(p, L"\\Microsoft\\Internet Explorer\\Quick Launch");                   unretarget(p, TRUE);
+    if (hive) {   // their backups are of no use any more
+        RegDeleteKeyW(hive, cat3(sub, USERKEY, L"\\Shortcuts", NULL));
+        RegDeleteKeyW(hive, USERKEY);
+        RegCloseKey(hive);
+    }
+    if (loaded) RegUnLoadKeyW(HKEY_USERS, TMPHIVE);
+}
+
+static void unretarget_all_users(void)
+{
+    static const WCHAR LIST[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
+    static WCHAR sid[200], key[300], raw[MAX_PATH], profile[MAX_PATH]; HKEY k; DWORD i, n;
+    enable_privilege(L"SeRestorePrivilege"); enable_privilege(L"SeBackupPrivilege");   // to load the hives of users not signed in
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, LIST, 0, KEY_READ, &k)) return;
+    for (i = 0; n = 200, !RegEnumKeyExW(k, i, sid, &n, NULL, NULL, NULL, NULL); i++) {
+        // people (local, domain, Microsoft Entra), not service accounts
+        if (lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-5-21") && lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-12-1")) continue;
+        if (!reg_str(HKEY_LOCAL_MACHINE, cat3(key, LIST, L"\\", sid), L"ProfileImagePath", raw, MAX_PATH, 0)) continue;
+        if (ExpandEnvironmentStringsW(raw, profile, MAX_PATH) - 1 >= MAX_PATH || !exists(profile)) continue;
+        unretarget_user(sid, profile);
+    }
+    RegCloseKey(k);
+}
+
 /* ---------- stages ---------- */
 
 static int machine_install(const WCHAR *sid)
@@ -594,7 +687,7 @@ static int machine_install(const WCHAR *sid)
         set_str(k, L"Publisher", L"DynaRunFix (github.com/timliudev/DynaRunFix)");
         set_str(k, L"URLInfoAbout", L"https://github.com/timliudev/DynaRunFix");
         set_str(k, L"InstallLocation", g_dir);
-        cat3(p, g_exe, L",0", NULL); set_str(k, L"DisplayIcon", p);
+        cat3(p, g_dir, L"\\DynaRunFix-Setup.exe,0", NULL); set_str(k, L"DisplayIcon", p);   // our icon, not DynaRun's
         cat3(p, L"\"", g_dir, L"\\DynaRunFix-Setup.exe\" /uninstall"); set_str(k, L"UninstallString", p);
         set_dword(k, L"NoModify", 1); set_dword(k, L"NoRepair", 1); set_dword(k, L"EstimatedSize", 100);
         RegCloseKey(k);
@@ -616,6 +709,7 @@ static int machine_uninstall(void)
 {
     static WCHAR p[MAX_PATH + 16]; HKEY k; DWORD man = 0, n = 4;
     restore_shortcuts(HKEY_LOCAL_MACHINE, APPKEY);
+    unretarget_all_users();
     if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, KEY_READ, &k)) { RegQueryValueExW(k, L"ManifestInstalled", NULL, NULL, (BYTE *)&man, &n); RegCloseKey(k); }
     if (man == 1 && DeleteFileW(cat3(p, g_exe, L".manifest", NULL))) touch(g_exe);
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, APPKEY);
@@ -686,7 +780,7 @@ static void user_stage(void)
         if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
         if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
-            save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_exe, 0, 0, 0, FALSE))
+            save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
         RegCloseKey(s);
     }
@@ -736,9 +830,22 @@ int install_all(const WCHAR *msi)
     return 0;
 }
 
+// The uninstall question's Yes / No buttons become "Fix only" / "Remove all".
+static HHOOK g_cbt;
+static LRESULT CALLBACK relabel(int code, WPARAM w, LPARAM l)
+{
+    HHOOK h = g_cbt;
+    if (code == HCBT_ACTIVATE) {
+        SetDlgItemTextW((HWND)w, IDYES, T(L"&Fix only", L"只移除修正(&F)"));
+        SetDlgItemTextW((HWND)w, IDNO, T(L"&Remove all", L"全部移除(&R)"));
+        UnhookWindowsHookEx(g_cbt); g_cbt = NULL;
+    }
+    return CallNextHookEx(h, code, w, l);
+}
+
 static int uninstall(void)
 {
-    static WCHAR tmp[MAX_PATH], p[MAX_PATH], cmd[MAX_PATH + 64]; int rc;
+    static WCHAR tmp[MAX_PATH], p[MAX_PATH + 160], cmd[MAX_PATH + 64], prod[40]; int rc; BOOL all = FALSE;
     STARTUPINFOW si; PROCESS_INFORMATION pi;
     // the uninstaller lives in the folder it removes: continue from a copy in %TEMP%
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
@@ -757,8 +864,20 @@ static int uninstall(void)
         info(T(L"DynaRunFix is not installed.", L"DynaRunFix 尚未安裝。"));
         return 0;
     }
-    if (!g_quiet && msg(T(L"Uninstall DynaRunFix and restore the original DynaRun shortcuts?\n\nDynaRun V3 itself stays installed.",
-                          L"要解除安裝 DynaRunFix，並還原 DynaRun 原本的捷徑嗎？\n\nDynaRun V3 本身會保留。"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    if (!g_quiet && !dynarun_product(prod)) {
+        if (msg(T(L"Uninstall DynaRunFix?", L"要解除安裝 DynaRunFix 嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    } else if (!g_quiet) {
+        g_cbt = SetWindowsHookExW(WH_CBT, relabel, NULL, GetCurrentThreadId());
+        rc = msg(T(L"Uninstall DynaRunFix?\n\n"
+                   L"Fix only: the DynaRun shortcuts start the original DynaRun again; DynaRun V3 stays installed.\n\n"
+                   L"Remove all: DynaRun V3 is then uninstalled too, by Dyna Pro's own uninstaller.",
+                   L"要解除安裝 DynaRunFix 嗎？\n\n"
+                   L"只移除修正：DynaRun 的捷徑改回開啟原版，DynaRun V3 保留。\n\n"
+                   L"全部移除：接著再用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3。"), MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (g_cbt) { UnhookWindowsHookEx(g_cbt); g_cbt = NULL; }
+        if (rc == IDCANCEL) return 2;
+        all = rc == IDNO;
+    }
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
     CoInitialize(NULL);
     restore_shortcuts(HKEY_CURRENT_USER, USERKEY);
@@ -766,8 +885,21 @@ static int uninstall(void)
     rc = is_admin() ? machine_uninstall() : run_elevated(L"/unmachine");
     if (rc == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
-    if (!rc) info(T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
-    return rc;
+    if (rc) return rc;
+    if (all) {
+        rc = remove_dynarun();
+        if (rc == ERROR_INSTALL_USEREXIT) { info(T(L"DynaRunFix has been uninstalled. DynaRun V3 was kept (its uninstall was cancelled).", L"DynaRunFix 已解除安裝。DynaRun V3 的解除安裝已取消，DynaRun V3 保留。")); return 2; }
+        if (rc > 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
+            wsprintfW(p, T(L"DynaRunFix has been uninstalled, but uninstalling DynaRun V3 failed (Windows Installer error %d).",
+                           L"DynaRunFix 已解除安裝，但 DynaRun V3 解除安裝失敗（Windows Installer 錯誤 %d）。"), rc);
+            msg(p, MB_ICONERROR);
+            return 4;
+        }
+        info(T(L"DynaRunFix and DynaRun V3 have been uninstalled.", L"DynaRunFix 和 DynaRun V3 都已解除安裝。"));
+        return 0;
+    }
+    info(T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
+    return 0;
 }
 
 void WinMainCRTStartup(void)

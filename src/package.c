@@ -392,6 +392,29 @@ int run_msiexec(const WCHAR *msi)
     return (int)rc;
 }
 
+// Installed DynaRun V3 (by UpgradeCode): its product code in out (39 chars), FALSE when there is none.
+BOOL dynarun_product(WCHAR *out)
+{
+    return !MsiEnumRelatedProductsW(L"" DYNARUN_UPGRADE_CODE, 0, 0, out);
+}
+
+// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; -1 = not installed.
+int remove_dynarun(void)
+{
+    static WCHAR exe[MAX_PATH], cmd[MAX_PATH + 96], prod[40];
+    STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = 1;
+    if (!dynarun_product(prod)) return -1;
+    GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
+    wsprintfW(cmd, L"\"%s\" /x %s /qb! REBOOT=ReallySuppress", exe, prod);
+    zero(&si, sizeof(si)); si.cb = sizeof(si);
+    AllowSetForegroundWindow(ASFW_ANY);
+    if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &rc);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return (int)rc;
+}
+
 /* ---------- OneDrive placeholders the setup will overwrite ---------- */
 
 
