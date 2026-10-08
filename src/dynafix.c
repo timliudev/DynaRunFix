@@ -1338,11 +1338,13 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
     if (r == DLL_PROCESS_ATTACH) {
+        BOOL noappid;
         g_self = h;
         DisableThreadLibraryCalls(h);
         {   // the same AppUserModelID as the launcher shortcuts (setup.c): a running DynaRun groups under the pinned icon
-            WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH);
-            if (l > 14 && n[l - 15] == '\\' && !lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) {
+            WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); char nv[4];
+            noappid = GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1';   // diagnostic switch
+            if (!noappid && l > 14 && n[l - 15] == '\\' && !lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) {
                 HRESULT (WINAPI *f)(PCWSTR) = (HRESULT (WINAPI *)(PCWSTR))GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SetCurrentProcessExplicitAppUserModelID");
                 if (f) f(L"DynaRunFix.DynaRunV3");       // Windows 7+
             }
@@ -1350,6 +1352,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
         trim_log();
+        if (noappid) logf("DYNAFIX_NOAPPID=1: the explicit AppUserModelID is not set %u %u %u\r\n", 0, 0, 0);
         if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
         { char v[8]; g_fullscreen = GetEnvironmentVariableA("DYNAFIX_FULLSCREEN", v, sizeof(v)) && v[0] == '1';
           g_waclip = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)) && !lstrcmpiA(v, "clip"); }
