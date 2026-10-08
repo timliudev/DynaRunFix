@@ -468,7 +468,7 @@ static void on_primary(void)
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
-        ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, NULL, SW_SHOWNORMAL);
+        start_dynarun();
         DestroyWindow(g_hwnd);
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;

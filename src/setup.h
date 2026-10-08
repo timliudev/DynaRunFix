@@ -18,6 +18,7 @@ BOOL is_admin(void);
 DWORD os_build(void);                       // Windows build number (real, not the compatibility-shimmed one)
 BOOL user_sid(WCHAR *out, int cch);
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
+void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
 int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
 #define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed

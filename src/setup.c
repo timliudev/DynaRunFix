@@ -803,6 +803,22 @@ static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to p
     return TRUE;
 }
 
+// The wizard's "Start DynaRun": started the way a double click on the shortcut does it (the shortcut gives the
+// process the AppUserModelID that groups it with the pinned icon, its working folder and show command), not by
+// running the launcher directly. Falls back to the launcher with DynaRun's folder as working directory.
+void start_dynarun(void)
+{
+    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
+    static WCHAR lnk[MAX_PATH], dir[MAX_PATH], d[MAX_PATH];
+    int i; WCHAR *q; BOOL have = FALSE;
+    for (i = 0; i < 4 && !have; i++)
+        have = SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, lnk);
+    if (!have && exists(cat3(lnk, g_dir, L"\\DynaRun V3.lnk", NULL))) have = TRUE;
+    if (have) { ShellExecuteW(g_hwnd, NULL, lnk, NULL, NULL, SW_SHOWNORMAL); return; }
+    lstrcpyW(dir, g_exe); q = dir + lstrlenW(dir); while (q > dir && *q != '\\') q--; *q = 0;
+    ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, dir[0] ? dir : NULL, SW_SHOWNORMAL);
+}
+
 static BOOL enable_privilege(const WCHAR *name)
 {
     HANDLE t; TOKEN_PRIVILEGES tp; BOOL r = FALSE;

@@ -72,7 +72,7 @@ static void trim_log(void)
 static void log_start(const char *cmd)
 {
     PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD me = GetCurrentProcessId(), pp = 0;
-    char parent[64], args[160], msg[460];
+    char parent[64], args[160], cwd[160], msg[700]; STARTUPINFOA st;
     const char *how = "a plain start";
     lstrcpyA(parent, "?"); pe.dwSize = sizeof(pe);
     if (Process32First(s, &pe)) do { if (pe.th32ProcessID == me) pp = pe.th32ParentProcessID; } while (!pp && Process32Next(s, &pe));
@@ -81,7 +81,9 @@ static void log_start(const char *cmd)
     if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL && (!cmd[10] || cmd[10] == ' ')) how = "/autostart";
     else if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL && (!cmd[8] || cmd[8] == ' ')) how = "/restart";
     lstrcpynA(args, cmd, sizeof(args));
-    wsprintfA(msg, "launcher: started pid=%u, DynaRunFix %s (%s), %s, args [%s], parent %s (pid %u)\r\n", me, DRF_VERSION, DRF_COMMIT, how, args, parent, pp);
+    { volatile char *z = (volatile char *)&st; int i; for (i = 0; i < (int)sizeof(st); i++) z[i] = 0; } st.cb = sizeof(st); GetStartupInfoA(&st);
+    if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) lstrcpyA(cwd, "?");
+    wsprintfA(msg, "launcher: started pid=%u, DynaRunFix %s (%s), %s, args [%s], parent %s (pid %u), startup flags %08X show %u, cwd [%s]\r\n", me, DRF_VERSION, DRF_COMMIT, how, args, parent, pp, st.dwFlags, st.wShowWindow, cwd);
     llog("%s", (DWORD)(UINT_PTR)msg, 0);
 }
 

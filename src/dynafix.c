@@ -38,6 +38,7 @@
 #define P_W     "dynafix.w"
 #define P_L     "dynafix.l"
 #define P_DUP   "dynafix.dup"
+#define P_ALT   "dynafix.alt"   // dynafix changed this form's size: the WM_SIZE that follows is not a duplicate
 #define LANG_KEY "Software\\DynaPro\\Operation_Data"
 
 // FILE_ATTRIBUTE_RECALL_ON_OPEN | PINNED | UNPINNED | RECALL_ON_DATA_ACCESS
@@ -1073,6 +1074,11 @@ static void note_size(HWND h, WPARAM w, LPARAM l)
     BOOL dup;
     if (!GetClassNameA(h, cls, sizeof(cls)) || lstrcmpA(cls, "ThunderRT6FormDC")) return;
     dup = GetPropA(h, P_W) == (HANDLE)(w + 1) && GetPropA(h, P_L) == (HANDLE)l;
+    if (GetPropA(h, P_ALT)) {   // our own clip / refit made this size: THBResize has to lay the controls out for it
+        RemovePropA(h, P_ALT);
+        if (dup) logf("relayout allowed after dynafix changed the size of form %08X %u %u\r\n", (DWORD)(UINT_PTR)h, 0, 0);
+        dup = FALSE;
+    }
     SetPropA(h, P_W, (HANDLE)(w + 1));
     SetPropA(h, P_L, (HANDLE)l);
     if (dup) SetPropA(h, P_DUP, (HANDLE)1); else RemovePropA(h, P_DUP);
@@ -1260,6 +1266,7 @@ static BOOL fit_pos(HWND h, WINDOWPOS *p)
     }
     p->flags = (p->flags & ~SWP_NOMOVE) | SWP_NOCOPYBITS;
     p->x = r.left; p->y = r.top; p->cx = r.right - r.left; p->cy = r.bottom - r.top;
+    SetPropA(h, P_ALT, (HANDLE)1);
     return TRUE;
 }
 
@@ -1282,6 +1289,7 @@ static BOOL force_pos(HWND h, WINDOWPOS *p)
     if (!g_forcing || h != g_forceh) return FALSE;
     p->flags = (p->flags & ~(SWP_NOMOVE | SWP_NOSIZE)) | SWP_NOCOPYBITS;
     p->x = g_force.left; p->y = g_force.top; p->cx = g_force.right - g_force.left; p->cy = g_force.bottom - g_force.top;
+    SetPropA(h, P_ALT, (HANDLE)1);
     return TRUE;
 }
 
@@ -1389,7 +1397,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
         else if (c->message == WM_WINDOWPOSCHANGING) { if (is_main_form(c->hwnd, FALSE)) subclass_form(c->hwnd); }
         else if (c->message == WM_DISPLAYCHANGE || c->message == WM_DPICHANGED || (c->message == WM_SETTINGCHANGE && c->wParam == SPI_SETWORKAREA)) { if (is_main_form(c->hwnd, FALSE)) arm_refit(); }
         else if (c->message == WM_ACTIVATE && LOWORD(c->wParam) != WA_INACTIVE) sweep_fonts(c->hwnd);
-        else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_SWEPT); }
+        else if (c->message == WM_NCDESTROY) { RemovePropA(c->hwnd, P_W); RemovePropA(c->hwnd, P_L); RemovePropA(c->hwnd, P_DUP); RemovePropA(c->hwnd, P_ALT); RemovePropA(c->hwnd, P_SWEPT); }
     }
     return CallNextHookEx(NULL, code, w, l);
 }
