@@ -2,6 +2,16 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.1 — 2026-10-09
+
+- **Taskbar icon after an update:** updating from v1.2.x left the existing DynaRun shortcuts (already pointing to
+  DynaRunFix) without the AppUserModelID that v1.3.0 gives the running DynaRun, so Windows found no matching shortcut:
+  the running DynaRun showed its window icon (a chart) instead of DynaRun's own icon, as a second taskbar button next
+  to the pinned one. The installer now writes our shortcuts again with the ID (name, icon, hotkey and *Run as
+  administrator* kept). Install v1.3.1 once over v1.3.0 (or let the update do it), then start DynaRun.
+- **Docs:** README and changelog: a resolution change while DynaRun is open is DynaRun's own behaviour; the first-start
+  layout fix explained.
+
 ## v1.3.0 — 2026-10-09
 
 - **Taskbar:** the installer pins DynaRun to the taskbar (check box on the first page, on by default;
@@ -23,8 +33,8 @@
   Windows 11), so DynaRun had made its first windows before the fix was there (all versions since v1.2.2). The
   launcher now loads `dynafix.dll` before DynaRun starts. The log shows `dynafix.dll loaded in … ms` and
   `windows DynaRun had before dynafix: N` (0 = in time). Verified on a fresh zh-TW Windows 11 VM.
-- **Known issue:** changing the screen resolution while DynaRun is open can leave the main screen laid out for
-  the old size; close DynaRun and start it again.
+- **Known issue (DynaRun's own behaviour):** changing the screen resolution while DynaRun is open leaves the main
+  screen laid out for the old size (DynaRun lays out its fixed 4:3 screen once, at start); restart DynaRun.
 - **Updates:** once a day, when DynaRun is started (and is not already running), the installed copy of the
   setup asks GitHub (`api.github.com/repos/timliudev/DynaRunFix/releases/latest`) whether there is a newer release;
   nothing else is sent. The launcher waits up to 5 s for the answer; with a newer release it asks *Update now?*
@@ -103,6 +113,14 @@
 
 ## 更新紀錄
 
+### v1.3.1 — 2026-10-09
+
+- **更新後的工作列圖示:** 從 v1.2.x 更新時,原本已經指向 DynaRunFix 的捷徑沒有補上 v1.3.0 給執行中 DynaRun 的 AppUserModelID,
+  Windows 找不到對應的捷徑,執行中的 DynaRun 就顯示視窗圖示(表格圖案)而不是 DynaRun 原本的圖示,而且在釘選的圖示旁另外多一個按鈕。
+  現在安裝程式會把我們的捷徑重新寫一次並加上 ID(名稱、圖示、快捷鍵、以系統管理員身分執行都保留)。在 v1.3.0 上再裝一次 v1.3.1
+  (或讓自動更新處理),再開 DynaRun 即可。
+- **文件:** README 與更新紀錄:DynaRun 開著時改解析度會變形是 DynaRun 本身的行為;說明首次開啟版面的修正。
+
 ### v1.3.0 — 2026-10-09
 
 - **工作列:** 安裝程式會把 DynaRun 釘選到工作列(第一頁的勾選項,預設勾選;`/notaskbar` 可關閉)。Windows 7 到 10 直接釘選
@@ -119,7 +137,7 @@
   `dynafix.dll`,而剛安裝的 dll 第一次載入很慢(全新 Windows 11 上要好幾秒),DynaRun 在修正掛上前就建立了最初的視窗
   (v1.2.2 起各版都有)。現在啟動器在 DynaRun 啟動前就先載入 `dynafix.dll`。log 會記 `dynafix.dll loaded in … ms` 與
   `windows DynaRun had before dynafix: N`(0 = 來得及)。已在全新繁中 Windows 11 虛擬機驗證。
-- **已知問題:** DynaRun 開著時改變螢幕解析度,主畫面可能仍照舊的大小排版;關掉 DynaRun 再開即可。
+- **已知問題(DynaRun 本身的行為):** DynaRun 開著時改變螢幕解析度,主畫面仍照舊的大小排版(DynaRun 只在啟動時排一次固定的 4:3 版面);重開 DynaRun 即可。
 - **更新:** 每天一次，開啟 DynaRun（而且它還沒在執行）時，安裝好的安裝程式會向 GitHub
   （`api.github.com/repos/timliudev/DynaRunFix/releases/latest`）查詢有沒有新版本，不會送出其他資料。啟動器最多等 5 秒，
   有新版就在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問；過程記錄在 `%TEMP%\dynafix.log`）。按「是」只會從本專案下載該版本的 `DynaRunFix-Setup.exe`，

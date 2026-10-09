@@ -561,6 +561,9 @@ static int scan(const WCHAR *dir, BOOL recurse, HKEY backup)   // returns number
             ext = p + lstrlenW(p) - 4;
             if (ext < p || lstrcmpiW(ext, L".lnk")) continue;
             if ((c = classify(p)) == LNK_DYNARUN) retarget(p, backup);
+            // ours from an older version (before v1.3.0 they had no AppUserModelID): written again with the ID, else the
+            // running DynaRun (ID set by dynafix.dll) matches no shortcut and Windows shows its window icon, not DynaRun's
+            else if (c == LNK_OURS) relink(p, g_launcher);
             if (c != LNK_OTHER) found++;
         } while (FindNextFileW(f, &fd));
         FindClose(f);
