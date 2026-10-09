@@ -52,7 +52,8 @@ v1.3.0:
 - The first start right after installing shows the main screen correctly (before, it could be laid out too big
   until DynaRun was started again).
 - Every log line has the date and time.
-- Known issue: after changing the screen resolution with DynaRun open, restart DynaRun.
+- After changing the screen resolution with DynaRun open, restart DynaRun (DynaRun's own behaviour, see
+  [DynaRun's screen looks wrong](#dynaruns-screen-looks-wrong)).
 
 v1.2.3:
 - Nothing that changes Dyna Pro's setup is shipped any more (`tools/msi-novbs` removed).
@@ -319,9 +320,19 @@ both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups no
 
 ### DynaRun's screen looks wrong
 
-If DynaRun's screen ever looks wrong (for example after it started by itself at sign-in, while Windows was still
-setting up the desktop), close DynaRun and start it again. The start at sign-in waits until the taskbar is there and
-the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`).
+If DynaRun's screen ever looks wrong, close DynaRun and start it again.
+
+* **After changing the screen resolution (or scaling, or connecting another monitor) while DynaRun is open:** DynaRun
+  is a VB6 program with a fixed 4:3 layout that it works out once, at start, from the screen size it sees then. Changed
+  later, THBResize stretches part of the controls while the gauges stay drawn for the old size, so the screen looks
+  shifted; going back to the old resolution puts everything back. This is DynaRun's own behaviour (the original DynaRun does the same); restart DynaRun after
+  such a change.
+* **The first start right after installing DynaRunFix** could be laid out too big before v1.3.0 (the right gauge cut
+  off): the launcher loaded `dynafix.dll` only after DynaRun had started, and the first load of a newly installed dll
+  is slow. Since v1.3.0 the dll is loaded before DynaRun starts; the log shows `windows DynaRun had before dynafix: 0`.
+  Details: [docs/FIRST_START.md](docs/FIRST_START.md).
+* **At sign-in** Windows may still be setting up the desktop: the start at sign-in waits until the taskbar is there and
+  the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`).
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
@@ -410,7 +421,7 @@ v1.3.0:
 - 自動更新:每天檢查一次有沒有新版,按一下就安裝。
 - 裝好後第一次開 DynaRun,主畫面就正常(以前可能排得太大,要再開一次才正常)。
 - log 每行都有日期時間。
-- 已知問題:DynaRun 開著時改了螢幕解析度,請重開 DynaRun。
+- DynaRun 開著時改了螢幕解析度,請重開 DynaRun(DynaRun 本身的行為,見[DynaRun 的畫面顯示不正常](#dynarun-的畫面顯示不正常))。
 
 v1.2.3:
 - 不再提供任何會修改 Dyna Pro 安裝檔的工具(移除 `tools/msi-novbs`)。
@@ -589,9 +600,16 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 
 ### DynaRun 的畫面顯示不正常
 
-如果 DynaRun 的畫面顯示不正常（例如開機登入後自動啟動、Windows 還在準備桌面時就開了），關掉 DynaRun 再開一次即可。
-登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；`%TEMP%\dynafix.log` 會有
-`launcher: autostart waited ...`））。
+如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。
+
+* **DynaRun 開著時改了螢幕解析度（或縮放比例、接上其他螢幕）：** DynaRun 是 VB6 程式，版面是固定的 4:3，只在啟動時依當下的螢幕大小
+  排一次。之後再改，THBResize 只會拉伸部分控制項，儀表仍照舊的大小畫，畫面就會偏掉；改回原本的解析度就恢復。這是 DynaRun 本身的行為（原版也一樣），
+  改完請重開 DynaRun。
+* **裝好 DynaRunFix 後第一次開：** v1.3.0 以前可能排得太大（右邊儀表被切掉）：啟動器在 DynaRun 開始跑之後才載入 `dynafix.dll`，
+  而剛安裝的 dll 第一次載入很慢。v1.3.0 起在 DynaRun 啟動前就先載入，log 會有 `windows DynaRun had before dynafix: 0`。
+  詳見 [docs/FIRST_START.md](docs/FIRST_START.md)。
+* **開機登入時** Windows 可能還在準備桌面：登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；
+  `%TEMP%\dynafix.log` 會有 `launcher: autostart waited ...`）。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。
