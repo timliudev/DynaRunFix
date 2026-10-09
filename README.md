@@ -46,6 +46,10 @@ see below). The same dll also fixes the [first-time setup](#first-time-setup) an
 
 ## What's new
 
+v1.3.2:
+- The running DynaRun shows DynaRun's own blue logo on the taskbar (not the chart icon), also after updating
+  from an older version.
+
 v1.3.0:
 - The installer can pin DynaRun to the taskbar and start it at sign-in (both on by default).
 - Updates: once a day DynaRunFix looks for a newer release and installs it on one click.
@@ -101,7 +105,9 @@ What the installer does for the fix:
   uninstaller) to `Program Files\DynaRunFix` (`Program Files (x86)\DynaRunFix` on 64-bit Windows);
 - points the existing DynaRun V3 shortcuts (desktop, Start menu, pinned taskbar, all users and current
   user) to the launcher, keeping their name, icon and *Run as administrator* setting; creates a desktop
-  shortcut if there is none;
+  shortcut if there is none. Shortcuts of ours get DynaRun's blue logo (from the icon file of Dyna Pro's own
+  shortcuts; `DynaRun V3.exe` itself only has the chart icon of its windows), so the running DynaRun shows that logo
+  on the taskbar;
 - makes DynaRun's ActiveX controls visible to elevated processes (what `tools/register-machine-wide.ps1`
   does, see [below](#run-as-administrator-stops-at-system-initializing-please-wait-115));
 - only if Windows' *UTF-8 for worldwide language support* option is on: adds the
@@ -416,6 +422,9 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.3.2:
+- 執行中的 DynaRun 在工作列上顯示 DynaRun 原本的藍色 logo(不是表格圖示),從舊版更新後也一樣。
+
 v1.3.0:
 - 安裝程式可以把 DynaRun 釘選到工作列、開機自動啟動(兩項預設勾選)。
 - 自動更新:每天檢查一次有沒有新版,按一下就安裝。
@@ -459,7 +468,7 @@ MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案
 
 安裝修正時會做這些事：
 - 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE.txt`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
-- 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
+- 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個。我們的捷徑一律用 DynaRun 的藍色 logo（取自 Dyna Pro 原本捷徑的圖示檔；`DynaRun V3.exe` 本身只有視窗用的表格圖示），所以執行中的 DynaRun 在工作列上顯示的就是這個 logo；
 - 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見[下方](#以系統管理員執行卡在system-initializing-please-wait-115)）；
 - 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上[字碼頁 manifest](#開啟系統-utf-8-選項時中文亂碼)；
 - 把 [Locale Emulator](#開啟系統-utf-8-選項時中文亂碼) 放到 `DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到）；
