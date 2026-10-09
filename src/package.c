@@ -116,6 +116,10 @@ static BOOL query_str(HINTERNET h, DWORD what, WCHAR *out, DWORD cch)
 { DWORD n = cch * sizeof(WCHAR); out[0] = 0; return HttpQueryInfoW(h, what, out, &n, NULL); }
 
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err)
+{ return pkg_fetch(DYNAPRO_ZIP, L"Dyna Pro Dynamometers.zip", L"DownloadETag", out, cb, cancel, err); }
+
+// url into %TEMP%\DynaRunFix\<name>; resumes a partial download of the same file (its ETag is kept in etagval)
+int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err)
 {
     static WCHAR part[MAX_PATH], tag[200], oldtag[200], hdr[400], num[32];
     static BYTE buf[CHUNK];
@@ -123,12 +127,12 @@ int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err)
     LARGE_INTEGER sz; HKEY k; DWORD tn; int rc = PK_NET;
 
     *err = 0;
-    pkg_temp_dir(out); lstrcatW(out, L"\\Dyna Pro Dynamometers.zip");
+    pkg_temp_dir(out); lstrcatW(out, L"\\"); lstrcatW(out, name);
     lstrcpyW(part, out); lstrcatW(part, L".part");
     oldtag[0] = 0;
     if (!RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
         tn = sizeof(oldtag) - 2;
-        if (RegQueryValueExW(k, L"DownloadETag", NULL, NULL, (BYTE *)oldtag, &tn)) oldtag[0] = 0;
+        if (RegQueryValueExW(k, etagval, NULL, NULL, (BYTE *)oldtag, &tn)) oldtag[0] = 0;
         RegCloseKey(k);
     }
     in = InternetOpenW(L"DynaRunFix-Setup/" WIDEN(DRF_VERSION), INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -142,7 +146,7 @@ int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err)
         GetFileSizeEx(f, &sz); have = sz.LowPart;
         hdr[0] = 0;
         if (have && oldtag[0]) wsprintfW(hdr, L"Range: bytes=%lu-\r\nIf-Range: %s\r\n", have, oldtag);   // resume only the same file
-        h = InternetOpenUrlW(in, DYNAPRO_ZIP, hdr[0] ? hdr : NULL, (DWORD)-1,
+        h = InternetOpenUrlW(in, url, hdr[0] ? hdr : NULL, (DWORD)-1,
                              INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_KEEP_CONNECTION, 0);
         if (!h) { *err = GetLastError(); CloseHandle(f); rc = PK_NET; Sleep(1000); continue; }
         n = sizeof(status);
@@ -152,7 +156,7 @@ int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err)
         else SetFilePointer(f, 0, NULL, FILE_END);
         if (query_str(h, HTTP_QUERY_ETAG, tag, 200) && lstrcmpW(tag, oldtag) &&
             !RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
-            RegSetValueExW(k, L"DownloadETag", 0, REG_SZ, (const BYTE *)tag, (lstrlenW(tag) + 1) * sizeof(WCHAR));
+            RegSetValueExW(k, etagval, 0, REG_SZ, (const BYTE *)tag, (lstrlenW(tag) + 1) * sizeof(WCHAR));
             RegCloseKey(k); lstrcpyW(oldtag, tag);
         }
         total = query_str(h, HTTP_QUERY_CONTENT_LENGTH, num, 32) ? (DWORD)StrToIntW_(num) : 0;
@@ -385,6 +389,29 @@ int run_msiexec(const WCHAR *msi)
     wsprintfW(cmd, L"\"%s\" /i \"%s\" /qb! REBOOT=ReallySuppress", exe, msi);
     zero(&si, sizeof(si)); si.cb = sizeof(si);
     AllowSetForegroundWindow(ASFW_ANY);   // msiexec's progress window may come to the front
+    if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &rc);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return (int)rc;
+}
+
+// Installed DynaRun V3 (by UpgradeCode): its product code in out (39 chars), FALSE when there is none.
+BOOL dynarun_product(WCHAR *out)
+{
+    return !MsiEnumRelatedProductsW(L"" DYNARUN_UPGRADE_CODE, 0, 0, out);
+}
+
+// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; -1 = not installed.
+int remove_dynarun(void)
+{
+    static WCHAR exe[MAX_PATH], cmd[MAX_PATH + 96], prod[40];
+    STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = 1;
+    if (!dynarun_product(prod)) return -1;
+    GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
+    wsprintfW(cmd, L"\"%s\" /x %s /qb! REBOOT=ReallySuppress", exe, prod);
+    zero(&si, sizeof(si)); si.cb = sizeof(si);
+    AllowSetForegroundWindow(ASFW_ANY);
     if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &rc);

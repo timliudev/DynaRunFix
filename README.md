@@ -10,7 +10,8 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 > This project is not affiliated with or endorsed by Dyna Pro Dynamometers Ltd or THB Componentware.
 > It does not contain, modify or redistribute any of their files, and it does not touch licensing or
 > copy-protection in any way. You need your own legally installed copy of DynaRun V3, and it is up to you to
-> make sure that using this fix is consistent with your licence agreement with Dyna Pro.
+> make sure that using this fix is consistent with your licence agreement with Dyna Pro. DynaRun V3 is licensed
+> to you by Dyna Pro under their own terms; the MIT licence of this project covers only DynaRunFix.
 
 ## Symptom
 
@@ -39,11 +40,19 @@ Full analysis, message traces and the tools used: [docs/ROOT_CAUSE.md](docs/ROOT
 process only, it redirects THBRes25.dll's import of `PostMessageA` and drops the `0x591` message when it
 was triggered by a `WM_SIZE` that is identical to the previous one for the same form. That restores the
 Windows 7 behaviour; genuine size changes still go through. No file is changed; the dll only writes a
-small log, `%TEMP%\dynafix.log` (and, on the very first start, DynaRun's own language and feature settings,
+small log, `%TEMP%\dynafix.log` (every line starts with the date and time; the file is kept below 10 MB, the oldest lines are dropped first; and, on the very first start, DynaRun's own language and feature settings,
 see below). The same dll also fixes the [first-time setup](#first-time-setup) and
 [OneDrive files that will not open](#some-dpr-files-will-not-open-empty-file-run-properties-no-curves).
 
 ## What's new
+
+v1.3.0:
+- The installer can pin DynaRun to the taskbar and start it at sign-in (both on by default).
+- Updates: once a day DynaRunFix looks for a newer release and installs it on one click.
+- The first start right after installing shows the main screen correctly (before, it could be laid out too big
+  until DynaRun was started again).
+- Every log line has the date and time.
+- Known issue: after changing the screen resolution with DynaRun open, restart DynaRun.
 
 v1.2.3:
 - Nothing that changes Dyna Pro's setup is shipped any more (`tools/msi-novbs` removed).
@@ -66,8 +75,9 @@ All versions: [CHANGELOG.md](CHANGELOG.md).
    [Dyna Pro's website](https://dynapro.co.uk/Software_Release.htm) (or uses a
    DynaRun setup zip or `Setup.msi` already in *Downloads*, on the desktop, in *Documents* or next to the
    installer), asks for the **setup password you got
-   from Dyna Pro**, shows Dyna Pro's license and installs DynaRun V3 and the fix. If DynaRun V3 is already
-   installed, it only installs the fix. Windows asks once for permission: click **Yes**.
+   from Dyna Pro**, shows Dyna Pro's license and installs DynaRun V3 and the fix only after you accept it (if the
+   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead).
+   If DynaRun V3 is already installed, it only installs the fix. Windows asks once for permission: click **Yes**.
 3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
    once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
 
@@ -86,7 +96,7 @@ The setup is recognised by its content, not its file name: only an MSI whose Upg
 checked after the password has opened it. Any other file is refused with a clear message.
 
 What the installer does for the fix:
-- installs `DynaRunFix.exe`, `dynafix.dll`, `LICENSE-miniz.txt` and a copy of `DynaRunFix-Setup.exe` (the
+- installs `DynaRunFix.exe`, `dynafix.dll`, `LICENSE.txt`, `LICENSE-miniz.txt` and a copy of `DynaRunFix-Setup.exe` (the
   uninstaller) to `Program Files\DynaRunFix` (`Program Files (x86)\DynaRunFix` on 64-bit Windows);
 - points the existing DynaRun V3 shortcuts (desktop, Start menu, pinned taskbar, all users and current
   user) to the launcher, keeping their name, icon and *Run as administrator* setting; creates a desktop
@@ -99,11 +109,35 @@ What the installer does for the fix:
   (used only on a Traditional Chinese system with the UTF-8 option on, or whose FontAssoc lacks `ANSI(00)=YES`);
 - registers an uninstaller in *Programs and Features* / *Installed apps*.
 
-Uninstalling restores the original shortcut files and removes the manifest it added. The machine-wide
+Uninstalling restores the original shortcut files and removes the manifest it added; other accounts'
+shortcuts that still start the fix are pointed back at `DynaRun V3.exe`. It asks whether to remove the fix only or
+DynaRun V3 too (*Remove all* then runs Dyna Pro's own uninstaller of DynaRun V3). The machine-wide
 ActiveX registrations are kept (removing them would break elevated DynaRun again). DynaRun's own files
 and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
-`/uninstall`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit code 1 if
-it is not found).
+`/uninstall`, `/notaskbar`, `/noautostart`, `/keep`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit
+code 1 if it is not found).
+
+Two options on the first page of the wizard, both on by default (`/quiet` applies both unless switched off with
+`/notaskbar` / `/noautostart`):
+- **Pin DynaRun to the taskbar.** Windows 7 to 10 pin the launcher shortcut directly; Windows XP / Vista add it to
+  Quick Launch. Windows 11 lets no program pin itself, so the installer uses Microsoft's
+  [taskbar layout policy](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps) for the user
+  (`TaskbarLayout.xml` in the install folder; `StartLayoutFile` / `LockedStartLayout` under
+  `HKEY_USERS\<user>\Software\Policies\Microsoft\Windows\Explorer`, set by the administrator step): the icon
+  appears after the next sign-out / sign-in. If an organization has already set a layout file it is left alone,
+  and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*).
+  A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID).
+- **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+  starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes it for every account
+  (and the policy values, and the pins of the launcher, which point back at `DynaRun V3.exe`).
+
+**Updates.** Once a day, when DynaRun is started, the installed setup asks GitHub's API for the latest release
+of this repository (nothing else is sent; the launcher waits up to 5 s). When a newer one exists, it asks
+*Update now?* before DynaRun opens (after a slower answer: at the next start);
+*Yes* downloads that release's `DynaRunFix-Setup.exe` (only from `github.com/timliudev/DynaRunFix`), checks its
+SHA-256 against the one GitHub lists, installs it with `/quiet /keep` (one administrator prompt; `/keep` leaves the
+pin, the start at sign-in and the desktop shortcut as they are) and opens DynaRun. *No* asks again the next day.
+Without internet, or on Windows XP (no TLS 1.2), nothing happens.
 
 DynaRun must be closed while the fix is installed or updated: a running DynaRun keeps the old
 `dynafix.dll` (and Locale Emulator's dlls) loaded. The installer checks for a running `DynaRun V3.exe`
@@ -143,7 +177,7 @@ After a forced restart the language is English (the helper overwrites it) and th
 (the helper writes their enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
 it waits for the helper, puts the chosen language back, switches on the picked features with the same values
 *Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
-`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log`.
+`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (every line starts with the date and time, the file is kept below 10 MB, the oldest lines are dropped first).
 
 | Language | System selection (climate monitor and AFR analyser picked) | After the automatic restart |
 |---|---|---|
@@ -283,6 +317,12 @@ window; `DYNAFIX_WORKAREA=clip` only keeps the window inside the work area witho
 Status: verified on Windows 11 (1920x1080, taskbar at the bottom) and on a Windows 11 PC at 2560x1600 / 125 %,
 both through Locale Emulator. Windows XP and auto-hide / multi-monitor setups not tested yet.
 
+### DynaRun's screen looks wrong
+
+If DynaRun's screen ever looks wrong (for example after it started by itself at sign-in, while Windows was still
+setting up the desktop), close DynaRun and start it again. The start at sign-in waits until the taskbar is there and
+the screen size has not changed for 3 seconds (at most 60 s; `launcher: autostart waited ...` in `%TEMP%\dynafix.log`).
+
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
 
 Files stored in OneDrive and marked *Always keep on this device* carry the attribute `0x80000`
@@ -345,6 +385,7 @@ MIT, see [LICENSE](LICENSE).
 
 > 本專案與 Dyna Pro Dynamometers Ltd、THB Componentware 無任何關係,不包含、不修改、不散布原廠任何檔案,
 > 也完全不碰授權或防拷機制。你必須自備合法安裝的 DynaRun V3,並請自行確認使用本修正符合你與 Dyna Pro 之間的授權條款。
+> DynaRun V3 由 Dyna Pro 依其條款另行授權給你;本專案的 MIT 授權只涵蓋 DynaRunFix 本身。
 
 ### 症狀
 Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一套安裝在 XP / Win7 正常。
@@ -361,9 +402,16 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 ### 修正方式
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
-不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
+不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.3.0:
+- 安裝程式可以把 DynaRun 釘選到工作列、開機自動啟動(兩項預設勾選)。
+- 自動更新:每天檢查一次有沒有新版,按一下就安裝。
+- 裝好後第一次開 DynaRun,主畫面就正常(以前可能排得太大,要再開一次才正常)。
+- log 每行都有日期時間。
+- 已知問題:DynaRun 開著時改了螢幕解析度,請重開 DynaRun。
+
 v1.2.3:
 - 不再提供任何會修改 Dyna Pro 安裝檔的工具(移除 `tools/msi-novbs`)。
 - 安裝程式與 zip 附上 miniz 的授權(`LICENSE-miniz.txt`)。
@@ -381,7 +429,7 @@ v1.2.2:
    因為檔案沒有數位簽章，Windows SmartScreen 可能顯示「Windows 已保護您的電腦」：請按 **其他資訊 → 仍要執行**。
 2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
-   顯示 Dyna Pro 的授權合約，然後安裝 DynaRun V3 和修正。已經裝好 DynaRun V3 時，只會安裝修正。
+   顯示 Dyna Pro 的授權合約，你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。
    Windows 會詢問一次是否允許變更，請按 **是**。
 3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
    請按 **是**，DynaRun 會自己重新啟動。
@@ -399,15 +447,30 @@ DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網�
 MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案會被拒絕，並清楚告訴你原因。
 
 安裝修正時會做這些事：
-- 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
+- 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE.txt`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
 - 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱、圖示和「以系統管理員身分執行」設定都保留；沒有桌面捷徑時會建立一個；
 - 讓 DynaRun 的 ActiveX 元件在系統管理員模式下也能使用（等同 `tools/register-machine-wide.ps1`，見[下方](#以系統管理員執行卡在system-initializing-please-wait-115)）；
 - 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上[字碼頁 manifest](#開啟系統-utf-8-選項時中文亂碼)；
 - 把 [Locale Emulator](#開啟系統-utf-8-選項時中文亂碼) 放到 `DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到）；
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
-解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
-不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
+解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。系統層級的 ActiveX 註冊會保留（移除的話，以系統管理員執行 DynaRun 又會壞掉）。
+不會修改 DynaRun 本身的檔案和你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`、`/notaskbar`、`/noautostart`、`/keep`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
+
+精靈第一頁有兩個選項，預設都勾選（`/quiet` 也預設套用，可用 `/notaskbar`、`/noautostart` 關閉）：
+- **釘選到工作列。** Windows 7 到 10 直接釘選啟動器捷徑；Windows XP / Vista 放進「快速啟動」。Windows 11 不允許程式自行釘選，
+  所以安裝程式改用微軟的[工作列配置原則](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps)
+  （安裝資料夾裡的 `TaskbarLayout.xml`；系統管理員那一步會在 `HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer`
+  設定 `StartLayoutFile`／`LockedStartLayout`）：登出再登入後圖示才會出現。組織已經設定配置檔時不會去動它，
+  最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。
+  執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。
+- **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
+  取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值（以及原則值；釘選的啟動器捷徑改回指向 `DynaRun V3.exe`）。
+
+**更新。** 每天一次，開啟 DynaRun 時，安裝好的安裝程式會向 GitHub API 查詢本專案的最新版本（不會送出其他資料；啟動器最多等 5 秒）。
+有新版時，在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問）；按「是」會下載該版本的 `DynaRunFix-Setup.exe`（只從 `github.com/timliudev/DynaRunFix`），
+用 GitHub 列出的 SHA-256 核對，以 `/quiet /keep` 安裝（一次系統管理員確認；`/keep` 讓釘選、開機自動啟動和桌面捷徑維持原樣），再開啟 DynaRun。
+按「否」隔天會再問。沒有網路或 Windows XP（不支援 TLS 1.2）時什麼都不做。
 
 安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。
 安裝程式在改動任何東西之前，會先檢查是否有執行中的 `DynaRun V3.exe`（以及從安裝資料夾執行的 `DynaRunFix.exe`／`LEProc.exe`）。
@@ -433,7 +496,7 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest、`LICENS
 沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:選擇視窗不消失、CPU 一核 100%,因為 DynaRun 啟動設定程式後進入無限迴圈。
 強制重新啟動後語言變成英文(被設定程式蓋掉),選購功能也是關閉的(設定程式把啟用旗標寫成 `0`)。
 `dynafix.dll` 只在記憶體中包裝 DynaRun 的 `ShellExecuteA`:等設定程式結束、寫回選的語言、以和「工程模式 → 系統組態設定 → 存檔並離開」相同的值啟用勾選的功能,
-再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`。
+再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`(每行有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉)。
 
 | 語言 | 系統選擇(勾選大氣監測、空燃比分析儀) | 自動重新啟動後 |
 |---|---|---|
@@ -523,6 +586,12 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 *Win11,2560x1600、125%。*
 
 狀態:已在 Win11(1920x1080、工作列在底部)及 Win11 2560x1600 / 125% 的電腦上驗證,兩者都經 Locale Emulator。XP、工作列自動隱藏、多螢幕尚未測試。
+
+### DynaRun 的畫面顯示不正常
+
+如果 DynaRun 的畫面顯示不正常（例如開機登入後自動啟動、Windows 還在準備桌面時就開了），關掉 DynaRun 再開一次即可。
+登入時的自動啟動會等到工作列出現、且螢幕大小連續 3 秒沒變才啟動（最多等 60 秒；`%TEMP%\dynafix.log` 會有
+`launcher: autostart waited ...`））。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
 放在 OneDrive 且設成「永遠保留在此裝置」的檔案帶有屬性 `0x80000`(`FILE_ATTRIBUTE_PINNED`),這是 Win7/XP 沒有的屬性。

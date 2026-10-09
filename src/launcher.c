@@ -2,6 +2,7 @@
 // Usage: DynaRunFix.exe ["path\to\DynaRun V3.exe"]
 #include <windows.h>
 #include <tlhelp32.h>
+#include "version.h"
 
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
 #define LE_PROFILE  "7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a"   // zh-TW profile in le\LEConfig.xml
@@ -37,14 +38,55 @@ static BOOL is_dynarun(DWORD pid)
 // one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
 static void llog(const char *fmt, DWORD a, DWORD b)
 {
-    char path[MAX_PATH], line[200]; DWORD n; HANDLE h;
+    char path[MAX_PATH], line[1100]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
     lstrcatA(path, "\\dynafix.log");
-    wsprintfA(line, fmt, a, b);
+    GetLocalTime(&t);
+    n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    wsprintfA(line + n, fmt, a, b);
     h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     WriteFile(h, line, lstrlenA(line), &n, NULL);
     CloseHandle(h);
+}
+
+// above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (dynafix.dll does the same; whichever runs first)
+static void trim_log(void)
+{
+    HANDLE h; char path[MAX_PATH]; DWORD size, n, i; char *buf;
+    if (!GetEnvironmentVariableA("TEMP", path, MAX_PATH - 16)) return;
+    lstrcatA(path, "\\dynafix.log");
+    h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    size = GetFileSize(h, NULL);
+    if (size != INVALID_FILE_SIZE && size > 10485760 && (buf = (char *)HeapAlloc(GetProcessHeap(), 0, 8388608))) {
+        SetFilePointer(h, size - 8388608, NULL, FILE_BEGIN);
+        if (ReadFile(h, buf, 8388608, &n, NULL)) {
+            for (i = 0; i < n && buf[i] != '\n'; i++);
+            if (i < n) { i++; SetFilePointer(h, 0, NULL, FILE_BEGIN); WriteFile(h, buf + i, n - i, &n, NULL); SetEndOfFile(h); }
+        }
+        HeapFree(GetProcessHeap(), 0, buf);
+    }
+    CloseHandle(h);
+}
+
+// the log line for this start: how we were called and by whom
+static void log_start(const char *cmd)
+{
+    PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD me = GetCurrentProcessId(), pp = 0;
+    char parent[64], args[160], cwd[160], msg[700]; STARTUPINFOA st;
+    const char *how = "a plain start";
+    lstrcpyA(parent, "?"); pe.dwSize = sizeof(pe);
+    if (Process32First(s, &pe)) do { if (pe.th32ProcessID == me) pp = pe.th32ParentProcessID; } while (!pp && Process32Next(s, &pe));
+    if (pp && Process32First(s, &pe)) do { if (pe.th32ProcessID == pp) lstrcpynA(parent, pe.szExeFile, sizeof(parent)); } while (lstrcmpA(parent, "?") == 0 && Process32Next(s, &pe));
+    CloseHandle(s);
+    if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL && (!cmd[10] || cmd[10] == ' ')) how = "/autostart";
+    else if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL && (!cmd[8] || cmd[8] == ' ')) how = "/restart";
+    lstrcpynA(args, cmd, sizeof(args));
+    { volatile char *z = (volatile char *)&st; int i; for (i = 0; i < (int)sizeof(st); i++) z[i] = 0; } st.cb = sizeof(st); GetStartupInfoA(&st);
+    if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) lstrcpyA(cwd, "?");
+    wsprintfA(msg, "launcher: started pid=%u, DynaRunFix %s (%s), %s, args [%s], parent %s (pid %u), startup flags %08X show %u, cwd [%s]\r\n", me, DRF_DISPLAY, DRF_COMMIT, how, args, parent, pp, st.dwFlags, st.wShowWindow, cwd);
+    llog("%s", (DWORD)(UINT_PTR)msg, 0);
 }
 
 static void fail(const char *msg) { MessageBoxA(NULL, msg, "DynaRunFix", MB_ICONERROR); ExitProcess(1); }
@@ -132,20 +174,24 @@ static DWORD first_thread(DWORD pid)
 // made: fonts made before that (splash screen, forms loaded at start-up) would keep the old face/charset,
 // and VB's OLE fonts are cached and reused. A thread can be hooked only once it has a message queue, which
 // it gets with its first USER call (well before VB creates a window): poll from the moment it runs.
+// hd is dynafix.dll, loaded by the caller BEFORE DynaRun runs: the first load of a newly installed dll can take
+// long, and DynaRun went on meanwhile and laid its main screen out for the full screen height before dynafix
+// was there (seen only right after an install, or at the first sign-in after one).
 // Exits the launcher once the dll has reported in; returns if that did not happen.
-static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
+static void early_hook(HMODULE hd, DWORD pid, DWORD tid, HANDLE proc)
 {
-    char ev[64]; HANDLE e, hs[2]; HMODULE hd; HHOOK hk; int i;
+    char ev[64]; HANDLE e, hs[2]; HHOOK hk; int i; DWORD t0 = GetTickCount(), th;
     wsprintfA(ev, "Local\\dynafix_ready_%u", pid);
     e = CreateEventA(NULL, TRUE, FALSE, ev);
-    hd = LoadLibraryA(dll);
     for (hk = NULL, i = 0; hd && !hk && i < 5000; i++)
         if (!(hk = SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)GetProcAddress(hd, "CwpProc"), hd, tid))) Sleep(1);
     if (!hk) { llog("launcher: early hook failed (error %u) %u\r\n", GetLastError(), 0); return; }
+    th = GetTickCount() - t0;
     // the dll reports in (and keeps itself loaded) when DynaRun's first window gets a message
     hs[0] = e; hs[1] = proc;
     if (WaitForMultipleObjects(2, hs, FALSE, 60000) == WAIT_OBJECT_0) {
         llog("launcher: DynaRun pid=%u hooked from start (thread %u)\r\n", pid, tid);
+        llog("launcher: hook set %u ms after DynaRun was resumed, dll reported in after %u ms\r\n", th, GetTickCount() - t0);
         UnhookWindowsHookEx(hk);
         ExitProcess(0);
     }
@@ -153,10 +199,89 @@ static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
     llog("launcher: early hook did not report in %u %u\r\n", 0, 0);
 }
 
+static ULONGLONG now(void)
+{
+    FILETIME f; ULARGE_INTEGER u;
+    GetSystemTimeAsFileTime(&f);
+    u.LowPart = f.dwLowDateTime; u.HighPart = f.dwHighDateTime;
+    return u.QuadPart;
+}
+
+static ULONGLONG reg_time(HKEY k, const char *name)
+{
+    ULONGLONG t = 0; DWORD n = sizeof(t), type;
+    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)&t, &n) || type != REG_QWORD) t = 0;
+    return t;
+}
+
+// "DynaRunFix-Setup.exe <what> <args>" next to this launcher (the installed copy), waiting up to wait ms for it:
+// 0 when it is not there or did not start, 1 still running after wait, 2 ended
+static int run_setup(const char *what, const char *args, DWORD wait)
+{
+    char setup[MAX_PATH], line[4 * MAX_PATH], *p; STARTUPINFOA si; PROCESS_INFORMATION pi; int i, r;
+    GetModuleFileNameA(NULL, setup, MAX_PATH); p = setup + lstrlenA(setup); while (p > setup && *p != '\\') p--; lstrcpyA(p, "\\DynaRunFix-Setup.exe");
+    if (GetFileAttributesA(setup) == INVALID_FILE_ATTRIBUTES) return 0;
+    wsprintfA(line, "\"%s\" %s %s", setup, what, args);
+    { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
+    if (!CreateProcessA(setup, line, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return 0;
+    AllowSetForegroundWindow(pi.dwProcessId);
+    r = WaitForSingleObject(pi.hProcess, wait) == WAIT_OBJECT_0 ? 2 : 1;
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return r;
+}
+
+// A newer release was noted (DynaRunFix-Setup.exe /checkupdate) and DynaRun is not running: the setup asks
+// whether to update, installs it, and starts this launcher again with "/noupdate <args>".
+static void offer_update(const char *args)
+{
+    char v[64]; DWORD n = sizeof(v), type; HKEY k; BOOL due;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) return;
+    due = !RegQueryValueExA(k, "UpdateVersion", NULL, &type, (BYTE *)v, &n) && type == REG_SZ && n > 1 && now() >= reg_time(k, "UpdateAsk");
+    RegCloseKey(k);
+    if (due && run_setup("/update", args, 0)) { llog("launcher: handed over to the update %u %u\r\n", 0, 0); ExitProcess(0); }
+}
+
+// Once a day, before DynaRun starts: look for a newer release. Waits up to 5 s so that this start can already ask;
+// a slower answer (or none, offline) is left to finish in the background and is asked at the next start.
+static void check_update(void)
+{
+    HKEY k; ULONGLONG t = 0, n = now();
+    if (!RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) { t = reg_time(k, "UpdateChecked"); RegCloseKey(k); }
+    if (t <= n && n - t < 864000000000ULL) return;
+    llog("launcher: looking for an update (0 no setup, 1 still looking after 5 s, 2 done): %u %u\r\n", run_setup("/checkupdate", "", 5000), 0);
+}
+
+// "/name" at the start of *cmd: skipped, with the spaces after it
+static BOOL prefix(char **cmd, const char *name)
+{
+    int n = lstrlenA(name);
+    if (lstrlenA(*cmd) < n || ((*cmd)[n] && (*cmd)[n] != ' ') ||
+        CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, *cmd, n, name, n) != CSTR_EQUAL) return FALSE;
+    for (*cmd += n; **cmd == ' '; (*cmd)++);
+    return TRUE;
+}
+
+// Waits until Shell_TrayWnd exists and the screen size and work area have not changed for 3 s (polled every 250 ms);
+// starts anyway after 60 s.
+static void wait_desktop(void)
+{
+    DWORD t0 = GetTickCount(), still = t0, tk; int sx = 0, sy = 0, x, y; RECT wa, w0 = { 0, 0, 0, 0 };
+    for (;;) {
+        tk = GetTickCount();
+        wa.left = wa.top = wa.right = wa.bottom = 0;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
+        x = GetSystemMetrics(SM_CXSCREEN); y = GetSystemMetrics(SM_CYSCREEN);
+        if (x != sx || y != sy || !EqualRect(&wa, &w0)) { sx = x; sy = y; w0 = wa; still = tk; }
+        if ((FindWindowA("Shell_TrayWnd", NULL) && tk - still >= 3000) || tk - t0 >= 60000) break;
+        Sleep(250);
+    }
+    llog("launcher: autostart waited %u ms for the desktop (%u = gave up)\r\n", tk - t0, tk - t0 >= 60000);
+}
+
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
-    STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i;
+    STARTUPINFOA si; PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i; BOOL ask;
 
     // dynafix.dll lives next to this launcher
     GetModuleFileNameA(NULL, dll, MAX_PATH); p = dll + lstrlenA(dll); while (p > dll && *p != '\\') p--; lstrcpyA(p, "\\dynafix.dll");
@@ -164,6 +289,15 @@ void WinMainCRTStartup(void)
     cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
+    trim_log();
+    log_start(cmd);
+    ask = !prefix(&cmd, "/noupdate");   // "/noupdate" (from the setup's /update): it has just asked
+    // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
+    // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
+    if (!lstrcmpiA(cmd, "/autostart") || (cmd[0] == '/' && cmd[10] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 10, "/autostart", 10) == CSTR_EQUAL)) {
+        for (cmd += 10; *cmd == ' '; cmd++);
+        if (!running()) wait_desktop();
+    }
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
     if (!lstrcmpiA(cmd, "/restart") || (cmd[0] == '/' && cmd[8] == ' ' && CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, cmd, 8, "/restart", 8) == CSTR_EQUAL)) {
         DWORD old = 0; HANDLE h0;
@@ -171,8 +305,10 @@ void WinMainCRTStartup(void)
         while (*p >= '0' && *p <= '9') old = old * 10 + (*p++ - '0');
         if (old && (h0 = OpenProcess(SYNCHRONIZE, FALSE, old))) { WaitForSingleObject(h0, 15000); CloseHandle(h0); }
         cmd = p; while (*cmd == ' ') cmd++;
+        ask = FALSE;
     }
     args = cmd;
+    if (ask && !running()) { check_update(); offer_update(args); }
     if (*cmd == '"') { cmd++; lstrcpynA(exe, cmd, MAX_PATH); p = exe; while (*p && *p != '"') p++; *p = 0; }
     else if (*cmd) lstrcpynA(exe, cmd, MAX_PATH);
     else {
@@ -190,6 +326,11 @@ void WinMainCRTStartup(void)
         if (h) CloseHandle(h); else if (GetLastError() == ERROR_ACCESS_DENIED) elevate(args);
     } else {
         { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
+        {   // before DynaRun runs (see early_hook)
+            DWORD t0 = GetTickCount();
+            hd = LoadLibraryA(dll);
+            llog("launcher: dynafix.dll loaded in %u ms (error %u)\r\n", GetTickCount() - t0, hd ? 0 : GetLastError());
+        }
         // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
         // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
         // Only for a Traditional Chinese system locale (legacy code page 950): the LE profile is zh-TW.
@@ -239,7 +380,7 @@ void WinMainCRTStartup(void)
             {
                 DWORD tid = g_first; HANDLE h0 = OpenProcess(SYNCHRONIZE, FALSE, g_pid);
                 for (i = 0; i < 1000 && !tid && !(tid = first_thread(g_pid)); i++) Sleep(1);
-                if (tid && h0) early_hook(dll, g_pid, tid, h0);
+                if (tid && h0) early_hook(hd, g_pid, tid, h0);
                 if (h0) CloseHandle(h0);
             }
         } else {
@@ -251,7 +392,7 @@ void WinMainCRTStartup(void)
             g_pid = pi.dwProcessId;
             // Without the early hook the dll is attached once the first window shows up.
             ResumeThread(pi.hThread);
-            early_hook(dll, g_pid, pi.dwThreadId, pi.hProcess);
+            early_hook(hd, g_pid, pi.dwThreadId, pi.hProcess);
             WaitForInputIdle(pi.hProcess, 30000);
             CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         }

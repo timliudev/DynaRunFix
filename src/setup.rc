@@ -10,6 +10,8 @@
 3 RCDATA "manifest\DynaRun V3.exe.manifest"
 // miniz (MIT) is linked into this installer; its notice -> InstallDir\LICENSE-miniz.txt
 4 RCDATA "third_party\\miniz\\LICENSE"
+// DynaRunFix's own licence (MIT, with its warranty disclaimer) -> InstallDir\LICENSE.txt
+5 RCDATA "LICENSE"
 
 // Locale Emulator (LGPL-3.0, unmodified; fetched into build\le by tools\fetch-le.ps1) -> InstallDir\le
 10 RCDATA "build\\le\\LEProc.exe"

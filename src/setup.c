@@ -5,7 +5,13 @@
 //   DynaRunFix-Setup.exe /quiet               install the fix only, no UI (DynaRun must be installed);
 //                                             exit code 6 (RC_RUNNING), nothing changed, while DynaRun runs;
 //   DynaRunFix-Setup.exe /quiet /close        the same, but closes a running DynaRun first
+//   /notaskbar, /noautostart                  with any install: do not pin DynaRun to the taskbar /
+//                                             do not start it when the user signs in (both are on by default,
+//                                             also with /quiet; the wizard's first page has the two check boxes)
+//   /keep                                     with any install: leave the taskbar pin, the sign-in start and the
+//                                             desktop shortcut as they are (an update, see update.c)
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
+//   DynaRunFix-Setup.exe /checkupdate         /update <args>: the installed copy, run by the launcher (update.c)
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
 // administrator's credentials are typed into the UAC prompt:
@@ -14,11 +20,15 @@
 //     registrations of that user to HKLM (tools/register-machine-wide.ps1 in C), adds the
 //     code-page manifest when the system ANSI code page is UTF-8, puts Locale Emulator in le\ (the
 //     launcher uses it only with the UTF-8 option on a zh-TW system), retargets all-users shortcuts,
-//     registers the uninstaller.
+//     registers the uninstaller; on Windows 11 the taskbar pin (Microsoft's taskbar layout policy for the
+//     user, needs admin; "/pin" in the arguments).
 //   user stage (not elevated): retargets the user's DynaRun shortcuts to the launcher (the original
 //     .lnk bytes are kept in the registry and put back on uninstall); creates a desktop shortcut
-//     when there is none.
-// The machine-wide COM keys are kept on uninstall: removing them would break elevated DynaRun again.
+//     when there is none; pins DynaRun to the taskbar (per Windows version, see pin_taskbar); the
+//     "Run" value that starts it at sign-in.
+// Uninstall puts back this user's and the all-users shortcuts from the backups and points other accounts'
+// shortcuts that still start the launcher back at DynaRun V3.exe. The machine-wide COM keys are kept:
+// removing them would break elevated DynaRun again.
 #define COBJMACROS
 #include <windows.h>
 #include <shlobj.h>
@@ -38,6 +48,20 @@
 
 static const WCHAR APPKEY[] = L"SOFTWARE\\DynaRunFix";
 static const WCHAR USERKEY[] = L"Software\\DynaRunFix";
+static const WCHAR RUNKEY[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+static const WCHAR POLKEY[] = L"Software\\Policies\\Microsoft\\Windows\\Explorer";
+static const WCHAR APPID[] = L"DynaRunFix.DynaRunV3";           // AppUserModelID of the launcher shortcuts and of DynaRun (dynafix.c)
+static const PROPERTYKEY PKEY_AUMID = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5 };
+// technique from Firefox's PinToTaskbar plugin (MPL 2.0; Gee Law): the undocumented IPinnedList3 of Explorer's taskband
+static const GUID CLSID_TaskbandPin = { 0x90aa3a4e, 0x1cba, 0x4233, { 0xb8, 0xbb, 0x53, 0x57, 0x73, 0xd4, 0x84, 0x49 } };
+static const GUID IID_IPinnedList3 = { 0x0dd79ae2, 0xd156, 0x45d4, { 0x9e, 0xeb, 0x3b, 0x54, 0x97, 0x69, 0xe9, 0x40 } };
+typedef struct IPinnedList3 { const struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(struct IPinnedList3 *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(struct IPinnedList3 *);
+    ULONG (STDMETHODCALLTYPE *Release)(struct IPinnedList3 *);
+    void *others[13];
+    HRESULT (STDMETHODCALLTYPE *Modify)(struct IPinnedList3 *, PCIDLIST_ABSOLUTE unpin, PCIDLIST_ABSOLUTE pin, int caller);
+} *lpVtbl; } IPinnedList3;
 static const WCHAR UNINSTKEY[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DynaRunFix";
 static const WCHAR DYNARUN_REL[] = L"\\Dyna Pro Dynamometers\\DynaRun V3.exe";
 static const WCHAR *COM_FILES[] = {
@@ -45,7 +69,8 @@ static const WCHAR *COM_FILES[] = {
     L"filev090.ocx", L"mscomctl.ocx", L"mscomm32.ocx", L"msdatgrd.ocx", L"msflxgrd.ocx", L"mshflxgd.ocx",
     L"numled.ocx", L"pesgo32e.ocx", L"richtx32.ocx", L"shcmb090.ocx", L"tabctl32.ocx", L"thbres25.dll" };
 
-BOOL g_zh, g_quiet, g_close;
+BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE, g_keep;
+int g_pinresult;
 HWND g_hwnd;
 WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define TITLE T(L"DynaRunFix Setup", L"DynaRunFix 安裝程式")
@@ -194,6 +219,25 @@ static DWORD reg_str(HKEY root, const WCHAR *path, const WCHAR *name, WCHAR *out
 static void set_str(HKEY k, const WCHAR *name, const WCHAR *v)
 { RegSetValueExW(k, name, 0, REG_SZ, (const BYTE *)v, (lstrlenW(v) + 1) * sizeof(WCHAR)); }
 static void set_dword(HKEY k, const WCHAR *name, DWORD v) { RegSetValueExW(k, name, 0, REG_DWORD, (const BYTE *)&v, 4); }
+
+static BOOL contains_i(const WCHAR *s, const WCHAR *sub)
+{
+    int n = lstrlenW(sub);
+    for (; lstrlenW(s) >= n; s++) if (CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, s, n, sub, n) == CSTR_EQUAL) return TRUE;
+    return FALSE;
+}
+
+// The real Windows version (GetVersion lies to programs without a matching manifest).
+static void os_ver(DWORD *major, DWORD *minor, DWORD *build)
+{
+    typedef LONG (WINAPI *RtlGetVersion_t)(OSVERSIONINFOW *);
+    RtlGetVersion_t f = (RtlGetVersion_t)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"); OSVERSIONINFOW v;
+    zero(&v, sizeof(v)); v.dwOSVersionInfoSize = sizeof(v);
+    if (f) f(&v);
+    *major = v.dwMajorVersion; *minor = v.dwMinorVersion; *build = v.dwBuildNumber;
+}
+
+DWORD os_build(void) { DWORD a, b, c; os_ver(&a, &b, &c); return c; }
 
 /* ---------- paths ---------- */
 
@@ -445,15 +489,29 @@ static int classify(const WCHAR *p)
     return r;
 }
 
-static BOOL save_link(const WCHAR *p, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
+// Windows 7+: an explicit AppUserModelID on the launcher shortcuts, so that a running DynaRun (same ID, set by
+// dynafix.dll) groups under the pinned icon; other targets get none.
+static void set_appid(IShellLinkW *sl, const WCHAR *id)
+{
+    IPropertyStore *ps; PROPVARIANT pv; DWORD ma, mi, b;
+    os_ver(&ma, &mi, &b);
+    if (ma < 6 || (ma == 6 && mi < 1) || FAILED(IShellLinkW_QueryInterface(sl, &IID_IPropertyStore, (void **)&ps))) return;
+    zero(&pv, sizeof(pv));
+    if (id) { pv.vt = VT_LPWSTR; pv.pwszVal = (LPWSTR)id; }                 // VT_EMPTY removes it
+    if (SUCCEEDED(IPropertyStore_SetValue(ps, &PKEY_AUMID, &pv))) IPropertyStore_Commit(ps);
+    IPropertyStore_Release(ps);
+}
+
+static BOOL save_link(const WCHAR *p, const WCHAR *target, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
 {
     IShellLinkW *sl; IPersistFile *pf; IShellLinkDataList *dl; WCHAR wd[MAX_PATH], *e; HRESULT hr = E_FAIL; DWORD fl;
     if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) return FALSE;
     lstrcpyW(wd, g_exe); for (e = wd + lstrlenW(wd); e > wd && *e != '\\'; e--); *e = 0;
-    IShellLinkW_SetPath(sl, g_launcher);
+    IShellLinkW_SetPath(sl, target);
     IShellLinkW_SetWorkingDirectory(sl, wd);
     IShellLinkW_SetIconLocation(sl, icon, idx);
-    IShellLinkW_SetDescription(sl, L"DynaRun V3 (DynaRunFix)");
+    if (target == g_launcher) IShellLinkW_SetDescription(sl, L"DynaRun V3 (DynaRunFix)");
+    set_appid(sl, target == g_launcher ? APPID : NULL);
     if (hotkey) IShellLinkW_SetHotkey(sl, hotkey);
     if (show) IShellLinkW_SetShowCmd(sl, show);
     if (runas && SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IShellLinkDataList, (void **)&dl))) {
@@ -465,13 +523,12 @@ static BOOL save_link(const WCHAR *p, const WCHAR *icon, int idx, WORD hotkey, i
     return SUCCEEDED(hr);
 }
 
-// Points an existing DynaRun shortcut at the launcher; keeps its name, icon, hotkey and
-// "Run as administrator" flag. The original file is saved in <backup>\Shortcuts.
-static void retarget(const WCHAR *p, HKEY backup)
+// Points shortcut p at target; keeps its name, icon, hotkey and "Run as administrator" flag.
+static BOOL relink(const WCHAR *p, const WCHAR *target)
 {
     IShellLinkW *sl = load_link(p); IShellLinkDataList *dl; WCHAR icon[MAX_PATH]; int idx = 0, show = 0;
-    WORD hotkey = 0; DWORD fl = 0, n; void *orig;
-    if (!sl) return;
+    WORD hotkey = 0; DWORD fl = 0;
+    if (!sl) return FALSE;
     icon[0] = 0;
     IShellLinkW_GetIconLocation(sl, icon, MAX_PATH, &idx);
     IShellLinkW_GetHotkey(sl, &hotkey);
@@ -479,8 +536,15 @@ static void retarget(const WCHAR *p, HKEY backup)
     if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IShellLinkDataList, (void **)&dl))) { IShellLinkDataList_GetFlags(dl, &fl); IShellLinkDataList_Release(dl); }
     IShellLinkW_Release(sl);
     if (!icon[0]) { lstrcpyW(icon, g_exe); idx = 0; }
-    if (!(orig = read_file(p, &n))) return;
-    if (!RegSetValueExW(backup, p, 0, REG_BINARY, orig, n)) save_link(p, icon, idx, hotkey, show, (fl & SLDF_RUNAS_USER) != 0);
+    return save_link(p, target, icon, idx, hotkey, show, (fl & SLDF_RUNAS_USER) != 0);
+}
+
+// Points an existing DynaRun shortcut at the launcher. The original file is saved in <backup>\Shortcuts.
+static void retarget(const WCHAR *p, HKEY backup)
+{
+    DWORD n; void *orig = read_file(p, &n);
+    if (!orig) return;
+    if (!RegSetValueExW(backup, p, 0, REG_BINARY, orig, n)) relink(p, g_launcher);
     release(orig);
 }
 
@@ -505,11 +569,31 @@ static int scan(const WCHAR *dir, BOOL recurse, HKEY backup)   // returns number
     return found;
 }
 
+static BOOL find_ours(const WCHAR *dir, BOOL recurse, WCHAR *out)    // the first shortcut of ours below dir
+{
+    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; WCHAR *ext; BOOL r = FALSE;
+    if (!p) return FALSE;
+    f = FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
+    if (f != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            cat3(p, dir, L"\\", fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) r = find_ours(p, TRUE, out); continue; }
+            ext = p + lstrlenW(p) - 4;
+            if (ext >= p && !lstrcmpiW(ext, L".lnk") && classify(p) == LNK_OURS) { lstrcpyW(out, p); r = TRUE; }
+        } while (!r && FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+    release(p);
+    return r;
+}
+
 static int fix_shortcuts(BOOL common, HKEY backup)
 {
-    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_PROGRAMS, CSIDL_APPDATA },
-                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_PROGRAMS };
-    WCHAR d[MAX_PATH]; int i, desk = 0, n = common ? 2 : 3, csidl;
+    // the Start menu root (not just Programs): some DynaRun installs put their shortcut there
+    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_PROGRAMS, CSIDL_APPDATA },
+                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_STARTMENU, CSIDL_COMMON_PROGRAMS };
+    WCHAR d[MAX_PATH]; int i, desk = 0, n = common ? 3 : 4, csidl;
     HMODULE msi = LoadLibraryW(L"msi.dll");
     if (msi) {
         pMsiGetShortcutTarget = (MsiGetShortcutTargetW_t)GetProcAddress(msi, "MsiGetShortcutTargetW");
@@ -520,7 +604,8 @@ static int fix_shortcuts(BOOL common, HKEY backup)
         csidl = common ? all[i] : user[i];
         if (!SHGetSpecialFolderPathW(NULL, d, csidl, FALSE)) continue;
         if (csidl == CSIDL_APPDATA) lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");  // incl. pinned taskbar items
-        if (i == 0) desk = scan(d, FALSE, backup); else scan(d, TRUE, backup);
+        if (i == 0) desk = scan(d, FALSE, backup);
+        else scan(d, csidl != CSIDL_STARTMENU && csidl != CSIDL_COMMON_STARTMENU, backup);  // Programs is scanned on its own
     }
     return desk;
 }
@@ -541,6 +626,268 @@ static void restore_shortcuts(HKEY root, const WCHAR *key)
     RegDeleteKeyW(root, sub);
 }
 
+// Uninstall, other accounts: their backups are in their own HKCU, so their shortcuts that still start
+// the launcher (which is about to be deleted) are pointed back at DynaRun V3.exe instead. Only files that
+// are our shortcuts are rewritten, so a folder read from another user's registry can do no harm; reparse
+// points (junctions) are not followed.
+static void unretarget(const WCHAR *dir, BOOL recurse)
+{
+    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; WCHAR *ext;
+    if (!p) return;
+    f = FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
+    if (f != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            cat3(p, dir, L"\\", fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) unretarget(p, TRUE); continue; }
+            ext = p + lstrlenW(p) - 4;
+            if (ext >= p && !lstrcmpiW(ext, L".lnk") && classify(p) == LNK_OURS) relink(p, g_exe);
+        } while (FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+    release(p);
+}
+
+/* ---------- taskbar pin and sign-in start ---------- */
+
+static void drop_run(HKEY hive, BOOL only_ours)     // the "Run" value; of other accounts only when it starts our launcher
+{
+    static WCHAR v[MAX_PATH]; HKEY k;
+    if (only_ours && !(reg_str(hive, RUNKEY, L"DynaRunFix", v, MAX_PATH, 0) && contains_i(v, g_launcher))) return;
+    if (!RegOpenKeyExW(hive, RUNKEY, 0, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, L"DynaRunFix"); RegCloseKey(k); }
+}
+
+static WCHAR *layout_xml(WCHAR *out) { return cat3(out, g_dir, L"\\TaskbarLayout.xml", NULL); }
+
+static void drop_policy(HKEY hive)                  // the Windows 11 taskbar layout policy, when it is still ours
+{
+    static WCHAR v[MAX_PATH], x[MAX_PATH]; HKEY k;
+    if (reg_str(hive, POLKEY, L"StartLayoutFile", v, MAX_PATH, 0) && !lstrcmpiW(v, layout_xml(x)) &&
+        !RegOpenKeyExW(hive, POLKEY, 0, KEY_SET_VALUE, &k)) {
+        RegDeleteValueW(k, L"StartLayoutFile"); RegDeleteValueW(k, L"LockedStartLayout"); RegCloseKey(k);
+    }
+}
+
+static const WCHAR XML_HEAD[] =
+    L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    L"<LayoutModificationTemplate xmlns=\"http://schemas.microsoft.com/Start/2014/LayoutModification\" "
+    L"xmlns:defaultlayout=\"http://schemas.microsoft.com/Start/2014/FullDefaultLayout\" "
+    L"xmlns:start=\"http://schemas.microsoft.com/Start/2014/StartLayout\" "
+    L"xmlns:taskbar=\"http://schemas.microsoft.com/Start/2014/TaskbarLayout\" Version=\"1\">\n"
+    L"  <CustomTaskbarLayoutCollection>\n    <defaultlayout:TaskbarLayout>\n      <taskbar:TaskbarPinList>\n"
+    L"        <taskbar:DesktopApp DesktopApplicationLinkPath=\"";
+
+// Windows 11 (elevated stage): no program may pin itself any more; Microsoft's taskbar layout policy
+// (learn.microsoft.com/windows/configuration/taskbar/pinned-apps) adds the pin at the user's next sign-in.
+// The policy is left alone when an organization has already set a layout file.
+static void taskbar_policy(const WCHAR *sid, HKEY app)
+{
+    static WCHAR x[MAX_PATH], l[MAX_PATH], xml[2400], path[300], v[MAX_PATH]; static char u[7200];
+    DWORD ma, mi, b, ubr = 0, n = 4; HKEY k; BOOL gen;
+    os_ver(&ma, &mi, &b);
+    if (g_keep) return;
+    if (!g_pin) {                                       // reinstalled without the pin: take our policy back
+        if (reg_str(app, NULL, L"TaskbarPolicySid", v, MAX_PATH, 0) && !RegOpenKeyExW(HKEY_USERS, v, 0, KEY_READ | KEY_WRITE, &k)) { drop_policy(k); RegCloseKey(k); }
+        RegDeleteValueW(app, L"TaskbarPolicy"); RegDeleteValueW(app, L"TaskbarPolicySid");
+        return;
+    }
+    if (ma < 10 || b < 22000) return;
+    cat3(path, sid, L"\\", POLKEY);
+    layout_xml(x);
+    if (reg_str(HKEY_USERS, path, L"StartLayoutFile", v, MAX_PATH, 0) && lstrcmpiW(v, x)) return;
+    if (!save_link(cat3(l, g_dir, L"\\DynaRun V3.lnk", NULL), g_launcher, g_exe, 0, 0, 0, FALSE)) return;
+    if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_QUERY_VALUE | WOW, &k)) {
+        RegQueryValueExW(k, L"UBR", NULL, NULL, (BYTE *)&ubr, &n); RegCloseKey(k);
+    }
+    // PinGeneration only on builds that know it: elsewhere it makes Windows ignore the pin
+    gen = b >= 26200 || (b == 26100 && ubr >= 4484) || (b == 22631 && ubr >= 5549);
+    lstrcpyW(xml, XML_HEAD); lstrcatW(xml, l);
+    lstrcatW(xml, gen ? L"\" PinGeneration=\"1\"/>\n" : L"\"/>\n");
+    lstrcatW(xml, L"      </taskbar:TaskbarPinList>\n    </defaultlayout:TaskbarLayout>\n  </CustomTaskbarLayoutCollection>\n</LayoutModificationTemplate>\n");
+    n = WideCharToMultiByte(CP_UTF8, 0, xml, -1, u, sizeof(u), NULL, NULL);
+    if (!n || !write_file(x, u, n - 1)) return;
+    if (RegCreateKeyExW(HKEY_USERS, path, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return;
+    RegSetValueExW(k, L"StartLayoutFile", 0, REG_EXPAND_SZ, (const BYTE *)x, (lstrlenW(x) + 1) * sizeof(WCHAR));
+    set_dword(k, L"LockedStartLayout", 1);
+    RegCloseKey(k);
+    set_dword(app, L"TaskbarPolicy", 1); set_str(app, L"TaskbarPolicySid", sid);
+}
+
+static BOOL pinned_ours(void)       // a shortcut to the launcher among the taskbar's pinned items (Windows 7+)
+{
+    static WCHAR d[MAX_PATH], f[MAX_PATH];
+    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
+    lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar");
+    return find_ours(d, FALSE, f);
+}
+
+static BOOL wait_pinned(void)       // Explorer writes the shortcut a moment after the call returned
+{
+    int i;
+    for (i = 0; i < 30; i++) { if (pinned_ours()) return TRUE; Sleep(100); }
+    return FALSE;
+}
+
+typedef HRESULT (WINAPI *SHParseDisplayName_t)(PCWSTR, IBindCtx *, PIDLIST_ABSOLUTE *, ULONG, ULONG *);
+typedef HRESULT (WINAPI *SHBindToParent_t)(PCIDLIST_ABSOLUTE, REFIID, void **, PCUITEMID_CHILD *);
+
+static PIDLIST_ABSOLUTE item_id(const WCHAR *p)     // not on XP's shell32: looked up
+{
+    SHParseDisplayName_t f = (SHParseDisplayName_t)GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SHParseDisplayName"); PIDLIST_ABSOLUTE id = NULL;
+    if (!f || FAILED(f(p, NULL, &id, 0, NULL))) return NULL;
+    return id;
+}
+
+static BOOL pin_verb(const WCHAR *lnk)              // Windows 7 .. Windows 10 1803: the shell's "Pin to taskbar" verb
+{
+    SHBindToParent_t bind = (SHBindToParent_t)GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SHBindToParent");
+    PIDLIST_ABSOLUTE id = item_id(lnk); IShellFolder *sf; PCUITEMID_CHILD ch; IContextMenu *cm; HMENU m; CMINVOKECOMMANDINFO ci; BOOL r = FALSE;
+    if (id && bind && SUCCEEDED(bind(id, &IID_IShellFolder, (void **)&sf, &ch))) {
+        if (SUCCEEDED(IShellFolder_GetUIObjectOf(sf, NULL, 1, &ch, &IID_IContextMenu, NULL, (void **)&cm))) {
+            m = CreatePopupMenu();
+            if (SUCCEEDED(IContextMenu_QueryContextMenu(cm, m, 0, 1, 0x7fff, CMF_NORMAL))) {
+                zero(&ci, sizeof(ci)); ci.cbSize = sizeof(ci); ci.lpVerb = "taskbarpin"; ci.nShow = SW_HIDE;
+                r = SUCCEEDED(IContextMenu_InvokeCommand(cm, &ci));
+            }
+            DestroyMenu(m); IContextMenu_Release(cm);
+        }
+        IShellFolder_Release(sf);
+    }
+    CoTaskMemFree(id);
+    return r;
+}
+
+static BOOL pin_list(const WCHAR *lnk)              // Windows 10 1809 and later: Explorer's IPinnedList3
+{
+    IPinnedList3 *pl; PIDLIST_ABSOLUTE id = item_id(lnk); BOOL r = FALSE;
+    if (id && SUCCEEDED(CoCreateInstance(&CLSID_TaskbandPin, NULL, CLSCTX_INPROC_SERVER, &IID_IPinnedList3, (void **)&pl))) {
+        r = SUCCEEDED(pl->lpVtbl->Modify(pl, NULL, id, 0x7fffffff));
+        pl->lpVtbl->Release(pl);
+    }
+    CoTaskMemFree(id);
+    return r;
+}
+
+// Pins DynaRun (the shortcut lnk, which starts the launcher) to the taskbar of the current user. TRUE: done, or
+// on Windows 11 under way (g_pinresult 2: the policy set by the machine stage applies at the next sign-in).
+static BOOL pin_taskbar(const WCHAR *lnk)
+{
+    static WCHAR d[MAX_PATH], v[MAX_PATH], sub[64]; DWORD ma, mi, b; HKEY k;
+    os_ver(&ma, &mi, &b);
+    if (ma == 5 || (ma == 6 && !mi)) {                  // XP, Vista: the Quick Launch toolbar
+        if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
+        lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");
+        CreateDirectoryW(d, NULL);
+        if (!save_link(lstrcatW(d, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
+        if (!RegOpenKeyExW(HKEY_CURRENT_USER, cat3(sub, USERKEY, L"\\Shortcuts", NULL), 0, KEY_SET_VALUE, &k)) {
+            RegSetValueExW(k, d, 0, REG_BINARY, (const BYTE *)"", 0);       // a shortcut we created: uninstall deletes it
+            RegCloseKey(k);
+        }
+        return TRUE;
+    }
+    if (ma >= 10 && b >= 22000) {                       // Windows 11: see taskbar_policy
+        if (reg_str(HKEY_CURRENT_USER, POLKEY, L"StartLayoutFile", v, MAX_PATH, 0) && !lstrcmpiW(v, layout_xml(d))) g_pinresult = 2;
+        return g_pinresult == 2;
+    }
+    if (pinned_ours()) return TRUE;
+    if (ma >= 10 && b >= 17763) pin_list(lnk); else pin_verb(lnk);
+    return wait_pinned();
+}
+
+static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to pin: desktop, Start menu, else a new one
+{
+    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
+    WCHAR d[MAX_PATH]; int i;
+    for (i = 0; i < 4; i++)
+        if (SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, out)) return TRUE;
+    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
+    lstrcatW(d, L"\\DynaRunFix"); CreateDirectoryW(d, NULL);
+    if (!save_link(cat3(out, d, L"\\DynaRun V3.lnk", NULL), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
+    RegSetValueExW(backup, out, 0, REG_BINARY, (const BYTE *)"", 0);
+    return TRUE;
+}
+
+// The wizard's "Start DynaRun": started the way a double click on the shortcut does it (the shortcut gives the
+// process the AppUserModelID that groups it with the pinned icon, its working folder and show command), not by
+// running the launcher directly. Falls back to the launcher with DynaRun's folder as working directory.
+void start_dynarun(void)
+{
+    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
+    static WCHAR lnk[MAX_PATH], dir[MAX_PATH], d[MAX_PATH];
+    int i; WCHAR *q; BOOL have = FALSE;
+    for (i = 0; i < 4 && !have; i++)
+        have = SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, lnk);
+    if (!have && exists(cat3(lnk, g_dir, L"\\DynaRun V3.lnk", NULL))) have = TRUE;
+    if (have) { ShellExecuteW(g_hwnd, NULL, lnk, NULL, NULL, SW_SHOWNORMAL); return; }
+    lstrcpyW(dir, g_exe); q = dir + lstrlenW(dir); while (q > dir && *q != '\\') q--; *q = 0;
+    ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, dir[0] ? dir : NULL, SW_SHOWNORMAL);
+}
+
+static BOOL enable_privilege(const WCHAR *name)
+{
+    HANDLE t; TOKEN_PRIVILEGES tp; BOOL r = FALSE;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &t)) return FALSE;
+    tp.PrivilegeCount = 1; tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(NULL, name, &tp.Privileges[0].Luid))
+        r = AdjustTokenPrivileges(t, FALSE, &tp, 0, NULL, NULL) && GetLastError() == ERROR_SUCCESS;
+    CloseHandle(t);
+    return r;
+}
+
+// One of the user's shell folders, from their registry (redirected or localized folders, e.g. XP's
+// "「開始」功能表"); <profile>\<def> when it is not set.
+static void user_folder(HKEY hive, const WCHAR *profile, const WCHAR *name, const WCHAR *def, WCHAR *out)
+{
+    static WCHAR v[MAX_PATH], t[MAX_PATH];
+    if (hive && reg_str(hive, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders", name, v, MAX_PATH, 0)) {
+        if (!lstrcmpiW(lstrcpynW(t, v, 14), L"%USERPROFILE%")) cat3(t, profile, v + 13, NULL);   // that user's, not ours
+        else lstrcpyW(t, v);
+        if (ExpandEnvironmentStringsW(t, out, MAX_PATH) - 1 < MAX_PATH) return;
+    }
+    cat3(out, profile, L"\\", def);
+}
+
+static void unretarget_user(const WCHAR *sid, const WCHAR *profile)
+{
+    static const WCHAR TMPHIVE[] = L"DynaRunFix-uninstall";
+    static WCHAR p[MAX_PATH + 16], sub[300]; HKEY hive = NULL; BOOL loaded = FALSE;
+    if (RegOpenKeyExW(HKEY_USERS, sid, 0, KEY_READ | KEY_WRITE, &hive)) {          // not signed in: load their hive
+        hive = NULL;
+        if (!RegLoadKeyW(HKEY_USERS, TMPHIVE, cat3(p, profile, L"\\NTUSER.DAT", NULL)) &&
+            !RegOpenKeyExW(HKEY_USERS, TMPHIVE, 0, KEY_READ | KEY_WRITE, &hive)) loaded = TRUE;
+        else hive = NULL;
+    }
+    user_folder(hive, profile, L"Desktop", L"Desktop", p);                          unretarget(p, FALSE);
+    user_folder(hive, profile, L"Start Menu", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu", p); unretarget(p, FALSE);
+    user_folder(hive, profile, L"Programs", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs", p); unretarget(p, TRUE);
+    user_folder(hive, profile, L"AppData", L"AppData\\Roaming", p);
+    lstrcatW(p, L"\\Microsoft\\Internet Explorer\\Quick Launch");                   unretarget(p, TRUE);
+    if (hive) {
+        drop_run(hive, TRUE); drop_policy(hive);                                    // start at sign-in, Windows 11 pin
+        // their backups are of no use any more
+        RegDeleteKeyW(hive, cat3(sub, USERKEY, L"\\Shortcuts", NULL));
+        RegDeleteKeyW(hive, USERKEY);
+        RegCloseKey(hive);
+    }
+    if (loaded) RegUnLoadKeyW(HKEY_USERS, TMPHIVE);
+}
+
+static void unretarget_all_users(void)
+{
+    static const WCHAR LIST[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
+    static WCHAR sid[200], key[300], raw[MAX_PATH], profile[MAX_PATH]; HKEY k; DWORD i, n;
+    enable_privilege(L"SeRestorePrivilege"); enable_privilege(L"SeBackupPrivilege");   // to load the hives of users not signed in
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, LIST, 0, KEY_READ, &k)) return;
+    for (i = 0; n = 200, !RegEnumKeyExW(k, i, sid, &n, NULL, NULL, NULL, NULL); i++) {
+        // people (local, domain, Microsoft Entra), not service accounts
+        if (lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-5-21") && lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-12-1")) continue;
+        if (!reg_str(HKEY_LOCAL_MACHINE, cat3(key, LIST, L"\\", sid), L"ProfileImagePath", raw, MAX_PATH, 0)) continue;
+        if (ExpandEnvironmentStringsW(raw, profile, MAX_PATH) - 1 >= MAX_PATH || !exists(profile)) continue;
+        unretarget_user(sid, profile);
+    }
+    RegCloseKey(k);
+}
+
 /* ---------- stages ---------- */
 
 static int machine_install(const WCHAR *sid)
@@ -551,7 +898,7 @@ static int machine_install(const WCHAR *sid)
     if (running_programs()) return RC_RUNNING;          // checked again here: DynaRun may have been started since
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
-        !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL))) {
+        !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL)) || !extract(5, cat3(p, g_dir, L"\\LICENSE.txt", NULL))) {
         error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
         return 1;
     }
@@ -584,15 +931,16 @@ static int machine_install(const WCHAR *sid)
     }
 
     { HKEY b; if (!RegCreateKeyExW(k, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) { fix_shortcuts(TRUE, b); RegCloseKey(b); } }
+    taskbar_policy(sid, k);
     RegCloseKey(k);
 
     if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, UNINSTKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
         set_str(k, L"DisplayName", L"DynaRunFix");
-        set_str(k, L"DisplayVersion", WIDEN(DRF_VERSION));
+        set_str(k, L"DisplayVersion", WIDEN(DRF_DISPLAY));
         set_str(k, L"Publisher", L"DynaRunFix (github.com/timliudev/DynaRunFix)");
         set_str(k, L"URLInfoAbout", L"https://github.com/timliudev/DynaRunFix");
         set_str(k, L"InstallLocation", g_dir);
-        cat3(p, g_exe, L",0", NULL); set_str(k, L"DisplayIcon", p);
+        cat3(p, g_dir, L"\\DynaRunFix-Setup.exe,0", NULL); set_str(k, L"DisplayIcon", p);   // our icon, not DynaRun's
         cat3(p, L"\"", g_dir, L"\\DynaRunFix-Setup.exe\" /uninstall"); set_str(k, L"UninstallString", p);
         set_dword(k, L"NoModify", 1); set_dword(k, L"NoRepair", 1); set_dword(k, L"EstimatedSize", 100);
         RegCloseKey(k);
@@ -614,6 +962,7 @@ static int machine_uninstall(void)
 {
     static WCHAR p[MAX_PATH + 16]; HKEY k; DWORD man = 0, n = 4;
     restore_shortcuts(HKEY_LOCAL_MACHINE, APPKEY);
+    unretarget_all_users();
     if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, KEY_READ, &k)) { RegQueryValueExW(k, L"ManifestInstalled", NULL, NULL, (BYTE *)&man, &n); RegCloseKey(k); }
     if (man == 1 && DeleteFileW(cat3(p, g_exe, L".manifest", NULL))) touch(g_exe);
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, APPKEY);
@@ -628,6 +977,8 @@ static int run_elevated(const WCHAR *args)
 {
     SHELLEXECUTEINFOW se; DWORD rc = 1, err; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = g_self;
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
+    if (g_pin) lstrcatW(a, L" /pin");                // the elevated stage sets up the Windows 11 pin
+    if (g_keep) lstrcatW(a, L" /keep");
     // Mapped network drives (e.g. a VM's shared folder) do not exist for the elevated process: run a copy in %TEMP%
     lstrcpynW(root, g_self, 4);
     if (root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && GetTempPathW(MAX_PATH - 40, tmp)) {
@@ -678,17 +1029,29 @@ static int machine_full(const WCHAR *sid, const WCHAR *msi)
 static void user_stage(void)
 {
     static WCHAR p[MAX_PATH]; HKEY b, s;
+    g_pinresult = 0;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) return;
+    // another version is installed now: what update.c noted no longer applies; the first start of DynaRun looks again
+    RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
         int desk = fix_shortcuts(FALSE, s);
         if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-        if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
-            save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_exe, 0, 0, 0, FALSE))
+        if (!desk && !g_keep && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
+            save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
+        if (g_pin && !g_keep) {
+            g_pinresult = 3;
+            if (desktop_link(p, s) && pin_taskbar(p) && g_pinresult == 3) g_pinresult = 1;
+        }
         RegCloseKey(s);
     }
     RegCloseKey(b);
+    if (!g_keep && !RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
+        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
+        else RegDeleteValueW(s, L"DynaRunFix");
+        RegCloseKey(s);
+    }
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
 }
 
@@ -734,9 +1097,22 @@ int install_all(const WCHAR *msi)
     return 0;
 }
 
+// The uninstall question's Yes / No buttons become "Fix only" / "Remove all".
+static HHOOK g_cbt;
+static LRESULT CALLBACK relabel(int code, WPARAM w, LPARAM l)
+{
+    HHOOK h = g_cbt;
+    if (code == HCBT_ACTIVATE) {
+        SetDlgItemTextW((HWND)w, IDYES, T(L"&Fix only", L"只移除修正(&F)"));
+        SetDlgItemTextW((HWND)w, IDNO, T(L"&Remove all", L"全部移除(&R)"));
+        UnhookWindowsHookEx(g_cbt); g_cbt = NULL;
+    }
+    return CallNextHookEx(h, code, w, l);
+}
+
 static int uninstall(void)
 {
-    static WCHAR tmp[MAX_PATH], p[MAX_PATH], cmd[MAX_PATH + 64]; int rc;
+    static WCHAR tmp[MAX_PATH], p[MAX_PATH + 160], cmd[MAX_PATH + 64], prod[40]; int rc; BOOL all = FALSE;
     STARTUPINFOW si; PROCESS_INFORMATION pi;
     // the uninstaller lives in the folder it removes: continue from a copy in %TEMP%
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
@@ -755,25 +1131,74 @@ static int uninstall(void)
         info(T(L"DynaRunFix is not installed.", L"DynaRunFix 尚未安裝。"));
         return 0;
     }
-    if (!g_quiet && msg(T(L"Uninstall DynaRunFix and restore the original DynaRun shortcuts?\n\nDynaRun V3 itself stays installed.",
-                          L"要解除安裝 DynaRunFix，並還原 DynaRun 原本的捷徑嗎？\n\nDynaRun V3 本身會保留。"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    if (!g_quiet && !dynarun_product(prod)) {
+        if (msg(T(L"Uninstall DynaRunFix?", L"要解除安裝 DynaRunFix 嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+    } else if (!g_quiet) {
+        g_cbt = SetWindowsHookExW(WH_CBT, relabel, NULL, GetCurrentThreadId());
+        rc = msg(T(L"Uninstall DynaRunFix?\n\n"
+                   L"Fix only: the DynaRun shortcuts start the original DynaRun again; DynaRun V3 stays installed.\n\n"
+                   L"Remove all: DynaRun V3 is then uninstalled too, by Dyna Pro's own uninstaller.",
+                   L"要解除安裝 DynaRunFix 嗎？\n\n"
+                   L"只移除修正：DynaRun 的捷徑改回開啟原版，DynaRun V3 保留。\n\n"
+                   L"全部移除：接著再用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3。"), MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (g_cbt) { UnhookWindowsHookEx(g_cbt); g_cbt = NULL; }
+        if (rc == IDCANCEL) return 2;
+        all = rc == IDNO;
+    }
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
     CoInitialize(NULL);
     restore_shortcuts(HKEY_CURRENT_USER, USERKEY);
     RegDeleteKeyW(HKEY_CURRENT_USER, USERKEY);
+    drop_run(HKEY_CURRENT_USER, FALSE);
+    if (SHGetSpecialFolderPathW(NULL, p, CSIDL_APPDATA, FALSE)) {      // pins the user made of the launcher
+        lstrcatW(p, L"\\Microsoft\\Internet Explorer\\Quick Launch"); unretarget(p, TRUE);
+    }
     rc = is_admin() ? machine_uninstall() : run_elevated(L"/unmachine");
     if (rc == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
-    if (!rc) info(T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
-    return rc;
+    if (rc) return rc;
+    if (all) {
+        rc = remove_dynarun();
+        if (rc == ERROR_INSTALL_USEREXIT) { info(T(L"DynaRunFix has been uninstalled. DynaRun V3 was kept (its uninstall was cancelled).", L"DynaRunFix 已解除安裝。DynaRun V3 的解除安裝已取消，DynaRun V3 保留。")); return 2; }
+        if (rc > 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
+            wsprintfW(p, T(L"DynaRunFix has been uninstalled, but uninstalling DynaRun V3 failed (Windows Installer error %d).",
+                           L"DynaRunFix 已解除安裝，但 DynaRun V3 解除安裝失敗（Windows Installer 錯誤 %d）。"), rc);
+            msg(p, MB_ICONERROR);
+            return 4;
+        }
+        info(T(L"DynaRunFix and DynaRun V3 have been uninstalled.", L"DynaRunFix 和 DynaRun V3 都已解除安裝。"));
+        return 0;
+    }
+    info(T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
+    return 0;
+}
+
+// the command line after its first n arguments, as typed (the launcher's arguments for /update)
+static const WCHAR *after_args(int n)
+{
+    const WCHAR *c = GetCommandLineW(); BOOL q = FALSE;
+    while (n--) {
+        while (*c == ' ' || *c == '\t') c++;
+        for (; *c && (q || (*c != ' ' && *c != '\t')); c++) if (*c == '"') q = !q;
+    }
+    while (*c == ' ' || *c == '\t') c++;
+    return c;
 }
 
 void WinMainCRTStartup(void)
 {
-    int argc, i, rc; WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    int argc, i, rc; BOOL pin = FALSE; WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
     init_paths();
-    for (i = 1; i < argc; i++) if (!lstrcmpiW(argv[i], L"/quiet")) g_quiet = TRUE; else if (!lstrcmpiW(argv[i], L"/close")) g_close = TRUE;
+    for (i = 1; i < argc; i++) {
+        if (!lstrcmpiW(argv[i], L"/quiet")) g_quiet = TRUE;
+        else if (!lstrcmpiW(argv[i], L"/close")) g_close = TRUE;
+        else if (!lstrcmpiW(argv[i], L"/notaskbar")) g_pin = FALSE;
+        else if (!lstrcmpiW(argv[i], L"/noautostart")) g_autostart = FALSE;
+        else if (!lstrcmpiW(argv[i], L"/pin")) pin = TRUE;
+        else if (!lstrcmpiW(argv[i], L"/keep")) g_keep = TRUE;
+    }
+    if (argc >= 2 && (!lstrcmpiW(argv[1], L"/machine") || !lstrcmpiW(argv[1], L"/full"))) g_pin = pin;   // the elevated stage: as asked
     if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
         lstrcpynW(g_exe, argv[3], MAX_PATH);
         CoInitialize(NULL);
@@ -786,6 +1211,8 @@ void WinMainCRTStartup(void)
         CoInitialize(NULL);
         rc = machine_uninstall();
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall();
+    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/checkupdate")) rc = update_check();
+    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/update")) rc = update_run(after_args(2));
     else if (g_quiet) rc = locate_dynarun() ? install_fix() : 1;
     else rc = wizard();
     // the elevated part (/machine, /full) ends here: let the wizard that started it take the foreground back

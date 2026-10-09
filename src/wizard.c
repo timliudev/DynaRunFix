@@ -19,7 +19,7 @@
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 
-enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP };
+enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO };
 enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR };
 enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 #define WM_PROGRESS (WM_APP + 1)
@@ -28,7 +28,7 @@ enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 
 static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
-static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile;
+static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static HANDLE g_thread;
 static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[300];
 static zipent g_zip;
@@ -105,37 +105,48 @@ static void fetch_body(DWORD total)
     text(ID_BODY, b);
 }
 
+// Last paragraph of the first page.
+static const WCHAR *disclaimer(void)
+{
+    return T(L"\n\nDynaRunFix is an independent open-source tool, not affiliated with or endorsed by Dyna Pro Dynamometers. "
+             L"It is provided as is, without warranty (MIT license). DynaRun V3 is licensed to you separately by Dyna Pro.",
+             L"\n\nDynaRunFix 是獨立的開源工具，與 Dyna Pro Dynamometers 無關，也未經其認可；依 MIT 授權按現狀提供，不提供任何擔保。"
+             L"DynaRun V3 由 Dyna Pro 另行授權給你。");
+}
+
 static void set_page(int p)
 {
     static WCHAR b[1200];
     g_page = p;
     KillTimer(g_hwnd, TIMER_RUNNING);
-    vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
+    vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
     switch (p) {
     case P_HELLO:
         if (g_installed) {
             text(ID_TITLE, T(L"Fix DynaRun V3 for this Windows", L"讓 DynaRun V3 在這台電腦正常運作"));
             wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThis installs the fixes for Windows 10/11 (flickering main screen, .Dpr files "
                            L"in OneDrive that do not open, garbled text, \"Run as administrator\").\n\n"
-                           L"When Windows asks whether to allow changes, click \"Yes\".",
+                           L"When Windows asks whether to allow changes, click \"Yes\".%s",
                            L"已找到 DynaRun V3：\n%s\n\n接下來會安裝 Windows 10/11 的相容性修正（主畫面閃爍、OneDrive 裡的 .Dpr 打不開、"
-                           L"中文亂碼、以系統管理員執行卡住）。\n\nWindows 詢問「是否允許變更」時，請按「是」。"), g_exe);
+                           L"中文亂碼、以系統管理員執行卡住）。\n\nWindows 詢問「是否允許變更」時，請按「是」。%s"), g_exe, disclaimer());
             text(ID_BODY, b);
             buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
         } else {
             text(ID_TITLE, T(L"Install DynaRun V3", L"安裝 DynaRun V3"));
-            text(ID_BODY, T(L"DynaRun V3 is not installed on this computer yet.\n\nThis program will:\n"
+            wsprintfW(b, T(L"DynaRun V3 is not installed on this computer yet.\n\nThis program will:\n"
                             L"   1.  download the DynaRun V3 setup from the Dyna Pro website\n"
                             L"   2.  install DynaRun V3\n"
                             L"   3.  add the fixes for Windows 10/11\n\n"
-                            L"You need the setup password that Dyna Pro gave you.",
+                            L"You need the setup password that Dyna Pro gave you.%s",
                             L"這台電腦還沒有安裝 DynaRun V3。\n\n本程式會自動：\n"
                             L"   1.  從 Dyna Pro 官網下載 DynaRun V3 安裝檔\n"
                             L"   2.  安裝 DynaRun V3\n"
                             L"   3.  加上 Windows 10/11 的相容性修正\n\n"
-                            L"過程中需要輸入 Dyna Pro 給你的安裝密碼。"));
+                            L"過程中需要輸入 Dyna Pro 給你的安裝密碼。%s"), disclaimer());
+            text(ID_BODY, b);
             buttons(T(L"Start", L"開始"), T(L"Cancel", L"取消"), T(L"Installed elsewhere...", L"已裝在其他位置…"));
         }
+        vis(ID_PIN, TRUE); vis(ID_AUTO, TRUE);
         if (g_note[0]) status(g_note, TRUE);
         break;
     case P_FETCH:
@@ -173,9 +184,13 @@ static void set_page(int p)
         break;
     case P_LICENSE:
         text(ID_TITLE, T(L"Dyna Pro license agreement", L"Dyna Pro 授權合約"));
-        text(ID_BODY, T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
+        text(ID_BODY, g_nolicense ? T(L"The license agreement in this DynaRun V3 setup could not be shown.",
+                                      L"無法顯示這個 DynaRun V3 安裝檔裡的授權合約。")
+                                  : T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
+        SetWindowTextW(H(ID_CHECK), g_nolicense ? T(L"I understand and &accept Dyna Pro's license terms", L"我了解並同意 Dyna Pro 的授權條款(&A)")
+                                                : T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
         vis(ID_RICH, TRUE); vis(ID_CHECK, TRUE);
-        buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
+        buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), g_nolicense ? T(L"Open Dyna Pro website", L"開啟 Dyna Pro 官網") : NULL);
         EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
         SetFocus(H(ID_CHECK));                       // the disabled "Install" button cannot hold the keyboard focus
         if (g_note[0]) status(g_note, TRUE);
@@ -203,10 +218,19 @@ static void set_page(int p)
         break;
     case P_DONE:
         text(ID_TITLE, T(L"Done", L"完成"));
-        text(ID_BODY, T(L"Everything is installed.\n\nFrom now on, start DynaRun with the \"DynaRun V3\" icon on the desktop as usual.\n\n"
-                        L"The first start asks for your dynamometer model. If Windows asks whether to allow changes, click \"Yes\".",
-                        L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
-                        L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
+        lstrcpyW(b, T(L"Everything is installed.\n\nFrom now on, start DynaRun with the \"DynaRun V3\" icon on the desktop as usual.\n\n"
+                      L"The first start asks for your dynamometer model. If Windows asks whether to allow changes, click \"Yes\".",
+                      L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
+                      L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
+        if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+        if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
+            ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
+                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
+            : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
+                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
+        if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
+        lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
+        text(ID_BODY, b);
         buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
         if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
             status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
@@ -304,14 +328,26 @@ static void after_extract(void)
 {
     if (msi_check(g_msi, g_ver, 64) != MSI_DYNARUN) { not_dynarun(); return; }
     release(g_rtf);
-    if ((g_rtf = msi_license_rtf(g_msi))) {
+    g_rtf = msi_license_rtf(g_msi);
+    g_nolicense = !g_rtf;
+    if (g_rtf) {
         rtfsrc src; EDITSTREAM es;
         src.p = g_rtf; src.left = lstrlenA(g_rtf);
         es.dwCookie = (DWORD_PTR)&src; es.dwError = 0; es.pfnCallback = rtf_in;
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
-        SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
-        set_page(P_LICENSE);
-    } else install(JOB_INSTALL_ALL);
+    } else                                       // never install without the user accepting Dyna Pro's terms
+        SetWindowTextW(H(ID_RICH), T(L"DynaRun V3 is licensed to you by Dyna Pro Dynamometers Ltd under their end-user license agreement "
+                                     L"and their terms and conditions of sale. The agreement is part of Dyna Pro's setup, but this "
+                                     L"installer could not read it from this setup file.\r\n\r\n"
+                                     L"To read it, contact Dyna Pro (support@dynapro.co.uk) or see their website "
+                                     L"(\"Open Dyna Pro website\" below).\r\n\r\n"
+                                     L"Install only if you accept Dyna Pro's license terms.",
+                                     L"DynaRun V3 是 Dyna Pro Dynamometers Ltd 依其使用者授權合約及銷售條款授權給你使用的軟體。"
+                                     L"授權合約包含在 Dyna Pro 的安裝檔中，但本安裝程式無法從這個安裝檔讀出合約內容。\r\n\r\n"
+                                     L"如需閱讀合約，請聯絡 Dyna Pro（support@dynapro.co.uk）或參考其官網（下方「開啟 Dyna Pro 官網」）。\r\n\r\n"
+                                     L"請在同意 Dyna Pro 的授權條款後再安裝。"));
+    SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
+    set_page(P_LICENSE);
 }
 
 static void open_package(void)
@@ -413,6 +449,8 @@ static void on_primary(void)
 {
     switch (g_page) {
     case P_HELLO:
+        g_pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (g_installed) install(JOB_INSTALL_FIX); else fetch();
         break;
     case P_FAIL: fetch(); break;
@@ -430,7 +468,7 @@ static void on_primary(void)
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
-        ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, NULL, SW_SHOWNORMAL);
+        start_dynarun();
         DestroyWindow(g_hwnd);
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;
@@ -464,6 +502,12 @@ static void create_controls(void)
     add(L"EDIT", WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL, ID_EDIT);
     add(rich, WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY, ID_RICH);
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_CHECK);
+    add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_PIN);
+    add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO);
+    SetWindowTextW(H(ID_PIN), T(L"Pin DynaRun to the &taskbar", L"釘選到工作列(&T)"));
+    SetWindowTextW(H(ID_AUTO), T(L"Start DynaRun when Windows &starts", L"開機時自動啟動 DynaRun(&S)"));
+    SendMessageW(H(ID_PIN), BM_SETCHECK, g_pin ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(H(ID_AUTO), BM_SETCHECK, g_autostart ? BST_CHECKED : BST_UNCHECKED, 0);
     SetWindowTextW(H(ID_CHECK), T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
     add(PROGRESS_CLASSW, 0, ID_PROG);
     add(L"STATIC", SS_NOPREFIX, ID_STATUS);
@@ -494,9 +538,14 @@ static void layout(void)
     RECT c; int m = S(32), w, y, h, x, i, bw, bh = S(36), by, bottom;
     GetClientRect(g_hwnd, &c);
     w = c.right - 2 * m; bottom = c.bottom - S(FOOTER);
-    y = S(24);
-    h = measure(ID_TITLE, w); place(ID_TITLE, m, y, w, h); y += h + S(16);
-    h = measure(ID_BODY, w) + S(4); place(ID_BODY, m, y, w, h); y += h + S(20);
+    y = S(shown(ID_PIN) ? 18 : 24);                     // tighter on the first page: its text and the options must fit
+    h = measure(ID_TITLE, w); place(ID_TITLE, m, y, w, h); y += h + S(shown(ID_PIN) ? 10 : 16);
+    h = measure(ID_BODY, w) + S(4); place(ID_BODY, m, y, w, h); y += h + S(shown(ID_PIN) ? 6 : 20);
+    if (shown(ID_PIN)) {                                // the two options: side by side when they fit, else stacked
+        int a = measure(ID_PIN, 0) + S(24), b2 = measure(ID_AUTO, 0) + S(24), side = a + b2 + S(16) <= w;
+        place(ID_PIN, m, y, a, S(24)); place(ID_AUTO, side ? m + a + S(16) : m, side ? y : y + S(24), b2, S(24));
+        y += side ? S(24) : S(48);
+    }
     if (shown(ID_EDIT)) { place(ID_EDIT, m, y, w < S(360) ? w : S(360), S(34)); y += S(34) + S(12); }
     if (shown(ID_PROG)) { place(ID_PROG, m, y, w, S(20)); y += S(20) + S(10); }
     if (shown(ID_RICH)) {
@@ -599,7 +648,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             else if (g_page != P_INSTALL) on_close();
             break;
         case ID_EXTRA:
-            if (g_page == P_FAIL || g_page == P_FETCH) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            if (g_page == P_FAIL || g_page == P_FETCH || g_page == P_LICENSE) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_PASSWORD) choose_file();
             else if (g_page == P_HELLO) choose_exe();
             break;
@@ -682,9 +731,9 @@ int wizard(void)
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW); wc.hbrBackground = g_white;
     wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(10));
     RegisterClassW(&wc);
-    r.left = r.top = 0; r.right = S(620); r.bottom = S(480);
+    r.left = r.top = 0; r.right = S(620); r.bottom = S(528);                                  // the first page: text, disclaimer, the two options and a one-line note
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_VERSION));
+    wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_DISPLAY));
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                              (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2, (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
@@ -702,6 +751,10 @@ int wizard(void)
         }
         if (msg.message == WM_SYSKEYDOWN && msg.wParam == 'A' && g_page == P_LICENSE) {   // Alt+A: "I accept"
             SendMessageW(H(ID_CHECK), BM_CLICK, 0, 0);
+            continue;
+        }
+        if (msg.message == WM_SYSKEYDOWN && (msg.wParam == 'T' || msg.wParam == 'S') && g_page == P_HELLO) {   // Alt+T / Alt+S
+            SendMessageW(H(msg.wParam == 'T' ? ID_PIN : ID_AUTO), BM_CLICK, 0, 0);
             continue;
         }
         if (IsDialogMessageW(g_hwnd, &msg)) continue;

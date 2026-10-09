@@ -2,6 +2,47 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.0 — 2026-10-09
+
+- **Taskbar:** the installer pins DynaRun to the taskbar (check box on the first page, on by default;
+  `/notaskbar` turns it off). Windows 7 to 10 pin the launcher shortcut directly, Windows XP / Vista put it
+  in Quick Launch, and Windows 11, which lets no program pin itself, gets it through Microsoft's taskbar layout
+  policy (needs the administrator prompt the installer shows anyway; the icon appears after the next sign-in; an
+  existing layout policy of an organization is left alone and the last page tells how to pin by hand). The
+  running DynaRun groups under the pinned icon (explicit AppUserModelID on the launcher shortcuts and in DynaRun).
+- **Start at sign-in:** second check box, on by default (`/noautostart` turns it off): a `Run` value for the
+  current user starts DynaRun through the launcher. Uninstall removes it (also for other accounts).
+- **Screen after a start at sign-in:** the sign-in start (`DynaRunFix.exe /autostart`) waits
+  until the taskbar exists and the screen size and work area have been unchanged for 3 s (at most 60 s) before it
+  starts DynaRun. If DynaRun's screen
+  ever looks wrong, close DynaRun and start it again: the last page of the installer and the README say so.
+- **Screen right after an install:** the first start of DynaRun after installing DynaRunFix (the installer's
+  *Start DynaRun* button, or the first start at sign-in) could lay out the main screen for the full screen height:
+  the right gauge cut off, the dashboard shifted; a second start was fine. The launcher let DynaRun run first and
+  only then loaded `dynafix.dll`, and the very first load of a newly installed dll is slow (a few seconds on a fresh
+  Windows 11), so DynaRun had made its first windows before the fix was there (all versions since v1.2.2). The
+  launcher now loads `dynafix.dll` before DynaRun starts. The log shows `dynafix.dll loaded in … ms` and
+  `windows DynaRun had before dynafix: N` (0 = in time). Verified on a fresh zh-TW Windows 11 VM.
+- **Known issue:** changing the screen resolution while DynaRun is open can leave the main screen laid out for
+  the old size; close DynaRun and start it again.
+- **Updates:** once a day, when DynaRun is started (and is not already running), the installed copy of the
+  setup asks GitHub (`api.github.com/repos/timliudev/DynaRunFix/releases/latest`) whether there is a newer release;
+  nothing else is sent. The launcher waits up to 5 s for the answer; with a newer release it asks *Update now?*
+  before DynaRun opens (a slower answer is asked at the next start; logged in `%TEMP%\dynafix.log`). *Yes* downloads that
+  release's `DynaRunFix-Setup.exe` from this repository only, checks it against the SHA-256 GitHub lists for it,
+  installs it (one administrator prompt) and opens DynaRun; the taskbar pin, the start at sign-in and the desktop
+  shortcut stay as they are (`/keep`). *No*, a cancelled prompt or a failed update asks again a day later. Offline,
+  or on Windows XP (no TLS 1.2), nothing happens. Versions before this one do not check: install it once by hand.
+- **Log:** every line in `%TEMP%\dynafix.log` now starts with the date and time (`YYYY-MM-DD HH:MM:SS.mmm`). The
+  launcher logs how it was started (arguments, `/autostart`, `/restart` or plain, parent process, start-up flags
+  and show command, working folder, DynaRunFix version); each DynaRun process logs a header line with the DynaRunFix
+  version and commit, the version of `DynaRun V3.exe` and the Windows version with its update revision. The log is
+  kept below 10 MB: the oldest lines are dropped first (the newest 8 MB stay), checked at each start.
+- **Dev builds** show the short commit hash (`-dirty` with uncommitted changes) instead of `dev` in the installer
+  title, Programs and Features and the log; they still never check for updates.
+- `/quiet` applies both options unless switched off with `/notaskbar` / `/noautostart`. The first page and the
+  window are a little taller; the last page says what was set up.
+
 ## v1.2.3 — 2026-10-07
 
 - **Removed `tools/msi-novbs`:** DynaRunFix no longer ships anything that changes Dyna Pro's setup. If Windows
@@ -61,6 +102,32 @@
 ---
 
 ## 更新紀錄
+
+### v1.3.0 — 2026-10-09
+
+- **工作列:** 安裝程式會把 DynaRun 釘選到工作列(第一頁的勾選項,預設勾選;`/notaskbar` 可關閉)。Windows 7 到 10 直接釘選
+  啟動器捷徑,Windows XP / Vista 放進「快速啟動」,Windows 11 不允許程式自行釘選,改用微軟的工作列配置原則
+  (使用安裝程式本來就會出現的系統管理員確認;登出再登入後才會出現圖示;組織已設定配置原則時不會動它,最後一頁會說明如何手動釘選)。
+  執行中的 DynaRun 會歸在釘選的圖示下(啟動器捷徑和 DynaRun 使用相同的明確 AppUserModelID)。
+- **開機自動啟動:** 第二個勾選項,預設勾選(`/noautostart` 可關閉):在目前使用者的 `Run` 登錄值經由啟動器啟動 DynaRun。
+  解除安裝時會移除(其他帳號也一併處理)。
+- **登入啟動後的畫面:** 登入時的自動啟動(`DynaRunFix.exe /autostart`)會等到工作列出現、螢幕大小與工作區連續 3 秒沒變
+  (最多 60 秒)才啟動 DynaRun。如果 DynaRun 的畫面顯示不正常,關掉 DynaRun 再開一次即可
+  (安裝程式最後一頁和 README 都有說明)。
+- **安裝後第一次開的畫面:** 裝好 DynaRunFix 後第一次開 DynaRun(安裝程式的「開始使用 DynaRun」,或第一次登入自動啟動)
+  可能會照整個螢幕高度排版:右邊儀表被切掉、版面偏移,再開一次就正常。原因是啟動器先讓 DynaRun 開始跑才載入
+  `dynafix.dll`,而剛安裝的 dll 第一次載入很慢(全新 Windows 11 上要好幾秒),DynaRun 在修正掛上前就建立了最初的視窗
+  (v1.2.2 起各版都有)。現在啟動器在 DynaRun 啟動前就先載入 `dynafix.dll`。log 會記 `dynafix.dll loaded in … ms` 與
+  `windows DynaRun had before dynafix: N`(0 = 來得及)。已在全新繁中 Windows 11 虛擬機驗證。
+- **已知問題:** DynaRun 開著時改變螢幕解析度,主畫面可能仍照舊的大小排版;關掉 DynaRun 再開即可。
+- **更新:** 每天一次，開啟 DynaRun（而且它還沒在執行）時，安裝好的安裝程式會向 GitHub
+  （`api.github.com/repos/timliudev/DynaRunFix/releases/latest`）查詢有沒有新版本，不會送出其他資料。啟動器最多等 5 秒，
+  有新版就在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問；過程記錄在 `%TEMP%\dynafix.log`）。按「是」只會從本專案下載該版本的 `DynaRunFix-Setup.exe`，
+  用 GitHub 列出的 SHA-256 核對後安裝（一次系統管理員確認），然後開啟 DynaRun；工作列釘選、開機自動啟動和桌面捷徑維持原樣（`/keep`）。
+  按「否」、取消確認或更新失敗，隔天會再問。沒有網路或 Windows XP（不支援 TLS 1.2）時什麼都不做。這一版之前的版本不會檢查，需要手動安裝一次。
+- **Log:** `%TEMP%\dynafix.log` 每行開頭都有日期和時間(`YYYY-MM-DD HH:MM:SS.mmm`);啟動器會記錄自己是怎麼被啟動的(參數、`/autostart`、`/restart` 或一般啟動、父行程、啟動旗標與顯示方式、工作資料夾、DynaRunFix 版本);每個 DynaRun 行程另有一行標頭:DynaRunFix 版本與 commit、`DynaRun V3.exe` 的版本、Windows 版本與更新修訂號。log 保持在 10 MB 以下,最舊的行先被丟掉(留下最新的 8 MB,每次啟動時檢查)。
+- **開發版**在安裝程式標題、「程式和功能」與 log 顯示短 commit hash(有未提交變更時加 `-dirty`)而不是 `dev`;仍然不會檢查更新。
+- `/quiet` 預設套用這兩項,可用 `/notaskbar`、`/noautostart` 關閉。第一頁和視窗稍微變高;最後一頁會說明設定了什麼。
 
 ### v1.2.3 — 2026-10-07
 

@@ -30,6 +30,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <intrin.h>
+#include "version.h"
 
 #pragma comment(linker, "/EXPORT:CwpProc=_CwpProc@12")
 
@@ -51,16 +52,79 @@ static LONG g_skipped, g_masked;
 static PostMessageA_t g_realPost;
 static char g_logpath[MAX_PATH];
 
+// above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (the launcher does the same; whichever runs first)
+static void trim_log(void)
+{
+    HANDLE h; DWORD size, n, i; char *buf;
+    h = CreateFileA(g_logpath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    size = GetFileSize(h, NULL);
+    if (size != INVALID_FILE_SIZE && size > 10485760 && (buf = (char *)HeapAlloc(GetProcessHeap(), 0, 8388608))) {
+        SetFilePointer(h, size - 8388608, NULL, FILE_BEGIN);
+        if (ReadFile(h, buf, 8388608, &n, NULL)) {
+            for (i = 0; i < n && buf[i] != '\n'; i++);
+            if (i < n) { i++; SetFilePointer(h, 0, NULL, FILE_BEGIN); WriteFile(h, buf + i, n - i, &n, NULL); SetEndOfFile(h); }
+        }
+        HeapFree(GetProcessHeap(), 0, buf);
+    }
+    CloseHandle(h);
+}
+
 static void logf(const char *fmt, DWORD a, DWORD b, DWORD c)
 {
-    char line[256]; DWORD n; HANDLE h;
+    char line[256]; DWORD n; HANDLE h; SYSTEMTIME t;
     if (!g_logpath[0]) return;
-    wsprintfA(line, fmt, a, b, c);
+    GetLocalTime(&t);
+    n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    wsprintfA(line + n, fmt, a, b, c);
     h = CreateFileA(g_logpath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     SetFilePointer(h, 0, NULL, FILE_END);
     WriteFile(h, line, lstrlenA(line), &n, NULL);
     CloseHandle(h);
+}
+
+// second header line: DynaRunFix version, DynaRun's file version, Windows version (version.dll is loaded on demand: no static import)
+typedef BOOL (WINAPI *GFVIA_t)(LPCSTR, LPDWORD);
+typedef BOOL (WINAPI *GFVA_t)(LPCSTR, DWORD, DWORD, LPVOID);
+typedef BOOL (WINAPI *VQVA_t)(LPCVOID, LPCSTR, LPVOID *, PUINT);
+typedef LONG (WINAPI *RtlGetVersion_t)(OSVERSIONINFOW *);
+
+static void log_versions(void)
+{
+    char exe[MAX_PATH], app[40], win[48], msg[200]; DWORD h, sz, ubr, n = sizeof(ubr); HKEY k; HMODULE v, nt;
+    lstrcpyA(app, "?"); lstrcpyA(win, "?");
+    GetModuleFileNameA(NULL, exe, MAX_PATH);
+    if ((v = LoadLibraryA("version.dll"))) {
+        GFVIA_t gsz = (GFVIA_t)GetProcAddress(v, "GetFileVersionInfoSizeA");
+        GFVA_t get = (GFVA_t)GetProcAddress(v, "GetFileVersionInfoA");
+        VQVA_t q = (VQVA_t)GetProcAddress(v, "VerQueryValueA");
+        if (gsz && get && q && (sz = gsz(exe, &h))) {
+            void *buf = HeapAlloc(GetProcessHeap(), 0, sz); VS_FIXEDFILEINFO *fi; UINT fl;
+            if (buf) {
+                if (get(exe, 0, sz, buf) && q(buf, "\\", (LPVOID *)&fi, &fl) && fl >= sizeof(*fi))
+                    wsprintfA(app, "%u.%u.%u.%u", HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS), HIWORD(fi->dwFileVersionLS), LOWORD(fi->dwFileVersionLS));
+                HeapFree(GetProcessHeap(), 0, buf);
+            }
+        }
+        FreeLibrary(v);
+    }
+    if ((nt = GetModuleHandleA("ntdll.dll"))) {
+        RtlGetVersion_t rgv = (RtlGetVersion_t)GetProcAddress(nt, "RtlGetVersion");
+        OSVERSIONINFOW vi;
+        vi.dwOSVersionInfoSize = sizeof(vi);
+        if (rgv && rgv(&vi) == 0) {
+            n = wsprintfA(win, "%u.%u.%u", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber);
+            n = sizeof(ubr);
+            if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_QUERY_VALUE, &k)) {
+                DWORD type = 0;
+                if (!RegQueryValueExA(k, "UBR", NULL, &type, (BYTE *)&ubr, &n) && type == REG_DWORD) wsprintfA(win + lstrlenA(win), ".%u", ubr);
+                RegCloseKey(k);
+            }
+        }
+    }
+    wsprintfA(msg, "DynaRunFix %s (%s), DynaRun V3.exe %s, Windows %s\r\n", DRF_DISPLAY, DRF_COMMIT, app, win);
+    logf("%s", (DWORD)(UINT_PTR)msg, 0, 0);
 }
 
 static BOOL WINAPI HookedPostMessageA(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -1239,6 +1303,8 @@ static void subclass_form(HWND h)
     PostMessageA(h, g_refit, 0, 0);
 }
 
+static BOOL CALLBACK count_win(HWND h, LPARAM l) { (void)h; (*(int *)l)++; return TRUE; }
+
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -1253,6 +1319,12 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
+            {   // more than 0: DynaRun made windows (splash screen...) before dynafix was there, i.e. it was attached late
+                int nw = 0;
+                EnumThreadWindows(GetCurrentThreadId(), count_win, (LPARAM)&nw);
+                logf("windows DynaRun had before dynafix: %u (first message %04X) %u\r\n", nw, c->message, 0);
+            }
+            log_versions();
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);
             if (e) SetEvent(e);   // handle stays open: a later launcher sees the fix is already active
@@ -1273,10 +1345,21 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
     if (r == DLL_PROCESS_ATTACH) {
+        BOOL noappid;
         g_self = h;
         DisableThreadLibraryCalls(h);
+        {   // the same AppUserModelID as the launcher shortcuts (setup.c): a running DynaRun groups under the pinned icon
+            WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); char nv[4];
+            noappid = GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1';   // diagnostic switch
+            if (!noappid && l > 14 && n[l - 15] == '\\' && !lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) {
+                HRESULT (WINAPI *f)(PCWSTR) = (HRESULT (WINAPI *)(PCWSTR))GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SetCurrentProcessExplicitAppUserModelID");
+                if (f) f(L"DynaRunFix.DynaRunV3");       // Windows 7+
+            }
+        }
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
+        trim_log();
+        if (noappid) logf("DYNAFIX_NOAPPID=1: the explicit AppUserModelID is not set %u %u %u\r\n", 0, 0, 0);
         if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
         { char v[8]; g_fullscreen = GetEnvironmentVariableA("DYNAFIX_FULLSCREEN", v, sizeof(v)) && v[0] == '1';
           g_waclip = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)) && !lstrcmpiA(v, "clip"); }
