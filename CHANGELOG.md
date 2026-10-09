@@ -2,6 +2,14 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.2 — 2026-10-09
+
+- **Taskbar icon:** `DynaRun V3.exe` holds only the chart icon of its windows; DynaRun's blue logo is in the icon file
+  of the shortcuts Dyna Pro's setup makes. A desktop shortcut the installer had created (when none existed) used the
+  exe's icon, and as the running DynaRun takes the icon of a shortcut with its AppUserModelID, the taskbar could
+  still show the chart after v1.3.1. Every shortcut of ours that would use the exe's icon now gets the logo from a
+  DynaRun shortcut that has it. Install v1.3.2 (or let the update do it), then start DynaRun again.
+
 ## v1.3.1 — 2026-10-09
 
 - **Taskbar icon after an update:** updating from v1.2.x left the existing DynaRun shortcuts (already pointing to
@@ -112,6 +120,13 @@
 ---
 
 ## 更新紀錄
+
+### v1.3.2 — 2026-10-09
+
+- **工作列圖示:** `DynaRun V3.exe` 本身只有視窗用的表格圖示,藍色 logo 在 Dyna Pro 安裝程式建立的捷徑所用的圖示檔裡。
+  安裝程式在沒有桌面捷徑時建立的捷徑用的是 exe 的圖示,而執行中的 DynaRun 會用帶有同一個 AppUserModelID 的捷徑圖示,
+  所以 v1.3.1 之後工作列仍可能顯示表格。現在我們的捷徑若用的是 exe 的圖示,會改用 DynaRun 捷徑上的 logo。
+  裝好 v1.3.2(或讓自動更新處理)後重開 DynaRun 即可。
 
 ### v1.3.1 — 2026-10-09
 
