@@ -1303,6 +1303,8 @@ static void subclass_form(HWND h)
     PostMessageA(h, g_refit, 0, 0);
 }
 
+static BOOL CALLBACK count_win(HWND h, LPARAM l) { (void)h; (*(int *)l)++; return TRUE; }
+
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -1317,6 +1319,11 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
+            {   // more than 0: DynaRun made windows (splash screen...) before dynafix was there, i.e. it was attached late
+                int nw = 0;
+                EnumThreadWindows(GetCurrentThreadId(), count_win, (LPARAM)&nw);
+                logf("windows DynaRun had before dynafix: %u (first message %04X) %u\r\n", nw, c->message, 0);
+            }
             log_versions();
             wsprintfA(ev, "Local\\dynafix_ready_%u", GetCurrentProcessId());
             e = OpenEventA(EVENT_MODIFY_STATE, FALSE, ev);

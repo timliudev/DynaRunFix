@@ -16,6 +16,15 @@
   until the taskbar exists and the screen size and work area have been unchanged for 3 s (at most 60 s) before it
   starts DynaRun. If DynaRun's screen
   ever looks wrong, close DynaRun and start it again: the last page of the installer and the README say so.
+- **Screen right after an install:** the first start of DynaRun after installing DynaRunFix (the installer's
+  *Start DynaRun* button, or the first start at sign-in) could lay out the main screen for the full screen height:
+  the right gauge cut off, the dashboard shifted; a second start was fine. The launcher let DynaRun run first and
+  only then loaded `dynafix.dll`, and the very first load of a newly installed dll is slow (a few seconds on a fresh
+  Windows 11), so DynaRun had made its first windows before the fix was there (all versions since v1.2.2). The
+  launcher now loads `dynafix.dll` before DynaRun starts. The log shows `dynafix.dll loaded in … ms` and
+  `windows DynaRun had before dynafix: N` (0 = in time). Verified on a fresh zh-TW Windows 11 VM.
+- **Known issue:** changing the screen resolution while DynaRun is open can leave the main screen laid out for
+  the old size; close DynaRun and start it again.
 - **Updates:** once a day, when DynaRun is started (and is not already running), the installed copy of the
   setup asks GitHub (`api.github.com/repos/timliudev/DynaRunFix/releases/latest`) whether there is a newer release;
   nothing else is sent. The launcher waits up to 5 s for the answer; with a newer release it asks *Update now?*
@@ -105,6 +114,12 @@
 - **登入啟動後的畫面:** 登入時的自動啟動(`DynaRunFix.exe /autostart`)會等到工作列出現、螢幕大小與工作區連續 3 秒沒變
   (最多 60 秒)才啟動 DynaRun。如果 DynaRun 的畫面顯示不正常,關掉 DynaRun 再開一次即可
   (安裝程式最後一頁和 README 都有說明)。
+- **安裝後第一次開的畫面:** 裝好 DynaRunFix 後第一次開 DynaRun(安裝程式的「開始使用 DynaRun」,或第一次登入自動啟動)
+  可能會照整個螢幕高度排版:右邊儀表被切掉、版面偏移,再開一次就正常。原因是啟動器先讓 DynaRun 開始跑才載入
+  `dynafix.dll`,而剛安裝的 dll 第一次載入很慢(全新 Windows 11 上要好幾秒),DynaRun 在修正掛上前就建立了最初的視窗
+  (v1.2.2 起各版都有)。現在啟動器在 DynaRun 啟動前就先載入 `dynafix.dll`。log 會記 `dynafix.dll loaded in … ms` 與
+  `windows DynaRun had before dynafix: N`(0 = 來得及)。已在全新繁中 Windows 11 虛擬機驗證。
+- **已知問題:** DynaRun 開著時改變螢幕解析度,主畫面可能仍照舊的大小排版;關掉 DynaRun 再開即可。
 - **更新:** 每天一次，開啟 DynaRun（而且它還沒在執行）時，安裝好的安裝程式會向 GitHub
   （`api.github.com/repos/timliudev/DynaRunFix/releases/latest`）查詢有沒有新版本，不會送出其他資料。啟動器最多等 5 秒，
   有新版就在 DynaRun 開啟前問「現在更新嗎？」（回應較慢時下次開啟再問；過程記錄在 `%TEMP%\dynafix.log`）。按「是」只會從本專案下載該版本的 `DynaRunFix-Setup.exe`，
