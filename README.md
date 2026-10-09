@@ -46,9 +46,9 @@ see below). The same dll also fixes the [first-time setup](#first-time-setup) an
 
 ## What's new
 
-v1.3.2:
-- The running DynaRun shows DynaRun's own blue logo on the taskbar (not the chart icon), also after updating
-  from an older version.
+v1.3.3 / v1.3.2:
+- The running DynaRun groups under the pinned DynaRun icon and shows DynaRun's own blue logo on the taskbar (not
+  the chart icon as an extra button), also after updating from an older version.
 
 v1.3.0:
 - The installer can pin DynaRun to the taskbar and start it at sign-in (both on by default).
@@ -427,8 +427,8 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
-v1.3.2:
-- 執行中的 DynaRun 在工作列上顯示 DynaRun 原本的藍色 logo(不是表格圖示),從舊版更新後也一樣。
+v1.3.3 / v1.3.2:
+- 執行中的 DynaRun 會合併到釘選的 DynaRun 圖示下,顯示 DynaRun 原本的藍色 logo(不再另外多一個表格圖示的按鈕),從舊版更新後也一樣。
 
 v1.3.0:
 - 安裝程式可以把 DynaRun 釘選到工作列、開機自動啟動(兩項預設勾選)。
