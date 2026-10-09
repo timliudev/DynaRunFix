@@ -174,20 +174,24 @@ static DWORD first_thread(DWORD pid)
 // made: fonts made before that (splash screen, forms loaded at start-up) would keep the old face/charset,
 // and VB's OLE fonts are cached and reused. A thread can be hooked only once it has a message queue, which
 // it gets with its first USER call (well before VB creates a window): poll from the moment it runs.
+// hd is dynafix.dll, loaded by the caller BEFORE DynaRun runs: the first load of a newly installed dll can take
+// long, and DynaRun went on meanwhile and laid its main screen out for the full screen height before dynafix
+// was there (seen only right after an install, or at the first sign-in after one).
 // Exits the launcher once the dll has reported in; returns if that did not happen.
-static void early_hook(const char *dll, DWORD pid, DWORD tid, HANDLE proc)
+static void early_hook(HMODULE hd, DWORD pid, DWORD tid, HANDLE proc)
 {
-    char ev[64]; HANDLE e, hs[2]; HMODULE hd; HHOOK hk; int i;
+    char ev[64]; HANDLE e, hs[2]; HHOOK hk; int i; DWORD t0 = GetTickCount(), th;
     wsprintfA(ev, "Local\\dynafix_ready_%u", pid);
     e = CreateEventA(NULL, TRUE, FALSE, ev);
-    hd = LoadLibraryA(dll);
     for (hk = NULL, i = 0; hd && !hk && i < 5000; i++)
         if (!(hk = SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)GetProcAddress(hd, "CwpProc"), hd, tid))) Sleep(1);
     if (!hk) { llog("launcher: early hook failed (error %u) %u\r\n", GetLastError(), 0); return; }
+    th = GetTickCount() - t0;
     // the dll reports in (and keeps itself loaded) when DynaRun's first window gets a message
     hs[0] = e; hs[1] = proc;
     if (WaitForMultipleObjects(2, hs, FALSE, 60000) == WAIT_OBJECT_0) {
         llog("launcher: DynaRun pid=%u hooked from start (thread %u)\r\n", pid, tid);
+        llog("launcher: hook set %u ms after DynaRun was resumed, dll reported in after %u ms\r\n", th, GetTickCount() - t0);
         UnhookWindowsHookEx(hk);
         ExitProcess(0);
     }
@@ -322,6 +326,11 @@ void WinMainCRTStartup(void)
         if (h) CloseHandle(h); else if (GetLastError() == ERROR_ACCESS_DENIED) elevate(args);
     } else {
         { volatile char *z = (volatile char *)&si; for (i = 0; i < (int)sizeof(si); i++) z[i] = 0; } si.cb = sizeof(si);
+        {   // before DynaRun runs (see early_hook)
+            DWORD t0 = GetTickCount();
+            hd = LoadLibraryA(dll);
+            llog("launcher: dynafix.dll loaded in %u ms (error %u)\r\n", GetTickCount() - t0, hd ? 0 : GetLastError());
+        }
         // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
         // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
         // Only for a Traditional Chinese system locale (legacy code page 950): the LE profile is zh-TW.
@@ -371,7 +380,7 @@ void WinMainCRTStartup(void)
             {
                 DWORD tid = g_first; HANDLE h0 = OpenProcess(SYNCHRONIZE, FALSE, g_pid);
                 for (i = 0; i < 1000 && !tid && !(tid = first_thread(g_pid)); i++) Sleep(1);
-                if (tid && h0) early_hook(dll, g_pid, tid, h0);
+                if (tid && h0) early_hook(hd, g_pid, tid, h0);
                 if (h0) CloseHandle(h0);
             }
         } else {
@@ -383,7 +392,7 @@ void WinMainCRTStartup(void)
             g_pid = pi.dwProcessId;
             // Without the early hook the dll is attached once the first window shows up.
             ResumeThread(pi.hThread);
-            early_hook(dll, g_pid, pi.dwThreadId, pi.hProcess);
+            early_hook(hd, g_pid, pi.dwThreadId, pi.hProcess);
             WaitForInputIdle(pi.hProcess, 30000);
             CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         }
