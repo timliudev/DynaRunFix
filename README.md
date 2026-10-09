@@ -46,6 +46,14 @@ see below). The same dll also fixes the [first-time setup](#first-time-setup) an
 
 ## What's new
 
+v1.3.0:
+- The installer can pin DynaRun to the taskbar and start it at sign-in (both on by default).
+- Updates: once a day DynaRunFix looks for a newer release and installs it on one click.
+- The first start right after installing shows the main screen correctly (before, it could be laid out too big
+  until DynaRun was started again).
+- Every log line has the date and time.
+- Known issue: after changing the screen resolution with DynaRun open, restart DynaRun.
+
 v1.2.3:
 - Nothing that changes Dyna Pro's setup is shipped any more (`tools/msi-novbs` removed).
 - The installer and the zip include miniz's licence (`LICENSE-miniz.txt`).
@@ -397,6 +405,13 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.3.0:
+- 安裝程式可以把 DynaRun 釘選到工作列、開機自動啟動(兩項預設勾選)。
+- 自動更新:每天檢查一次有沒有新版,按一下就安裝。
+- 裝好後第一次開 DynaRun,主畫面就正常(以前可能排得太大,要再開一次才正常)。
+- log 每行都有日期時間。
+- 已知問題:DynaRun 開著時改了螢幕解析度,請重開 DynaRun。
+
 v1.2.3:
 - 不再提供任何會修改 Dyna Pro 安裝檔的工具(移除 `tools/msi-novbs`)。
 - 安裝程式與 zip 附上 miniz 的授權(`LICENSE-miniz.txt`)。

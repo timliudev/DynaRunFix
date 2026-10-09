@@ -2,7 +2,7 @@
 
 [繁體中文在下方](#更新紀錄)
 
-## Unreleased
+## v1.3.0 — 2026-10-09
 
 - **Taskbar:** the installer pins DynaRun to the taskbar (check box on the first page, on by default;
   `/notaskbar` turns it off). Windows 7 to 10 pin the launcher shortcut directly, Windows XP / Vista put it
@@ -103,7 +103,7 @@
 
 ## 更新紀錄
 
-### 未發布
+### v1.3.0 — 2026-10-09
 
 - **工作列:** 安裝程式會把 DynaRun 釘選到工作列(第一頁的勾選項,預設勾選;`/notaskbar` 可關閉)。Windows 7 到 10 直接釘選
   啟動器捷徑,Windows XP / Vista 放進「快速啟動」,Windows 11 不允許程式自行釘選,改用微軟的工作列配置原則
