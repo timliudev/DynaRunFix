@@ -1303,6 +1303,22 @@ static void subclass_form(HWND h)
     PostMessageA(h, g_refit, 0, 0);
 }
 
+// The same AppUserModelID as the launcher shortcuts (setup.c), so a running DynaRun groups under the pinned icon and
+// shows its logo. Set when dynafix is first called in DynaRun, before its first window (a process-wide ID must come
+// before any window). Not in DllMain: since the dll is loaded before DynaRun starts, shell32 is not there yet then
+// (v1.3.0 to v1.3.2 never set the ID), and loading it under the loader lock is not allowed.
+static void set_appid(void)
+{
+    WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); char nv[4]; HMODULE sh; HRESULT hr = E_NOTIMPL;
+    HRESULT (WINAPI *f)(PCWSTR);
+    if (GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1') return;
+    if (l <= 14 || n[l - 15] != '\\' || lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) return;
+    if (!(sh = GetModuleHandleW(L"shell32.dll"))) sh = LoadLibraryW(L"shell32.dll");
+    f = sh ? (HRESULT (WINAPI *)(PCWSTR))GetProcAddress(sh, "SetCurrentProcessExplicitAppUserModelID") : NULL;   // Windows 7+
+    if (f) hr = f(L"DynaRunFix.DynaRunV3");
+    logf("AppUserModelID DynaRunFix.DynaRunV3 set: %08X (80004001 = not on this Windows) %u %u\r\n", (DWORD)hr, 0, 0);
+}
+
 static BOOL CALLBACK count_win(HWND h, LPARAM l) { (void)h; (*(int *)l)++; return TRUE; }
 
 __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
@@ -1319,6 +1335,7 @@ __declspec(dllexport) LRESULT CALLBACK CwpProc(int code, WPARAM w, LPARAM l)
             SetWindowsHookExA(WH_CALLWNDPROC, (HOOKPROC)CwpProc, g_self, GetCurrentThreadId());
             SetWindowsHookExA(WH_CALLWNDPROCRET, (HOOKPROC)RetProc, g_self, GetCurrentThreadId());
             logf("dynafix active pid=%u tid=%u ansi-codepage=%u\r\n", GetCurrentProcessId(), GetCurrentThreadId(), GetACP());
+            set_appid();
             {   // more than 0: DynaRun made windows (splash screen...) before dynafix was there, i.e. it was attached late
                 int nw = 0;
                 EnumThreadWindows(GetCurrentThreadId(), count_win, (LPARAM)&nw);
@@ -1346,16 +1363,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
     if (r == DLL_PROCESS_ATTACH) {
         BOOL noappid;
+        char nv[4];
         g_self = h;
         DisableThreadLibraryCalls(h);
-        {   // the same AppUserModelID as the launcher shortcuts (setup.c): a running DynaRun groups under the pinned icon
-            WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); char nv[4];
-            noappid = GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1';   // diagnostic switch
-            if (!noappid && l > 14 && n[l - 15] == '\\' && !lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) {
-                HRESULT (WINAPI *f)(PCWSTR) = (HRESULT (WINAPI *)(PCWSTR))GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SetCurrentProcessExplicitAppUserModelID");
-                if (f) f(L"DynaRunFix.DynaRunV3");       // Windows 7+
-            }
-        }
+        noappid = GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1';   // diagnostic switch
         if (GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16))
             lstrcatA(g_logpath, "\\dynafix.log");
         trim_log();

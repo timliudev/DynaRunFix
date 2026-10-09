@@ -2,6 +2,16 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.3 — 2026-10-09
+
+- **Taskbar (the actual cause):** since v1.3.0 `dynafix.dll` is loaded before DynaRun starts, and its `DllMain`
+  looked up `SetCurrentProcessExplicitAppUserModelID` in a shell32 that was not loaded yet: the AppUserModelID was
+  never set. The running DynaRun therefore never grouped under the pinned DynaRun icon and showed the exe's chart icon
+  as a button of its own (v1.3.0 to v1.3.2, whatever the shortcuts looked like). The ID is now set when dynafix is
+  first called in DynaRun, still before its first window, loading shell32 if needed; the log shows
+  `AppUserModelID DynaRunFix.DynaRunV3 set: 00000000`. Verified on Windows 11: started from the pinned icon or the
+  desktop shortcut, DynaRun shows as the pinned icon with DynaRun's logo, no extra button.
+
 ## v1.3.2 — 2026-10-09
 
 - **Taskbar icon:** `DynaRun V3.exe` holds only the chart icon of its windows; DynaRun's blue logo is in the icon file
@@ -120,6 +130,14 @@
 ---
 
 ## 更新紀錄
+
+### v1.3.3 — 2026-10-09
+
+- **工作列(真正的原因):** v1.3.0 起 `dynafix.dll` 在 DynaRun 啟動前就載入,而它在 `DllMain` 裡向還沒載入的 shell32 找
+  `SetCurrentProcessExplicitAppUserModelID`,所以 AppUserModelID 從來沒設上。執行中的 DynaRun 因此不會合併到釘選的 DynaRun 圖示下,
+  而是另外一個按鈕、顯示 exe 的表格圖示(v1.3.0 到 v1.3.2,不論捷徑怎麼設)。現在改在 dynafix 第一次在 DynaRun 裡被呼叫時設定
+  (仍在第一個視窗之前),需要時先載入 shell32;log 會記 `AppUserModelID DynaRunFix.DynaRunV3 set: 00000000`。已在 Windows 11 驗證:
+  從釘選的圖示或桌面捷徑開,DynaRun 就是那個釘選圖示、顯示 DynaRun 的 logo,沒有多出來的按鈕。
 
 ### v1.3.2 — 2026-10-09
 
