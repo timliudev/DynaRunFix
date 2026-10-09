@@ -502,6 +502,45 @@ static void set_appid(IShellLinkW *sl, const WCHAR *id)
     IPropertyStore_Release(ps);
 }
 
+// DynaRun's own icon. DynaRun V3.exe holds only the chart icon of its windows; the blue Dyna Run logo is in the icon
+// file Dyna Pro's MSI gives its shortcuts. Windows shows a running DynaRun with the icon of the shortcut that carries
+// its AppUserModelID, so every shortcut of ours gets that logo, taken from a DynaRun shortcut that does not use the exe.
+static BOOL g_icontried; static WCHAR g_icon[MAX_PATH]; static int g_iconidx;
+static BOOL find_icon(const WCHAR *dir, BOOL recurse)
+{
+    WCHAR *p = alloc(3 * MAX_PATH * sizeof(WCHAR)), *ic, *x; WIN32_FIND_DATAW fd; HANDLE f; IShellLinkW *sl; int idx; BOOL r = FALSE;
+    if (!p) return FALSE;
+    ic = p + MAX_PATH; x = ic + MAX_PATH;
+    f = FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
+    if (f != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            cat3(p, dir, L"\\", fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) r = find_icon(p, TRUE); continue; }
+            if (lstrlenW(p) < 4 || lstrcmpiW(p + lstrlenW(p) - 4, L".lnk") || classify(p) == LNK_OTHER || !(sl = load_link(p))) continue;
+            ic[0] = 0; idx = 0;
+            IShellLinkW_GetIconLocation(sl, ic, MAX_PATH, &idx);
+            IShellLinkW_Release(sl);
+            if (ic[0] && lstrcmpiW(ic, g_exe) && ExpandEnvironmentStringsW(ic, x, MAX_PATH) && exists(x)) {
+                lstrcpyW(g_icon, ic); g_iconidx = idx; r = TRUE;
+            }
+        } while (!r && FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+    release(p);
+    return r;
+}
+
+static void dynarun_icon(void)
+{
+    static const int dirs[] = { CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU, CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY };
+    WCHAR d[MAX_PATH]; int i;
+    if (g_icontried) return;
+    g_icontried = TRUE;
+    for (i = 0; i < 4; i++)
+        if (SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_icon(d, i < 2)) return;
+}
+
 static BOOL save_link(const WCHAR *p, const WCHAR *target, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
 {
     IShellLinkW *sl; IPersistFile *pf; IShellLinkDataList *dl; WCHAR wd[MAX_PATH], *e; HRESULT hr = E_FAIL; DWORD fl;
@@ -509,6 +548,10 @@ static BOOL save_link(const WCHAR *p, const WCHAR *target, const WCHAR *icon, in
     lstrcpyW(wd, g_exe); for (e = wd + lstrlenW(wd); e > wd && *e != '\\'; e--); *e = 0;
     IShellLinkW_SetPath(sl, target);
     IShellLinkW_SetWorkingDirectory(sl, wd);
+    if (target == g_launcher && (!icon || !icon[0] || !lstrcmpiW(icon, g_exe))) {   // the exe's chart icon: DynaRun's logo instead
+        dynarun_icon();
+        if (g_icon[0]) { icon = g_icon; idx = g_iconidx; }
+    }
     IShellLinkW_SetIconLocation(sl, icon, idx);
     if (target == g_launcher) IShellLinkW_SetDescription(sl, L"DynaRun V3 (DynaRunFix)");
     set_appid(sl, target == g_launcher ? APPID : NULL);
