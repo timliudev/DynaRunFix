@@ -76,6 +76,11 @@ All versions: [CHANGELOG.md](CHANGELOG.md).
 1. Download **`DynaRunFix-Setup.exe`** from [Releases](https://github.com/timliudev/DynaRunFix/releases)
    and double-click it. Windows SmartScreen may say *"Windows protected your PC"* because the file is not
    code-signed: click **More info → Run anyway**.
+
+   | 1. Click *More info* | 2. Click *Run anyway* |
+   |---|---|
+   | ![SmartScreen: Windows protected your PC](docs/img/smartscreen-1.png) | ![SmartScreen with the Run anyway button](docs/img/smartscreen-2.png) |
+
 2. Follow the window. If DynaRun V3 is not installed yet, it downloads the DynaRun V3 setup from
    [Dyna Pro's website](https://dynapro.co.uk/Software_Release.htm) (or uses a
    DynaRun setup zip or `Setup.msi` already in *Downloads*, on the desktop, in *Documents* or next to the
@@ -447,6 +452,11 @@ v1.2.2:
 ### 使用方式
 1. 從 [Releases](https://github.com/timliudev/DynaRunFix/releases) 下載 **`DynaRunFix-Setup.exe`**，雙擊執行。
    因為檔案沒有數位簽章，Windows SmartScreen 可能顯示「Windows 已保護您的電腦」：請按 **其他資訊 → 仍要執行**。
+
+   | 1. 按「其他資訊」 | 2. 按「仍要執行」 |
+   |---|---|
+   | ![SmartScreen：Windows 已保護您的電腦](docs/img/smartscreen-1.png) | ![SmartScreen 的「仍要執行」按鈕](docs/img/smartscreen-2.png) |
+
 2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
    顯示 Dyna Pro 的授權合約，你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。
