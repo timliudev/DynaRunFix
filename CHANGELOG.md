@@ -2,6 +2,13 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.5 — 2026-10-10
+
+- **Run viewer after a run did not fill the screen:** the maximized "Dyna Pro測試後看圖程式" window was clipped to
+  the work area *and* kept its aspect ratio (meant only for the caption-less main dashboard), so it was ~76 px too
+  narrow with the desktop showing on the right, and maximizing again did not help (log:
+  `clipped to the work area 1936x1216 -> 1860x1168`). A form with a caption is now only clipped to the work area.
+
 ## v1.3.4 — 2026-10-10
 
 - **Installer, finding the setup:** the search in *Downloads*, on the desktop, in *Documents* and next to the
@@ -139,6 +146,12 @@
 ---
 
 ## 更新紀錄
+
+### v1.3.5 — 2026-10-10
+
+- **跑完後的看圖視窗沒填滿螢幕:** 「Dyna Pro測試後看圖程式」視窗最大化時,為了讓開工作列而縮小的同時也維持了長寬比
+  (這原本只該用在沒有標題列的主儀表板),寬度少了約 76 px,右邊露出桌面,再按最大化也一樣。有標題列的表單現在只縮到
+  工作區大小,寬度填滿。
 
 ### v1.3.4 — 2026-10-10
 
