@@ -2,6 +2,15 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.3.4 — 2026-10-10
+
+- **Installer, finding the setup:** the search in *Downloads*, on the desktop, in *Documents* and next to the
+  installer took any zip with an `.msi` inside, e.g. another vendor's `SpeedTuning_S_v10_ZH.zip`, unpacked it and
+  then showed "This is not the DynaRun V3 setup". Dyna Pro's zip is password-protected, so the search now only takes
+  password-protected zips (and DynaRun MSIs as before). A file the installer found by itself that turns out not to be
+  DynaRun's is skipped quietly: the next one is tried, or the setup is downloaded. The error page is shown only for a
+  file you chose with *Choose file...*, where any zip is still accepted.
+
 ## v1.3.3 — 2026-10-09
 
 - **Taskbar (the actual cause):** since v1.3.0 `dynafix.dll` is loaded before DynaRun starts, and its `DllMain`
@@ -130,6 +139,13 @@
 ---
 
 ## 更新紀錄
+
+### v1.3.4 — 2026-10-10
+
+- **安裝程式找安裝檔:** 在「下載」、桌面、「文件」和安裝程式旁邊搜尋時,原本只要 zip 裡有 `.msi` 就拿來用(例如別家的
+  `SpeedTuning_S_v10_ZH.zip`),解開後才跳出「這不是 DynaRun V3 安裝檔」。Dyna Pro 的 zip 有密碼,所以現在只收有密碼的 zip
+  (DynaRun 的 MSI 照舊)。安裝程式自己找到、但其實不是 DynaRun 的檔案會直接跳過,改試下一個或改從官網下載;錯誤頁只在你用
+  「選擇檔案…」自己選的檔案不對時才出現,自己選的話任何 zip 都可以。
 
 ### v1.3.3 — 2026-10-09
 

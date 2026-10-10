@@ -28,7 +28,8 @@ enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX };
 
 static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
-static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
+static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_pkg_found, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
+static int g_nfound;   // packages pkg_find_local has handed us so far
 static HANDLE g_thread;
 static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[300];
 static zipent g_zip;
@@ -305,7 +306,8 @@ static void install(int job)
 static void fetch(void)
 {
     g_pkg_ours = FALSE;
-    if (pkg_find_local(g_pkg)) { open_package(); return; }
+    g_pkg_found = g_nfound < 8 && pkg_find_local(g_pkg);   // the cap: pkg_reject remembers 8 files
+    if (g_pkg_found) { g_nfound++; open_package(); return; }
     g_pkg_ours = TRUE;
     start_job(JOB_DOWNLOAD, P_FETCH);
 }
@@ -320,6 +322,7 @@ static void not_dynarun(void)
     pkg_temp_dir(m); lstrcatW(m, L"\\Setup.msi");
     if (!lstrcmpiW(g_msi, m)) DeleteFileW(g_msi);   // our extracted copy
     if (g_pkg_ours) DeleteFileW(g_pkg);
+    if (g_pkg_found) { fetch(); return; }   // we picked it, not the user: quietly try the next one or download
     g_badfile = TRUE;
     set_page(P_FAIL);
 }
@@ -382,7 +385,7 @@ static void choose_file(void)
     of.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameW(&of)) return;
     if (g_pkg_ours && lstrcmpiW(g_pkg, f)) DeleteFileW(g_pkg);   // the download that turned out not to be wanted
-    lstrcpyW(g_pkg, f); g_pkg_ours = FALSE;
+    lstrcpyW(g_pkg, f); g_pkg_ours = g_pkg_found = FALSE;
     open_package();
 }
 
