@@ -1247,7 +1247,9 @@ static BOOL fit_pos(HWND h, WINDOWPOS *p)
     if (r.top < wa.top) OffsetRect(&r, 0, wa.top - r.top);
     if (r.right > wa.right) r.right = wa.right;
     if (r.bottom > wa.bottom) r.bottom = wa.bottom;
-    if (!g_waclip && p->cx > 0 && p->cy > 0) {                        // keep THBResize's aspect ratio, like a smaller screen
+    // keep THBResize's aspect ratio, like a smaller screen; only for the caption-less dashboard: a form with a caption
+    // (the run viewer after a run) is a normal window and just fills the work area
+    if (!g_waclip && p->cx > 0 && p->cy > 0 && (GetWindowLongA(h, GWL_STYLE) & WS_CAPTION) != WS_CAPTION) {
         int w = r.right - r.left, hh = r.bottom - r.top;
         if (w * p->cy > hh * p->cx) w = MulDiv(hh, p->cx, p->cy); else hh = MulDiv(w, p->cy, p->cx);
         r.right = r.left + w; r.bottom = r.top + hh;
