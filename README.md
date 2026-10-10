@@ -46,6 +46,10 @@ see below). The same dll also fixes the [first-time setup](#first-time-setup) an
 
 ## What's new
 
+v1.3.4:
+- The installer no longer picks up other programs' zips from *Downloads* (e.g. a tuning tool's zip with an MSI
+  inside) and then says "This is not the DynaRun V3 setup".
+
 v1.3.3 / v1.3.2:
 - The running DynaRun groups under the pinned DynaRun icon and shows DynaRun's own blue logo on the taskbar (not
   the chart icon as an extra button), also after updating from an older version.
@@ -103,7 +107,11 @@ Dyna Pro. The DynaRun setup runs with basic UI (`msiexec /qb!`), so its wizard p
 that uses VBScript, are not shown. The password is used only to open the zip and is not stored.
 The setup is recognised by its content, not its file name: only an MSI whose UpgradeCode is DynaRun's
 (`{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}`, the same in every version) is ever installed; for the zip this is
-checked after the password has opened it. Any other file is refused with a clear message.
+checked after the password has opened it. When looking in *Downloads* and the other folders by itself, the
+installer only takes a DynaRun MSI or a password-protected zip with an MSI inside (Dyna Pro's zip has a password);
+a file it found there that turns out not to be DynaRun's is skipped without a message and the next one, or the
+download, is used. Another zip can still be chosen with *Choose file...*; a file you chose that is not the DynaRun
+setup is refused with a clear message.
 
 What the installer does for the fix:
 - installs `DynaRunFix.exe`, `dynafix.dll`, `LICENSE.txt`, `LICENSE-miniz.txt` and a copy of `DynaRunFix-Setup.exe` (the
@@ -427,6 +435,9 @@ Win10/11 上主儀表板每秒閃好幾次(整個視窗消失又出現);同一�
 不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間,保持在 10 MB 以下,最舊的行先被丟掉;第一次啟動時另外會寫 DynaRun 自己的語言和選購功能設定,見下方)。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.3.4:
+- 安裝程式不會再把「下載」裡別的程式的 zip（例如裡面剛好有 MSI 的調校軟體）抓來用，然後跳出「這不是 DynaRun V3 安裝檔」。
+
 v1.3.3 / v1.3.2:
 - 執行中的 DynaRun 會合併到釘選的 DynaRun 圖示下,顯示 DynaRun 原本的藍色 logo(不再另外多一個表格圖示的按鈕),從舊版更新後也一樣。
 
@@ -474,7 +485,9 @@ v1.2.2:
 DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網，密碼由 Dyna Pro 提供。DynaRun 安裝檔以基本介面
 （`msiexec /qb!`）執行，所以不會出現它的精靈頁面（安裝檔裡唯一用到 VBScript 的部分）。密碼只用來打開 zip，不會被儲存。
 安裝檔是依內容辨識，不看檔名：只有 UpgradeCode 是 DynaRun 的（`{4787E5B2-F7CE-45B9-8D1D-68E167D06DF7}`，每個版本都相同）
-MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。其他檔案會被拒絕，並清楚告訴你原因。
+MSI 才會被安裝；zip 要等輸入密碼打開後才能檢查。安裝程式自己在「下載」等資料夾找檔案時，只會拿 DynaRun 的 MSI，
+或是有密碼、裡面有 MSI 的 zip（Dyna Pro 的 zip 有密碼）；自己找到但其實不是 DynaRun 的檔案會直接跳過、不顯示訊息，
+改用下一個或改從官網下載。其他 zip 仍可用「選擇檔案…」指定；你自己選的檔案如果不是 DynaRun 安裝檔，會被拒絕並清楚告訴你原因。
 
 安裝修正時會做這些事：
 - 把 `DynaRunFix.exe`、`dynafix.dll`、`LICENSE.txt`、`LICENSE-miniz.txt` 和一份 `DynaRunFix-Setup.exe`（解除安裝用）安裝到 `Program Files\DynaRunFix`（64 位元 Windows 為 `Program Files (x86)\DynaRunFix`）；
