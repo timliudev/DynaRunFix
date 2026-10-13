@@ -43,6 +43,7 @@ static void setup_tree(void)
 {
     WCHAR p[MAX_PATH], c[1000];
     GetTempPathW(MAX_PATH, g_base);
+    { WCHAR lp[MAX_PATH]; DWORD n = GetLongPathNameW(g_base, lp, MAX_PATH); if (n && n < MAX_PATH) lstrcpyW(g_base, lp); }   // CI temp folder is an 8.3 short path; the code under test compares canonical (long) paths
     wsprintfW(g_base + lstrlenW(g_base), L"drf-sec-%lu", GetCurrentProcessId());
     CreateDirectoryW(g_base, NULL);
     wsprintfW(g_root, L"%s\\root", g_base); CreateDirectoryW(g_root, NULL);
