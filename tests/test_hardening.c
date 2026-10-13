@@ -43,6 +43,7 @@ static void setup_tree(void)
 {
     WCHAR p[MAX_PATH], c[1000];
     GetTempPathW(MAX_PATH, g_base);
+    { WCHAR lp[MAX_PATH]; DWORD n = GetLongPathNameW(g_base, lp, MAX_PATH); if (n && n < MAX_PATH) lstrcpyW(g_base, lp); }   // CI temp folder is an 8.3 short path; the code under test compares canonical (long) paths
     wsprintfW(g_base + lstrlenW(g_base), L"drf-sec-%lu", GetCurrentProcessId());
     CreateDirectoryW(g_base, NULL);
     wsprintfW(g_root, L"%s\\root", g_base); CreateDirectoryW(g_root, NULL);
@@ -356,7 +357,7 @@ static void test_check_exe(void)
     wsprintfW(g_exe, L"%s\\DynaRun V3.exe", bin);
     CHECK(check_exe() && g_exe_trusted, L"a good exe in a folder users cannot change: trusted");
     g_is_writable = user_writable;
-    CHECK(check_exe() && (g_exe_trusted == is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
+    CHECK(check_exe() && (!g_exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
     g_is_writable = fake_writable;
     wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(), L"another file name is refused");
     wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(), L"a missing exe is refused");

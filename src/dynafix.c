@@ -2607,6 +2607,8 @@ static void cwp_work(CWPSTRUCT *c)
 // environment variable is inherited by DynaRun's own child processes, e.g. its first-start Setup helper, for which Windows would
 // otherwise ask for elevation; so here the word is taken out again (what was there before stays; the variable is removed when
 // nothing else is left). The launcher process itself (which loads this dll too) is left alone.
+// no CRT in this DLL: stop newer MSVC from turning the copy loops below into memcpy calls
+#pragma optimize("", off)
 static void clear_runasinvoker(void)
 {
     char exe[MAX_PATH], v[512], o[512], msg[400], *p, *q; DWORD n;
@@ -2639,6 +2641,7 @@ static void clear_runasinvoker(void)
         logf("%s", (DWORD)(UINT_PTR)msg, 0, 0);
     }
 }
+#pragma optimize("", on)
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
