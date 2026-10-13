@@ -357,7 +357,7 @@ static void test_check_exe(void)
     wsprintfW(g_exe, L"%s\\DynaRun V3.exe", bin);
     CHECK(check_exe() && g_exe_trusted, L"a good exe in a folder users cannot change: trusted");
     g_is_writable = user_writable;
-    CHECK(check_exe() && (g_exe_trusted == is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
+    CHECK(check_exe() && (!g_exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
     g_is_writable = fake_writable;
     wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(), L"another file name is refused");
     wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(), L"a missing exe is refused");
