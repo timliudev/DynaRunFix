@@ -1,0 +1,48 @@
+// Payload of DynaRunFix-Setup.exe. Paths are relative to the repository root (build.cmd runs rc there).
+#include <winver.h>
+#include "version.h"
+
+// Icon (tools\make-icon.py); 10 is what the wizard window class loads
+10 ICON "src\dynarunfix.ico"
+
+1 RCDATA "build\DynaRunFix.exe"
+2 RCDATA "build\dynafix.dll"
+3 RCDATA "manifest\DynaRun V3.exe.manifest"
+// miniz (MIT) is linked into this installer; its notice -> InstallDir\LICENSE-miniz.txt
+4 RCDATA "third_party\\miniz\\LICENSE"
+// DynaRunFix's own licence (MIT, with its warranty disclaimer) -> InstallDir\LICENSE.txt
+5 RCDATA "LICENSE"
+
+// Locale Emulator (LGPL-3.0, unmodified; fetched into build\le by tools\fetch-le.ps1) -> InstallDir\le
+10 RCDATA "build\\le\\LEProc.exe"
+11 RCDATA "build\\le\\LoaderDll.dll"
+12 RCDATA "build\\le\\LocaleEmulator.dll"
+13 RCDATA "build\\le\\LECommonLibrary.dll"
+14 RCDATA "build\\le\\LEConfig.xml"
+15 RCDATA "build\\le\\COPYING"
+16 RCDATA "build\\le\\COPYING.LESSER"
+17 RCDATA "build\\le\\THIRD-PARTY.txt"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "DynaRunFix (github.com/timliudev/DynaRunFix)"
+      VALUE "FileDescription", "DynaRunFix installer"
+      VALUE "FileVersion", DRF_VERSION
+      VALUE "ProductName", "DynaRunFix"
+      VALUE "ProductVersion", DRF_VERSION
+      VALUE "OriginalFilename", "DynaRunFix-Setup.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

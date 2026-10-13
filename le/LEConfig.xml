@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LEConfig>
+  <Profiles>
+    <Profile Name="zh-TW" Guid="7e3c1d2a-5b4f-4c6e-9a8d-1f2e3d4c5b6a" MainMenu="false">
+      <Parameter></Parameter>
+      <Location>zh-TW</Location>
+      <Timezone>Taipei Standard Time</Timezone>
+      <RunAsAdmin>false</RunAsAdmin>
+      <RedirectRegistry>true</RedirectRegistry>
+      <IsAdvancedRedirection>false</IsAdvancedRedirection>
+      <RunWithSuspend>false</RunWithSuspend>
+    </Profile>
+  </Profiles>
+</LEConfig>

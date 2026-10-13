@@ -1,0 +1,110 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v[0-9]*']
+  pull_request:
+  workflow_dispatch:
+
+# Third-party actions are pinned to a full commit SHA (the comment names the release); update them deliberately.
+# The default token is read-only; only the release job below gets more, and only on a version tag.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every cmd step stops at the first failing command.
+      - name: Build
+        shell: cmd
+        run: |
+          if "%GITHUB_REF_TYPE%"=="tag" set DRF_VERSION=%GITHUB_REF_NAME:~1%
+          call build.cmd || exit /b 1
+          call tests\build-tests.cmd || exit /b 1
+          call tests\build-shexec-tests.cmd || exit /b 1
+
+      # Installer hardening tests (src\setup.c, src\package.c, src\update.c); they use only temporary folders and HKCU\Software\DynaRunFixTest-<pid>.
+      - name: Hardening tests
+        shell: cmd
+        run: call tests\build-hardening-tests.cmd || exit /b 1
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "DynaRunFix-$env:GITHUB_REF_NAME" } else { "DynaRunFix-$($env:GITHUB_SHA.Substring(0,7))" }
+          $pkg = "dist\$name"
+          New-Item -ItemType Directory -Force $pkg | Out-Null
+          Copy-Item build\DynaRunFix.exe, build\dynafix.dll, build\DynaRunFix-Setup.exe, README.md, LICENSE $pkg
+          Copy-Item 'manifest\DynaRun V3.exe.manifest' $pkg
+          Copy-Item third_party\miniz\LICENSE "$pkg\LICENSE-miniz.txt"
+          Copy-Item build\le "$pkg\le" -Recurse
+          Compress-Archive -Path "$pkg\*" -DestinationPath "dist\$name.zip"
+          Copy-Item build\DynaRunFix-Setup.exe dist\DynaRunFix-Setup.exe
+          "PKG=$name" >> $env:GITHUB_ENV
+
+      # The two release files, handed on to the release job (and kept for download on every run).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          if-no-files-found: error
+          path: |
+            dist/${{ env.PKG }}.zip
+            dist/DynaRunFix-Setup.exe
+
+  # Only for a version tag. Takes the files the build job made, adds the checksums and the build provenance and creates the release.
+  release:
+    needs: build
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write        # create the release
+      id-token: write        # sign the build provenance (Sigstore, OIDC)
+      attestations: write    # store the build provenance attestation
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
+      # SHA-256 of the release assets, for people to compare (also put into the release notes below).
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $zip = "DynaRunFix-$env:GITHUB_REF_NAME.zip"
+          $lines = foreach ($f in 'DynaRunFix-Setup.exe', $zip) {
+            if (-not (Test-Path "dist\$f")) { throw "missing dist\$f" }
+            "$((Get-FileHash "dist\$f" -Algorithm SHA256).Hash.ToLower())  $f"
+          }
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", (($lines -join "`n") + "`n"))
+          $notes = @('SHA-256 of the files in this release (also attached as SHA256SUMS.txt).',
+                     'Build provenance: gh attestation verify <file> --repo timliudev/DynaRunFix', '', '```', ($lines -join "`n"), '```', '') -join "`n"
+          [IO.File]::WriteAllText("$PWD\dist\release-notes.md", $notes)
+          Get-Content dist\SHA256SUMS.txt
+          "ZIP=$zip" >> $env:GITHUB_ENV
+
+      # Build provenance (Sigstore) for the release assets: which repository and workflow run built them.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/DynaRunFix-Setup.exe
+            dist/${{ env.ZIP }}
+            dist/SHA256SUMS.txt
+
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist\DynaRunFix-Setup.exe "dist\$env:ZIP" dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --title $env:GITHUB_REF_NAME --generate-notes --notes-file dist\release-notes.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
