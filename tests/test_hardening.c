@@ -520,6 +520,103 @@ static void test_urls(void)
     CHECK(pkg_url_ok(L"https://anything.example/x", NULL), L"NULL = any host");
 }
 
+// Which running programs hold up the install, and which of them the setup may close (judge_proc), the path comparison,
+// the log of why the setup stopped, and a scan against real processes (a copy of this program named like DynaRun).
+static HANDLE start_idle(const WCHAR *exe)
+{
+    WCHAR c[MAX_PATH + 20]; STARTUPINFOW si; PROCESS_INFORMATION pi;
+    wsprintfW(c, L"\"%s\" --idle", exe);
+    ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    if (!CreateProcessW(NULL, c, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) return NULL;
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
+
+static void test_running(void)
+{
+    WCHAR exe[MAX_PATH], other[MAX_PATH], dir[MAX_PATH], inside[MAX_PATH], outside[MAX_PATH], upper[MAX_PATH], sh83[MAX_PATH], me[MAX_PATH], fold[MAX_PATH];
+    WCHAR sv_exe[MAX_PATH], sv_dir[MAX_PATH], tmp_old[MAX_PATH], logp[MAX_PATH]; BYTE *log; DWORD n, i; int r, cnt; runproc l[16]; HANDLE p;
+    lstrcpyW(sv_exe, g_exe); lstrcpyW(sv_dir, g_dir);
+    wsprintfW(exe, L"%s\\DynaRun V3.exe", g_root); wsprintfW(other, L"%s\\DynaRun V3.exe", g_other);
+    wsprintfW(dir, L"%s\\", g_root); wsprintfW(inside, L"%s\\DynaRunFix.exe", g_root); wsprintfW(outside, L"%s\\DynaRunFix.exe", g_other);
+    lstrcpyW(upper, exe); CharUpperW(upper);
+
+    // DynaRun: the known exe is in the way (closable in this session only); another folder's is not; unreadable / unknown cannot be told
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, exe, exe, dir) == JUDGE_CLOSE, L"DynaRun: same exe, same session: closable");
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, upper, exe, dir) == JUDGE_CLOSE, L"DynaRun: path case does not matter");
+    CHECK(judge_proc(RUN_DYNARUN, FALSE, exe, exe, dir) == JUDGE_OTHERSESSION, L"DynaRun: same exe, other session: in the way, not closable");
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, other, exe, dir) == JUDGE_SKIP, L"DynaRun of another folder: not in the way");
+    CHECK(judge_proc(RUN_DYNARUN, FALSE, other, exe, dir) == JUDGE_SKIP, L"DynaRun of another folder, other session: not in the way");
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, L"", exe, dir) == JUDGE_NOPATH, L"DynaRun: unreadable path: in the way, not closable");
+    CHECK(judge_proc(RUN_DYNARUN, FALSE, L"", exe, dir) == JUDGE_NOPATH, L"DynaRun: unreadable path, other session");
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, exe, L"", dir) == JUDGE_NOEXE, L"DynaRun: its folder not known: in the way, not closable");
+    CHECK(judge_proc(RUN_DYNARUN, TRUE, L"", L"", dir) == JUDGE_NOPATH, L"DynaRun: nothing known");
+    // 8.3 name of the same file
+    if (GetShortPathNameW(g_root, sh83, MAX_PATH) && lstrcmpiW(sh83, g_root)) {
+        WCHAR s[MAX_PATH];
+        mkfile(g_root, L"DynaRun V3.exe", "x");
+        wsprintfW(s, L"%s\\DynaRun V3.exe", sh83);
+        CHECK(same_path(s, exe), L"short and long name of one file are the same path");
+        CHECK(judge_proc(RUN_DYNARUN, TRUE, s, exe, dir) == JUDGE_CLOSE, L"DynaRun: path in 8.3 form");
+        CHECK(!same_path(s, other), L"short name of another file differs");
+    }
+    CHECK(!same_path(L"", L""), L"two empty paths are not a match");
+    CHECK(!same_path(exe, L""), L"empty path is not a match");
+    // launcher and LEProc: ours when they run from the install folder (or the path cannot be read)
+    CHECK(judge_proc(RUN_LAUNCHER, TRUE, inside, exe, dir) == JUDGE_CLOSE, L"launcher in the install folder: closable");
+    CHECK(judge_proc(RUN_LEPROC, FALSE, inside, exe, dir) == JUDGE_OTHERSESSION, L"LEProc of the install folder, other session: not closable");
+    CHECK(judge_proc(RUN_LAUNCHER, TRUE, outside, exe, dir) == JUDGE_SKIP, L"launcher of another folder: not in the way");
+    CHECK(judge_proc(RUN_LAUNCHER, TRUE, L"", exe, dir) == JUDGE_NOPATH, L"launcher with unreadable path: in the way, not closable");
+    CHECK(judge_proc(RUN_LAUNCHER, TRUE, inside, L"", dir) == JUDGE_CLOSE, L"launcher does not need the DynaRun path");
+
+    // the log of why the setup stopped goes to %TEMP% (here: the test folder) when there is no install folder to write to
+    GetEnvironmentVariableW(L"TMP", tmp_old, MAX_PATH);
+    SetEnvironmentVariableW(L"TMP", g_base);
+    lstrcpyW(g_dir, g_base); lstrcatW(g_dir, L"\\no-such-folder");
+    l[0].pid = 4242; l[0].bit = RUN_DYNARUN; l[0].sess = 7; l[0].why = JUDGE_OTHERSESSION; lstrcpyW(l[0].path, exe);
+    l[1].pid = 4243; l[1].bit = RUN_LAUNCHER; l[1].sess = 7; l[1].why = JUDGE_NOPATH; l[1].path[0] = 0;
+    g_close = FALSE;
+    log_running(L"testing", l, 2, RUN_DYNARUN | RUN_LAUNCHER | RUN_NOCLOSE);
+    wsprintfW(logp, L"%s\\DynaRunFix-setup.log", g_base);
+    log = read_file(logp, &n);
+    CHECK(log != NULL, L"setup log written to %TEMP%");
+    if (log) {
+        char *t = alloc(n + 1);
+        for (i = 0; i < n; i++) t[i] = (char)log[i];
+        t[n] = 0;
+        CHECK(strstr(t, "testing") && strstr(t, "exit code 6") && strstr(t, "DynaRun V3.exe pid 4242") && strstr(t, "another session") &&
+              strstr(t, "DynaRunFix.exe pid 4243") && strstr(t, "cannot be read"), L"log names the programs and the reasons");
+        release(t);
+    }
+    release(log);
+    if (tmp_old[0]) SetEnvironmentVariableW(L"TMP", tmp_old); else SetEnvironmentVariableW(L"TMP", NULL);
+
+    // a real process: a copy of this program named DynaRun V3.exe
+    lstrcpyW(g_dir, sv_dir);
+    wsprintfW(fold, L"%s\\scan", g_base); CreateDirectoryW(fold, NULL);
+    wsprintfW(exe, L"%s\\DynaRun V3.exe", fold);
+    GetModuleFileNameW(NULL, me, MAX_PATH);
+    if (CopyFileW(me, exe, FALSE) && (p = start_idle(exe))) {
+        Sleep(500);
+        lstrcpyW(g_exe, exe);
+        r = scan_programs(l, 16, &cnt);
+        CHECK((r & RUN_DYNARUN) && (r & RUN_CANCLOSE) && !(r & RUN_NOCLOSE) && cnt >= 1, L"scan: the known DynaRun in this session is closable");
+        lstrcpyW(g_exe, other);
+        CHECK(scan_programs(l, 16, &cnt) == 0, L"scan: DynaRun of another folder is not in the way");
+        g_exe[0] = 0;
+        r = scan_programs(l, 16, &cnt);
+        CHECK((r & RUN_DYNARUN) && (r & RUN_NOCLOSE) && !(r & RUN_CANCLOSE), L"scan: DynaRun with its folder not known: in the way, not closable");
+        lstrcpyW(g_exe, exe);
+        g_close = TRUE;
+        close_programs();
+        CHECK(WaitForSingleObject(p, 15000) == WAIT_OBJECT_0, L"close_programs ends the known DynaRun");
+        CHECK(scan_programs(l, 16, &cnt) == 0, L"scan: nothing left");
+        CloseHandle(p);
+    } else CHECK(FALSE, L"could not start the DynaRun stand-in");
+    g_close = FALSE;
+    lstrcpyW(g_exe, sv_exe); lstrcpyW(g_dir, sv_dir);
+}
+
 static void test_misc(void)
 {
     WCHAR a[80], b[80];
@@ -576,6 +673,7 @@ static void test_shortcut_paths(void)
 int wmain(void)
 {
     HKEY k;
+    if (wcsstr(GetCommandLineW(), L"--idle")) { Sleep(120000); return 0; }     // the DynaRun stand-in of test_running
     g_quiet = TRUE; g_zh = FALSE;
     setvbuf(stdout, NULL, _IONBF, 0);
     setup_tree();
@@ -588,6 +686,7 @@ int wmain(void)
     wprintf(L"[stage]\n"); test_stage();
     wprintf(L"[manifest]\n"); test_manifest();
     wprintf(L"[urls]\n"); test_urls();
+    wprintf(L"[running]\n"); test_running();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     {   // clean up
