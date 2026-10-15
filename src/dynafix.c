@@ -34,6 +34,22 @@
 #include <restartmanager.h>
 #include "version.h"
 #include "setup_match.h"
+#include "dfutil.h"
+
+// DYNAFIX_* switches: see dfutil.h (the whole value must be the expected one; an over-long value is not read)
+static BOOL env_flag(const char *name, char want) { char v[4]; DWORD n = GetEnvironmentVariableA(name, v, sizeof(v)); return df_env_flag(v, n, sizeof(v), want); }
+// A system DLL, from System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32; where that flag is not known - Windows XP without KB2533623 - by its
+// full path in the system folder): never from the folder of DynaRun or the current folder, where a same-named file could sit.
+static HMODULE load_sys(const char *name)
+{
+    HMODULE m = LoadLibraryExA(name, NULL, 0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+    if (!m && GetLastError() == ERROR_INVALID_PARAMETER) {
+        char p[MAX_PATH + 16]; UINT n = GetSystemDirectoryA(p, MAX_PATH);
+        if (n && n < MAX_PATH) { lstrcatA(p, "\\"); lstrcatA(p, name); m = LoadLibraryA(p); }
+    }
+    return m;
+}
+static BOOL env_num(const char *name, long *out) { char v[12]; DWORD n = GetEnvironmentVariableA(name, v, sizeof(v)); return df_env_num(v, n, sizeof(v), out); }
 
 #pragma comment(linker, "/EXPORT:CwpProc=_CwpProc@12")
 
@@ -199,7 +215,7 @@ static void log_versions(void)
     char exe[MAX_PATH], app[40], win[48], msg[200]; DWORD h, sz, ubr, n = sizeof(ubr); HKEY k; HMODULE v, nt;
     lstrcpyA(app, "?"); lstrcpyA(win, "?");
     GetModuleFileNameA(NULL, exe, MAX_PATH);
-    if ((v = LoadLibraryA("version.dll"))) {
+    if ((v = load_sys("version.dll"))) {
         GFVIA_t gsz = (GFVIA_t)GetProcAddress(v, "GetFileVersionInfoSizeA");
         GFVA_t get = (GFVA_t)GetProcAddress(v, "GetFileVersionInfoA");
         VQVA_t q = (VQVA_t)GetProcAddress(v, "VerQueryValueA");
@@ -527,7 +543,7 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
     if (is_setup_helper(file))
         do {
             SHELLEXECUTEINFOA se; sx_t sx = (sx_t)GetProcAddress(GetModuleHandleA("shell32.dll"), "ShellExecuteExA"); MSG m;
-            char lang[64]; DWORD n = sizeof(lang) - 1, t; HKEY k; BOOL on[N_OPT], quit = FALSE; WPARAM qcode = 0;
+            char lang[64]; DWORD n = sizeof(lang) - 1, t, code = 0; HKEY k; BOOL on[N_OPT], quit = FALSE, failed = FALSE; WPARAM qcode = 0;
             if (!sx) break;
             if (InterlockedCompareExchange(&g_helper_busy, 1, 0)) {   // a second OK click while the first helper is still being waited for
                 logf("setup helper is already running: this second request is not started %u %u %u\r\n", 0, 0, 0);
@@ -559,6 +575,7 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
                         if (m.message == WM_QUIT) { quit = TRUE; qcode = m.wParam; break; }   // not swallowed: handed on below
                         TranslateMessage(&m); DispatchMessageA(&m);
                     }
+                if (!quit && GetExitCodeProcess(se.hProcess, &code) && code != 0 && code != STILL_ACTIVE) failed = TRUE;   // exit code not observable: not counted as failed
                 CloseHandle(se.hProcess);
             }
             if (quit) {
@@ -567,7 +584,7 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
                 InterlockedExchange(&g_helper_busy, 0);
                 return (HINSTANCE)42;
             }
-            logf("setup helper finished %u %u %u\r\n", 0, 0, 0);
+            logf("setup helper finished, exit code %u %u %u\r\n", code, 0, 0);
             if (lang[0] && !RegOpenKeyExA(HKEY_CURRENT_USER, LANG_KEY, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &k)) {
                 char now[64]; DWORD m2 = sizeof(now) - 1;
                 if (RegQueryValueExA(k, "Default_Language", NULL, &t, (BYTE *)now, &m2) || t != REG_SZ) m2 = 0;
@@ -576,7 +593,8 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
                     logf("kept the chosen language %s (helper had set %s) %u\r\n", (DWORD)(UINT_PTR)lang, (DWORD)(UINT_PTR)now, 0);
                 RegCloseKey(k);
             }
-            enable_options(on);
+            if (failed) logf("setup helper ended with a non-zero exit code: the optional features are not switched on %u %u %u\r\n", 0, 0, 0);
+            else enable_options(on);
             if (!restart_dynarun()) {
                 logf("DynaRun could not be restarted automatically: it has to be started again by hand %u %u %u\r\n", 0, 0, 0);
                 start_hint(4, 0, NULL);
@@ -621,7 +639,7 @@ typedef DWORD (WINAPI *RmEnd_t)(DWORD);
 // Who holds the file/device `path`? Restart Manager answers for files; for device paths it may know nothing.
 static BOOL find_holder(const char *path, WCHAR *name, int n, DWORD *pid)
 {
-    HMODULE rm = LoadLibraryA("rstrtmgr.dll"); BOOL found = FALSE;
+    HMODULE rm = load_sys("rstrtmgr.dll"); BOOL found = FALSE;
     RmStart_t st; RmReg_t reg; RmGet_t get; RmEnd_t end;
     if (!rm) return FALSE;
     st = (RmStart_t)GetProcAddress(rm, "RmStartSession"); reg = (RmReg_t)GetProcAddress(rm, "RmRegisterResources");
@@ -846,8 +864,8 @@ static FARPROC WINAPI H_GetProcAddress(HMODULE m, LPCSTR name)
     // only shell32's own export (a Declare Lib "shell32"); another module exporting that name is left alone
     if (!lstrcmpA(name, "ShellExecuteA") && m && m == GetModuleHandleA("shell32.dll")) { r_shexec = f; return (FARPROC)H_ShellExecuteA; }
     if (!lstrcmpA(name, "DPConnect") && !r_dpconnect) {
-        char mod[MAX_PATH]; int n = GetModuleFileNameA(m, mod, MAX_PATH);
-        if (n >= 11 && !lstrcmpiA(mod + n - 11, "dynapro.dll")) { r_dpconnect = f; patch_dynapro(); return (FARPROC)H_DPConnect; }
+        char mod[MAX_PATH]; DWORD n = GetModuleFileNameA(m, mod, MAX_PATH);
+        if (df_is_dynapro(mod, n, MAX_PATH)) { r_dpconnect = f; patch_dynapro(); return (FARPROC)H_DPConnect; }
     }
     if (g_usbfix && !lstrcmpA(name, "DPSetData")) return setdata_attach(m, f);
     return f;
@@ -1440,6 +1458,7 @@ static LONG g_sd_hasp, g_sd_res;
 static LONG g_sd_dropped;                   // consecutive calls dropped while a call is abandoned
 static BOOL g_sd_notice;                    // the restart notice was shown (once per process)
 static DWORD g_sd_dropt, g_sd_othert, g_sd_abt;
+static DWORD g_sd_err;                      // GetLastError() as the helper's call left it (handed to the caller with the result)
 #define SD_DROP_CAP 300
 
 typedef LONG (WINAPI *setdata_t)(LONG, LONG *);
@@ -1468,8 +1487,8 @@ static DWORD WINAPI H_WaitForSingleObject(HANDLE h, DWORD ms)
     // The helper's infinite waits are made to return every 250 ms. Once the call is abandoned, a wait on an event returns
     // WAIT_TIMEOUT after a slice instead of waiting on, so the helper can end after DynaRun has reconnected. A wait on anything else
     // (a mutex, a semaphore, a thread...) is not cut short: handing a timeout to a wait for ownership could break what the caller
-    // relies on, so such a call stays blocked. If the kind cannot be told (-1) the substitution is made anyway: that is an ASSUMPTION
-    // (that dynapro.dll treats a timeout of such a wait as "not signalled yet" and ends the call), not a verified fact.
+    // relies on, so such a call stays blocked, and so does one whose kind cannot be told (-1). The substitution
+    // for an event is an ASSUMPTION (that dynapro.dll treats a timeout of such a wait as "not signalled yet" and ends the call), not a verified fact.
     for (;;) {
         DWORD r = ((DWORD (WINAPI *)(HANDLE, DWORD))r_wfso)(h, 250);
         if (r != WAIT_TIMEOUT) {
@@ -1481,7 +1500,7 @@ static DWORD WINAPI H_WaitForSingleObject(HANDLE h, DWORD ms)
                 ev = handle_is_event(h);
                 logf("DPSetData: the abandoned call waits on %s object %u %u\r\n", (DWORD)(UINT_PTR)(ev == 1 ? "an event" : ev == 0 ? "a non-event" : "an unknown kind of"), 0, 0);
             }
-            if (ev != 0) return WAIT_TIMEOUT;
+            if (ev == 1) return WAIT_TIMEOUT;
         }
     }
 }
@@ -1494,7 +1513,9 @@ static DWORD WINAPI setdata_thread(LPVOID unused)
         DWORD t;
         WaitForSingleObject(g_sd_go, INFINITE);
         t = GetTickCount();
+        SetLastError(0);
         g_sd_res = ((setdata_t)r_dpsetdata)(3, g_sd_hasp ? g_sd_p : NULL);
+        g_sd_err = GetLastError();
         prev = InterlockedCompareExchange(&g_sd_state, 3, 1);
         if (prev == 1) SetEvent(g_sd_done);
         else if (prev == 2) {
@@ -1520,13 +1541,15 @@ static LONG sd_drop(void)
         g_sd_dropt = now;
         logf("DPSetData: %u call(s) dropped while an abandoned call is still running\r\n", (DWORD)d, 0, 0);
     }
+    SetLastError(ERROR_TIMEOUT);   // 0 returned without the call having been made: not a stale error code of something else
     return 0;
 }
 
 // The helper finished while the caller was still waiting: hand its result and its copy of p back.
-static LONG sd_finish(LONG *p)
+static LONG sd_finish(LONG *p, DWORD *le)
 {
     LONG r = g_sd_res, i;
+    *le = g_sd_err;
     if (p && g_sd_hasp) for (i = 0; i < 3; i++) p[i] = g_sd_p[i];
     InterlockedExchange(&g_sd_dropped, 0);
     InterlockedExchange(&g_sd_state, 0);
@@ -1535,7 +1558,7 @@ static LONG sd_finish(LONG *p)
 
 static LONG WINAPI H_DPSetData(LONG mode, LONG *p)
 {
-    DWORD t0, el;
+    DWORD t0, el, le;
     LONG prev, i, r;
     if (g_sd_state == 2) return sd_drop();   // an abandoned call is still pending in dynapro.dll: no call of any mode may enter it
     if (mode != 3) {   // only mode 3 goes through the watchdog; anything else runs on the caller's thread, unchanged
@@ -1555,8 +1578,9 @@ static LONG WINAPI H_DPSetData(LONG mode, LONG *p)
     t0 = GetTickCount();
     for (;;) {
         if (WaitForSingleObject(g_sd_done, 100) == WAIT_OBJECT_0) {
-            r = sd_finish(p);
+            r = sd_finish(p, &le);
             LeaveCriticalSection(&g_sd_cs);
+            SetLastError(le);
             return r;
         }
         el = GetTickCount() - t0;
@@ -1569,11 +1593,13 @@ static LONG WINAPI H_DPSetData(LONG mode, LONG *p)
                 InterlockedExchange(&g_sd_dropped, 0);
                 logf("usbfix: DPSetData blocked %u ms with the device connection down: returned 0, DynaRun reconnects\r\n", el, 0, 0);
                 LeaveCriticalSection(&g_sd_cs);
+                SetLastError(ERROR_TIMEOUT);
                 return 0;
             }
             WaitForSingleObject(g_sd_done, INFINITE);   // the helper finished at this very moment
-            r = sd_finish(p);
+            r = sd_finish(p, &le);
             LeaveCriticalSection(&g_sd_cs);
+            SetLastError(le);
             return r;
         }
     }
@@ -1581,12 +1607,12 @@ static LONG WINAPI H_DPSetData(LONG mode, LONG *p)
 
 static FARPROC setdata_attach(HMODULE m, FARPROC f)
 {
-    char mod[MAX_PATH]; int n;
+    char mod[MAX_PATH]; DWORD n;
     static hook_t tbl[] = { { "WaitForSingleObject", &r_wfso, (FARPROC)H_WaitForSingleObject, NULL, "kernel32" }, { 0 } };
     HANDLE th;
     if (!f) return f;
     n = GetModuleFileNameA(m, mod, MAX_PATH);
-    if (n < 11 || lstrcmpiA(mod + n - 11, "dynapro.dll")) return f;
+    if (!df_is_dynapro(mod, n, MAX_PATH)) return f;
     if (InterlockedCompareExchange(&g_sd_once, 1, 0) != 0) return g_sd_once == 2 ? (FARPROC)H_DPSetData : f;
     r_dpsetdata = f;
     r_dpstatus = ((sd_gpa_t)r_gpa)(m, "DPConnStatus");
@@ -1886,7 +1912,7 @@ static void patch_font(void)
         r_gow = GetProcAddress(g, "GetObjectW");
         // kernel32 has it since Windows 7, psapi.dll before
         if (!(epm = (epm_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "K32EnumProcessModules")))
-            epm = (epm_t)GetProcAddress(LoadLibraryA("psapi.dll"), "EnumProcessModules");
+            epm = (epm_t)GetProcAddress(load_sys("psapi.dll"), "EnumProcessModules");
     }
     if (!epm) return;
     InterlockedExchange(&g_moddirty, 0);          // an event during the look below flags the next one
@@ -2320,9 +2346,9 @@ static void subclass_form(HWND h)
 // (v1.3.0 to v1.3.2 never set the ID), and loading it under the loader lock is not allowed.
 static void set_appid(void)
 {
-    WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); char nv[4]; HMODULE sh; HRESULT hr = E_NOTIMPL;
+    WCHAR n[MAX_PATH]; int l = GetModuleFileNameW(NULL, n, MAX_PATH); HMODULE sh; HRESULT hr = E_NOTIMPL;
     HRESULT (WINAPI *f)(PCWSTR);
-    if (GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1') return;
+    if (env_flag("DYNAFIX_NOAPPID", '1')) return;
     if (l <= 14 || n[l - 15] != '\\' || lstrcmpiW(n + l - 14, L"DynaRun V3.exe")) return;
     if (!(sh = GetModuleHandleW(L"shell32.dll"))) sh = LoadLibraryW(L"shell32.dll");
     f = sh ? (HRESULT (WINAPI *)(PCWSTR))GetProcAddress(sh, "SetCurrentProcessExplicitAppUserModelID") : NULL;   // Windows 7+
@@ -2647,14 +2673,13 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
     if (r == DLL_PROCESS_ATTACH) {
         BOOL noappid;
-        char nv[4];
         g_self = h;
         InitializeCriticalSection(&g_cs);
         DisableThreadLibraryCalls(h);
-        { char v[4]; g_stats = GetEnvironmentVariableA("DYNAFIX_STATS", v, sizeof(v)) && v[0] == '1'; }
-        { char v[4]; if (GetEnvironmentVariableA("DYNAFIX_PEGRC", v, sizeof(v)) && v[0] == '0') g_pegrc = FALSE; }
-        { char v[4]; g_usbfix = GetEnvironmentVariableA("DYNAFIX_USBFIX", v, sizeof(v)) && v[0] == '1'; }
-        noappid = GetEnvironmentVariableA("DYNAFIX_NOAPPID", nv, sizeof(nv)) && nv[0] == '1';   // diagnostic switch
+        g_stats = env_flag("DYNAFIX_STATS", '1');
+        if (env_flag("DYNAFIX_PEGRC", '0')) g_pegrc = FALSE;
+        g_usbfix = env_flag("DYNAFIX_USBFIX", '1');
+        noappid = env_flag("DYNAFIX_NOAPPID", '1');   // diagnostic switch
         {   // a TEMP too long for the buffer: no log at all (the buffer content would be undefined)
             DWORD tn = GetEnvironmentVariableA("TEMP", g_logpath, MAX_PATH - 16);
             if (tn && tn < MAX_PATH - 16) lstrcatA(g_logpath, "\\dynafix.log"); else g_logpath[0] = 0;
@@ -2663,30 +2688,19 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
         clear_runasinvoker();    // after the log path is known (it logs what it did)
         if (noappid) logf("DYNAFIX_NOAPPID=1: the explicit AppUserModelID is not set %u %u %u\r\n", 0, 0, 0);
         if (GetEnvironmentVariableW(L"DYNAFIX_FONT", g_fontW, LF_FACESIZE) >= LF_FACESIZE) g_fontW[0] = 0;
-        { char v[8]; g_fullscreen = GetEnvironmentVariableA("DYNAFIX_FULLSCREEN", v, sizeof(v)) && v[0] == '1';
-          g_waclip = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)) && !lstrcmpiA(v, "clip"); }
-        { char v[12]; DWORD i, n = 0;
-          if (GetEnvironmentVariableA("DYNAFIX_CONNHINT", v, sizeof(v)) && v[0] == '0') g_hints = FALSE;
-          if (GetEnvironmentVariableA("DYNAFIX_CONNHINT_MS", v, sizeof(v)) && v[0]) {
-              for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
-              if (n >= 500 && n <= 60000) g_hintms = n;
-          } }
+        g_fullscreen = env_flag("DYNAFIX_FULLSCREEN", '1');
+        { char v[8]; DWORD n = GetEnvironmentVariableA("DYNAFIX_WORKAREA", v, sizeof(v)); g_waclip = df_env_word(v, n, sizeof(v), "clip"); }
+        { long n;
+          if (env_flag("DYNAFIX_CONNHINT", '0')) g_hints = FALSE;
+          if (env_num("DYNAFIX_CONNHINT_MS", &n) && n >= 500 && n <= 60000) g_hintms = (DWORD)n;
+        }
         g_fontoff = !lstrcmpiW(g_fontW, L"off") || !lstrcmpiW(g_fontW, L"none") || !lstrcmpW(g_fontW, L"0");
         {
-            char v[8]; int i, n = 0;
-            if (GetEnvironmentVariableA("DYNAFIX_FONT_SCALE", v, sizeof(v)) && v[0]) {
-                for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
-                if (n >= 50 && n <= 150) g_fontscale = n;
-            }
-            g_fontline = GetEnvironmentVariableA("DYNAFIX_FONT_LINE", v, sizeof(v)) && v[0] == '1';
-            if (GetEnvironmentVariableA("DYNAFIX_FONT_LINEH", v, sizeof(v)) && v[0]) {   // 0 = off
-                for (i = 0, n = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
-                if (!n || (n >= 900 && n <= 1500)) g_lineh = n;
-            }
-            if (GetEnvironmentVariableA("DYNAFIX_CHARSET", v, sizeof(v)) && v[0]) {
-                for (i = 0, n = 0; v[i] >= '0' && v[i] <= '9'; i++) n = n * 10 + v[i] - '0';
-                if (n > 0 && n < 255) g_charset = (BYTE)n;
-            }
+            long n;
+            if (env_num("DYNAFIX_FONT_SCALE", &n) && n >= 50 && n <= 150) g_fontscale = (int)n;
+            g_fontline = env_flag("DYNAFIX_FONT_LINE", '1');
+            if (env_num("DYNAFIX_FONT_LINEH", &n) && (!n || (n >= 900 && n <= 1500))) g_lineh = (int)n;   // 0 = off
+            if (env_num("DYNAFIX_CHARSET", &n) && n > 0 && n < 255) g_charset = (BYTE)n;
         }
     }
     return TRUE;

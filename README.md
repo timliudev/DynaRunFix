@@ -9,11 +9,11 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 
 > This project is not affiliated with or endorsed by Dyna Pro Dynamometers Ltd. *THBResize* (`THBRes25.dll`),
 > the resize control DynaRun uses, is a product of THB Componentware; DynaRunFix is not affiliated with THB
-> Componentware either. DynaRunFix does not contain or redistribute any of their files, it modifies no Dyna Pro or
-> THB file on disk, and it does not bypass, disable or alter DynaRun's licence activation or copy protection.
+> Componentware either. DynaRunFix does not contain or redistribute any of their files, it modifies the content of no Dyna Pro or
+> THB program file (see "To be plain" below), and it does not bypass, disable or alter DynaRun's licence activation or copy protection.
 >
 > To be plain about what it does change: DynaRunFix **changes DynaRun's behaviour while it runs**, in memory, inside
-> the DynaRun process only. No Dyna Pro or THB file is modified. In detail, it
+> the DynaRun process only. The content of no Dyna Pro or THB file is modified. In detail, it
 >
 > - redirects import-table entries of modules loaded in that process: `PostMessageA` in `THBRes25.dll`; the
 >   file-attribute APIs, `GetProcAddress` and the text APIs imported by Microsoft's `MSVBVM60.DLL` and `scrrun.dll`; the font
@@ -28,12 +28,13 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 > - subclasses DynaRun's main form (`WM_WINDOWPOSCHANGING`, `WM_GETMINMAXINFO`, and it sends `WM_SETFONT` again), installs two
 >   window-message hooks on DynaRun's GUI thread (`WH_CALLWNDPROC`, `WH_CALLWNDPROCRET`) and stores a few window properties
 >   (`SetProp`, for example the previous `WM_SIZE`) on DynaRun's own windows;
-> - adjusts the VB6 runtime's in-memory screen size values (see [Status bar hidden behind the taskbar](#status-bar-hidden-behind-the-taskbar));
+> - adjusts the VB6 runtime's in-memory screen size values: it locates them by an instruction-byte pattern in Microsoft's MSVBVM60
+>   code (in memory only), changes them only if they equal the real screen size, and leaves them alone if the pattern is not found (see [Status bar hidden behind the taskbar](#status-bar-hidden-behind-the-taskbar));
 > - **writes DynaRun's own settings** under `HKCU\Software\DynaPro` (`Default_Language` and `System_Setup`: the user's own
 >   choices on the first start, see [First-time setup](#first-time-setup)), and `%TEMP%\dynafix.log`.
 >
 > The installer points DynaRun's shortcuts at the launcher (the original shortcut files are backed up) and, only when
-> Windows' UTF-8 option is on, adds a manifest file next to `DynaRun V3.exe` (see [Usage](#usage)). DynaRunFix never runs
+> Windows' UTF-8 option is on, adds a manifest file next to `DynaRun V3.exe` (see [Usage](#usage); for that it briefly changes the modification time of that exe and puts it back, the exe's content is never changed). DynaRunFix never runs
 > DynaRun with more rights than a normal start from your desktop (with UAC off, that normal start is already full administrator), or does not start it (see [Usage](#usage)). DynaRunFix does not touch any licensing,
 > activation or copy-protection mechanism or component.
 >
@@ -72,11 +73,21 @@ Windows 7 behaviour; genuine size changes still go through. No file is changed; 
 small log, `%TEMP%\dynafix.log` (every line starts with the date and time; a line is at most 1000 characters, longer ones end in `...`;
 when the dll or the launcher starts and the file is above 10 MB, it is cut to its newest 8 MB, from a full line on; it is not trimmed
 while DynaRun runs, so within one session it can grow beyond 10 MB; the launcher and the dll write to it in turn, so their lines are interleaved in time order) and,
-on the very first start only, DynaRun's own language and feature settings into DynaRun's registry key `HKCU\Software\DynaPro` (see below). The log names modules and APIs but no memory
-addresses, and can contain file paths and window titles: look through it before you post it anywhere. The same dll also fixes the [first-time setup](#first-time-setup) and
+whenever DynaRun starts its first-time setup helper (normally only on the very first start), DynaRun's own language and feature settings into DynaRun's registry key `HKCU\Software\DynaPro` (see below). The log names modules and APIs but no module or import addresses (it can show window and GDI handle values), and can contain file paths and window titles: look through it before you post it anywhere. The same dll also fixes the [first-time setup](#first-time-setup) and
 [OneDrive files that will not open](#some-dpr-files-will-not-open-empty-file-run-properties-no-curves).
 
 ## What's new
+
+v1.4.1 (2026-10-14):
+- Fix: a DynaRun installed in a folder whose path is longer than the launcher's own path (a non-default location) could not be started through the launcher ("Cannot start DynaRun"): the recorded path is now read in full.
+- The update check now follows redirects itself and checks every hop before a request is sent to it (as the downloads already did); before, only the address it ended up at was checked.
+- The launcher no longer takes another user's DynaRun (fast user switching) for ours, and stops instead of carrying on when the elevation state of the desktop shell's token cannot be told.
+- First-time setup: the feature values are not written when Dyna Pro's helper ends with a non-zero exit code.
+- Opt-in `DYNAFIX_USBFIX`: the last error code of the call is kept, a wait of an unknown kind is no longer cut short, `dynapro.dll` is matched by file name.
+- `DYNAFIX_*` switches must be exactly `1` (or `0`, a number, a word) to count; `version.dll`, `rstrtmgr.dll` and `psapi.dll` are loaded from the system folder only.
+- Installer: the copy made for the elevated start from a network drive is held open and compared until it has ended; the manifest next to `DynaRun V3.exe` is not deleted or scheduled for deletion when DynaRun's folder or exe can be changed by ordinary users.
+- README: the MSVBVM60 pattern scan is described, and several statements were made more exact (what is modified on disk, when the first-time values are written, what the log contains, the graph resource load, the compatibility setting *Run as administrator* as observed, what is kept in the registry, uninstall's taskbar policy scope).
+- Release builds accept only tags of the form `vN.N.N`.
 
 v1.4.0 (2026-10-14):
 - DynaRunFix never runs DynaRun with more rights than a normal start from the desktop: a launcher that is run as administrator
@@ -87,7 +98,7 @@ v1.4.0 (2026-10-14):
   [Graph menu in the wrong language](#graph-popup-menu-stays-english-without-administrator-rights)).
 - Installer, update and download hardening; uninstall asks for administrator permission first and for DynaRun to be closed.
 - First start: when the option buttons of DynaRun's system selection cannot be read reliably, nothing is written (only logged).
-- The log no longer contains memory addresses, and neither the launcher nor the dll follows links (symbolic links, junctions) when writing it.
+- The log no longer contains module or import addresses, and neither the launcher nor the dll follows links (symbolic links, junctions) when writing it.
 - Experimental, off by default, not yet verified with real hardware: `DYNAFIX_USBFIX` for a USB device that stops answering.
 
 v1.3.6:
@@ -192,6 +203,12 @@ What the installer does for the fix:
   (used only on a Traditional Chinese system with the UTF-8 option on, or whose FontAssoc lacks `ANSI(00)=YES`);
 - registers an uninstaller in *Programs and Features* / *Installed apps*.
 
+What DynaRunFix keeps on the machine besides the files above (uninstall removes these where it can; the files `com-copied.txt`, `com-backup`, `com-skipped.txt` and `setup.log` stay in the install folder, which then is not deleted):
+- `HKLM\SOFTWARE\DynaRunFix`: `InstallDir`; `DynaRunExe` (DynaRun's path, only when its folder and exe cannot be changed by ordinary users); `ManifestInstalled` (the manifest was added); `ExeOrigTimePath` / `ExeOrigTime` (only while the original modification time of `DynaRun V3.exe` still has to be restored); `TaskbarPolicy` / `TaskbarPolicySid` (the Windows 11 pin); and the subkey `Shortcuts` (backup of the original machine-wide shortcut files), besides the entry under `Uninstall`.
+- `HKCU\Software\DynaRunFix` of each user who ran DynaRun through the fix: `Shortcuts` (backup of that user's original shortcut files); `UpdateChecked`, `UpdateVersion`, `UpdateSha256`, `UpdateSkip`, `UpdateAsk`, `UpdateETag`, `DownloadETag` (the update check and the downloads); `NoticeElevatedLauncher`, `NoticeRunAsAdminLayer` (written only when you answer *No* to showing a one-time notice again).
+- On Windows 11 with the pin option: `StartLayoutFile` and `LockedStartLayout` = 1 under `HKEY_USERS\<user>\Software\Policies\Microsoft\Windows\Explorer` and `TaskbarLayout.xml` in the install folder. `LockedStartLayout` is the value Microsoft documents together with `StartLayoutFile`: while both are set, Windows treats the layout as locked. They are removed on uninstall (or when you install again without the pin option) only if `StartLayoutFile` still names our file; an organization's own layout is never touched.
+- In the install folder besides the program files: `TaskbarLayout.xml` and `DynaRun V3.lnk` (the shortcut the pin points at; with the pin option), and `setup.log` (what the administrator step did or skipped).
+
 Uninstalling restores the original shortcut files and removes the manifest it added only if the file is identical to the installer's own copy (a manifest that differs is left alone); if
 restoring the exe's modification time fails, the record of the original time is kept and the restore is tried again at the next run; the uninstall runs from the installed program (the install folder is administrators-only; no copy is made in `%TEMP%`), and the install folder with its setup file is removed by Windows at the next restart if it is still in use; other accounts'
 shortcuts that still start the fix are pointed back at `DynaRun V3.exe`. It asks whether to remove the fix only or
@@ -214,7 +231,7 @@ Two options on the first page of the wizard, both on by default (`/quiet` applie
   A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID). The pinning
   technique for Windows 7 to 10 is the one described by Gee Law ([blog post](https://geelaw.blog/entries/msedge-pins/)); Firefox uses the same approach; no Mozilla code is included.
 - **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-  starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes the Run value for every account, the taskbar policy values of the account that installed them, and points the pinned
+  starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes the Run value for every account, the taskbar policy values of the account that runs the uninstall, of the account the install recorded and of every other account whose taskbar layout file is still ours (their registry hives are loaded briefly for that), and points the pinned
   launcher shortcuts back at `DynaRun V3.exe`.
 
 **Updates.** DynaRun always opens first; the update never delays it. Once a day, after DynaRun was started, the
@@ -243,7 +260,7 @@ If *Documents* is in OneDrive and an earlier copy of DynaRun's manuals or exampl
 cannot do that itself and would stop with error 1305. File contents and OneDrive settings are not changed.
 
 **DynaRunFix never runs DynaRun with more rights than a normal start from the desktop**, and DynaRun does not need administrator
-rights. The launcher ignores the compatibility setting *Run as administrator* for `DynaRun V3.exe`; if the launcher itself is run as
+rights. The launcher adds `RunAsInvoker` to `__COMPAT_LAYER` in the environment of the DynaRun process it starts, which takes precedence over the compatibility setting *Run as administrator* for `DynaRun V3.exe` (observed, see [below](#run-as-administrator-is-not-needed)); if the launcher itself is run as
 administrator, it first starts itself again with the token of the desktop shell (Explorer) and ends, so DynaRun (and Locale Emulator)
 get exactly what a double-click on the desktop would give them: the user's normal, non-elevated token under UAC. If the shell's token
 is itself elevated (User Account Control off, or the built-in Administrator: the normal desktop is already full administrator), the
@@ -294,7 +311,7 @@ run, the selection window stays and one CPU core runs at 100 %. After a forced r
 and the optional features are off (the helper leaves the language value in the registry as `English` and the features' enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
 it waits for the helper, puts the chosen language back, switches on the picked features with the same values
 *Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
-`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (the log never contains memory addresses, and a symbolic link or junction in its place is not followed; every line starts with the date and time; a line is at most 1000 characters, longer ones end in `...`). `dynafix.dll` and the launcher can write to it at the same time: they take turns through a named lock (`Local\DynaRunFix.dynafix.log`), so lines are never mixed up, but their lines are interleaved. The size is checked only when the dll or the launcher starts: above 10 MB the file is cut to its newest 8 MB, from a full line on.
+`DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (the log never contains module or import addresses, and a symbolic link or junction in its place is not followed; every line starts with the date and time; a line is at most 1000 characters, longer ones end in `...`). `dynafix.dll` and the launcher can write to it at the same time: they take turns through a named lock (`Local\DynaRunFix.dynafix.log`), so lines are never mixed up, but their lines are interleaved. The size is checked only when the dll or the launcher starts: above 10 MB the file is cut to its newest 8 MB, from a full line on.
 
 Screenshots of DynaRun's own windows are not included. What you see: first DynaRun's language selection
 (English or Traditional Chinese), then its system selection screen (the machine model and the optional
@@ -305,7 +322,7 @@ The `System_Setup` values written for the optional features are exactly the user
 system selection screen. Observed with Process Monitor (registry operations only, on a fresh DynaRun 3.26.0 first start): the enable flags written are the same values, of the same type
 (`-1` as text), that DynaRun's own *Save and exit* writes for the same selection. DynaRun itself additionally adjusts a few AFR display settings when it saves,
 which DynaRunFix does not touch (they stay at their defaults until the configuration dialog is saved once). Nothing is written beyond what the screen
-lets the user pick. If `dynafix.dll` cannot read the option buttons reliably (for example because of an unusual theme, scaling or
+lets the user pick. The values are written whenever DynaRun starts that helper (DynaRunFix keeps no first-start flag of its own; normally that is only the first start), and not when the helper ends with a non-zero exit code (logged). If `dynafix.dll` cannot read the option buttons reliably (for example because of an unusual theme, scaling or
 high-contrast setting), it writes no feature values at all and only logs this (only buttons that are clearly read as green, i.e. picked, are written; with any doubt, nothing is); the features can then be switched on in DynaRun's
 *Engineering mode → System configuration*.
 
@@ -315,8 +332,9 @@ Root causes, registry values and test status: [docs/FIRST_START.md](docs/FIRST_S
 
 ### "Run as administrator" is not needed
 
-DynaRun does not need administrator rights for any of its screens, so the launcher starts it exactly as a normal start from the desktop would (not elevated on a normal UAC desktop; with UAC off or on the built-in Administrator the desktop itself is elevated and so is DynaRun, never more) and ignores the
-compatibility setting *Run as administrator*. Do not run `DynaRun V3.exe` itself as administrator either: DynaRun's setup registers
+DynaRun does not need administrator rights for any of its screens, so the launcher starts it exactly as a normal start from the desktop would (not elevated on a normal UAC desktop; with UAC off or on the built-in Administrator the desktop itself is elevated and so is DynaRun, never more); the compatibility setting *Run as administrator* does not elevate it when it is started through the launcher.
+Observed on Windows 11 with UAC on, with that setting set on a small test program named `DynaRun V3.exe`: started through the launcher it ran non-elevated, with no UAC prompt (the launcher logs that it found the setting), while starting the same file directly made Windows ask for elevation. The launcher only changes the environment of the process it starts; if Windows still demanded elevation, starting would fail (the launcher then says it cannot start DynaRun) and nothing would run elevated.
+ Do not run `DynaRun V3.exe` itself as administrator either: DynaRun's setup registers
 several ActiveX controls (MSComm, MSCOMCTL, MSHFlexGrid, ...) only for the current user (`HKCU\Software\Classes`), elevated processes
 ignore per-user COM registrations (Windows' rule), so an elevated DynaRun can stall at startup ("System Initializing. Please
 Wait. 115") and alter its per-user component registrations. Start DynaRun through the DynaRunFix shortcut instead.
@@ -421,7 +439,7 @@ system folder (`SysWOW64`). That is refused without administrator rights, so the
 `dynafix.dll` answers the control's request with the per-user file instead; nothing is written to the system folder.
 
 - Only for the one file name `PEGRC32D.dll` (bare, or with the system folder's path). The redirected load is always a resource-only
-  load: whatever flags the control passed, `dynafix.dll` loads the per-user file with `LOAD_LIBRARY_AS_IMAGE_RESOURCE` only, so the
+  load: a request that would load code (none of the data-file / image-resource flags) is not redirected, and for a resource request, whatever flags the control passed, `dynafix.dll` loads the per-user file with `LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE`, so the
   file is never run as code.
 - The path is built by `dynafix.dll` from the profile folder and `HKCU\Software\DynaPro\Operation_Data\Default_Language`
   (a plain folder name), never from the request. It must be a regular file with no reparse point on the way below the profile.
@@ -440,7 +458,7 @@ monitor, so a taskbar at the bottom covers DynaRun's status bar (recording mode,
 own behaviour on every Windows version, XP included; with the taskbar on the side the status bar is visible.
 
 `dynafix.dll` makes DynaRun see the primary monitor's work area (the screen minus the taskbar) as its screen
-size: it adjusts the VB6 runtime's in-memory screen size values to the work area before DynaRun's first form loads.
+size: it adjusts the VB6 runtime's in-memory screen size values to the work area before DynaRun's first form loads. It finds those values by an instruction-byte pattern in Microsoft's MSVBVM60 code, in memory only; it changes them only if they equal the real screen size, and if the pattern is not found it leaves them alone (and logs that).
 DynaRun's main window and dashboard then come out sized for the work area, with nothing out of place (observed). The
 runtime takes the values when the first form loads, so the launcher attaches the fix right as DynaRun starts (through
 Locale Emulator, LEProc runs in a job object that reports DynaRun's start at once). As a fallback the maximized window is
@@ -583,9 +601,8 @@ different foreign hook after the chain is set is left unpatched and logged rathe
 kernel32/kernelbase/gdi32/gdi32full/user32 and `api-ms-win-*` API sets match; a module without an import name table falls back to
 the old address match. `dynafix.log` shows `patched ... (by name)`, `... already held a hook: chained onto it`,
 `... not patched: ...` for each slot that could not be patched, and a per-module `import patch <module> [<table>]: N patched, M failed` line.
-`tests\build-shexec-tests.cmd` builds and runs the unit tests (currently the first-start helper path matching,
-`src\setup_match.h`); it exits with 0 if all pass. `tests\build-tests.cmd` builds the log test harness and
-`tests\build-hardening-tests.cmd` the installer hardening tests (see `tests\README.md`).
+`tests\build-shexec-tests.cmd` builds and runs the unit tests (the first-start helper path matching, `src\setup_match.h`; the `DYNAFIX_*` switch and `dynapro.dll` name parsing, `src\dfutil.h`; parts of the launcher); it exits with 0 if all pass. `tests\build-tests.cmd` builds the log test harness and
+`tests\build-hardening-tests.cmd` builds and runs the installer hardening tests (see `tests\README.md`).
 Diagnostic `DYNAFIX_STATS=1`: every 5 s `dynafix.log` gets one `stats(5s)` line (only when something happened) with the form
 `WM_SIZE` count, how many were duplicates, how many THBResize `0x591` messages were passed on or skipped and how many forms were
 shown or hidden. After start-up the lines stop, which shows that the guard has ended the hide/show loop.
@@ -630,10 +647,10 @@ The taskbar pin technique for Windows 7 to 10 was described by Gee Law ([blog po
 讓 *DynaRun V3* 馬力機軟體(Dyna Pro Dynamometers,S68 等機型)**原生在 Windows 10/11 執行時主畫面不再閃爍**的小型相容性修正。
 
 > 本專案與 Dyna Pro Dynamometers Ltd 無任何關係,也未經其認可。DynaRun 用來縮放表單的 *THBResize*(`THBRes25.dll`)
-> 是 THB Componentware 的產品;DynaRunFix 與 THB Componentware 同樣無任何關係。DynaRunFix 不包含、不散布他們的任何檔案,也不修改磁碟上任何 Dyna Pro 或 THB 的檔案,
+> 是 THB Componentware 的產品;DynaRunFix 與 THB Componentware 同樣無任何關係。DynaRunFix 不包含、不散布他們的任何檔案,也不修改任何 Dyna Pro 或 THB 程式檔案的內容(見下方「直白地說」),
 > 也不會繞過、停用或改變 DynaRun 的授權啟用或防拷機制。
 >
-> 直白地說 DynaRunFix 會改變什麼:它會**在 DynaRun 執行時改變 DynaRun 的行為**,只在 DynaRun 行程的記憶體中;不修改任何 Dyna Pro 或 THB 的檔案。具體來說,它
+> 直白地說 DynaRunFix 會改變什麼:它會**在 DynaRun 執行時改變 DynaRun 的行為**,只在 DynaRun 行程的記憶體中;不修改任何 Dyna Pro 或 THB 檔案的內容。具體來說,它
 >
 > - 把該行程中已載入模組的匯入表項目導向自己的函式:`THBRes25.dll` 的 `PostMessageA`;Microsoft 的 `MSVBVM60.DLL` 與 `scrrun.dll`
 >   匯入的檔案屬性 API、`GetProcAddress` 與文字 API;`DynaRun V3.exe`、DynaRun 資料夾內其他模組及其 OCX 元件的字型 API;
@@ -644,11 +661,11 @@ The taskbar pin technique for Windows 7 to 10 was described by Gee Law ([blog po
 > - 把 DynaRun 以 `GetProcAddress` 查到的 `ShellExecuteA`、`DPConnect` 換成自己的包裝函式,只有在開啟選用的 USB 開關時才再加上 `DPSetData`;
 > - 對 DynaRun 的主表單做子類別化(`WM_WINDOWPOSCHANGING`、`WM_GETMINMAXINFO`,並重新送出 `WM_SETFONT`),在 DynaRun 的 GUI 執行緒上安裝兩個視窗訊息掛鉤
 >   (`WH_CALLWNDPROC`、`WH_CALLWNDPROCRET`),並在 DynaRun 自己的視窗上存放少數視窗屬性(`SetProp`,例如上一次的 `WM_SIZE`);
-> - 調整 VB6 執行階段在記憶體中的螢幕大小值(見[狀態列被工作列遮住](#狀態列被工作列遮住));
+> - 調整 VB6 執行階段在記憶體中的螢幕大小值:以 Microsoft `MSVBVM60` 程式碼中的一段指令位元組特徵找出這些值(只在記憶體中),只有它們等於真實螢幕大小時才修改,找不到特徵就不動它(見[狀態列被工作列遮住](#狀態列被工作列遮住));
 > - **寫入 DynaRun 自己的設定**,位於 `HKCU\Software\DynaPro`(`Default_Language` 與 `System_Setup`:使用者在首次啟動時自己的選擇,見[首次設定](#首次設定)),以及 `%TEMP%\dynafix.log`。
 >
 > 安裝程式會把 DynaRun 的捷徑改為經由啟動器執行(會備份原本的捷徑檔),並且只有在開啟 Windows UTF-8 選項時,
-> 才在 `DynaRun V3.exe` 旁加上一個 manifest 檔(見[使用方式](#使用方式))。DynaRunFix 絕不會以高於「從你的桌面正常啟動」的權限執行 DynaRun(UAC 關閉時,正常啟動本來就是完整系統管理員),否則就不啟動(見[使用方式](#使用方式))。
+> 才在 `DynaRun V3.exe` 旁加上一個 manifest 檔(見[使用方式](#使用方式);為此會短暫改變該 exe 的修改時間後還原,exe 的內容絕不會被改動)。DynaRunFix 絕不會以高於「從你的桌面正常啟動」的權限執行 DynaRun(UAC 關閉時,正常啟動本來就是完整系統管理員),否則就不啟動(見[使用方式](#使用方式))。
 > DynaRunFix 不碰任何授權、啟用或防拷機制或元件。
 >
 > 你必須自備合法安裝的 DynaRun V3,並請自行確認使用本修正符合你與 Dyna Pro 之間的授權條款。
@@ -671,16 +688,27 @@ DynaRun V3 是 VB6 程式,表單由第三方元件 THBResize 2.5(`THBRes25.dll`)
 啟動器 `DynaRunFix.exe` 把 `dynafix.dll` 載入 DynaRun 行程,只在記憶體中把 THBRes25 對 `PostMessageA` 的呼叫導向修正函式:
 若這次 `0x591` 是由「與上一次完全相同的 `WM_SIZE`」引起的就不送出,行為就跟 Win7 一樣。真正的尺寸變化照常處理。
 不修改任何檔案,只寫一個 log:`%TEMP%\dynafix.log`(每行開頭有日期與時間;每行最多 1000 個字元,更長的以 `...` 結尾;dll 或啟動器啟動時若檔案超過 10 MB,就裁成最新的 8 MB,從完整的一行開始;
-DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;啟動器與 dll 輪流寫入,兩者的行依時間交錯),以及只在第一次啟動時,把 DynaRun 自己的語言和選購功能設定寫入 DynaRun 的登錄機碼 `HKCU\Software\DynaPro`(見下方)。
-log 只記模組與 API 名稱、不含記憶體位址,寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
+DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;啟動器與 dll 輪流寫入,兩者的行依時間交錯),以及在 DynaRun 啟動首次設定程式時(通常只有第一次啟動),把 DynaRun 自己的語言和選購功能設定寫入 DynaRun 的登錄機碼 `HKCU\Software\DynaPro`(見下方)。
+log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.4.1(2026-10-14):
+- 修正:DynaRun 裝在路徑比啟動器自己的路徑還長的資料夾(非預設位置)時,無法經由啟動器啟動(「無法啟動 DynaRun」):現在會完整讀取記錄的路徑。
+- 更新檢查現在自己處理重新導向,每一跳都在送出要求之前先檢查(下載本來就是這樣);之前只檢查最後到達的網址。
+- 啟動器不再把其他使用者(快速切換使用者)的 DynaRun 當成自己的;無法判斷桌面殼層 token 是否已提升時,會停止而不是繼續。
+- 首次設定:Dyna Pro 的設定程式以非零結束碼結束時,不寫入功能值。
+- 選用的 `DYNAFIX_USBFIX`:保留該呼叫的最後錯誤碼、種類不明的等待不再被縮短、以檔名比對 `dynapro.dll`。
+- `DYNAFIX_*` 開關必須剛好是 `1`(或 `0`、數字、單字)才算數;`version.dll`、`rstrtmgr.dll`、`psapi.dll` 只從系統資料夾載入。
+- 安裝程式:從網路磁碟為提升啟動所做的副本會一直保持開啟並比對到結束;DynaRun 的資料夾或 exe 一般使用者可以更改時,不會刪除或排程刪除 `DynaRun V3.exe` 旁的 manifest。
+- README:說明 MSVBVM60 的特徵掃描,並讓幾項敘述更精確(磁碟上修改了什麼、首次設定的值何時寫入、log 含什麼、圖表資源載入、相容性設定「以系統管理員身分執行」的觀察結果、登錄裡留下什麼、解除安裝的工作列原則範圍)。
+- Release 只接受 `vN.N.N` 形式的標籤。
+
 v1.4.0(2026-10-14):
 - DynaRunFix 一律不會以高於「從桌面正常啟動」的權限執行 DynaRun:以系統管理員身分執行的啟動器會先用桌面殼層的 token 重新啟動自己(UAC 下是一般、未提升的 token;桌面本身已是完整系統管理員時,雙擊本來就是那樣,就沿用它);完全取不到殼層 token 時才拒絕啟動 DynaRun。安裝程式不再把 COM 註冊複製到全機登錄;捷徑不再帶有「以系統管理員身分執行」旗標。
 - 沒有系統管理員權限時,圖表右鍵選單也是所選的語言(見[沒有系統管理員權限時,圖表右鍵選單是英文](#沒有系統管理員權限時圖表右鍵選單是英文))。
 - 強化安裝、更新與下載的安全性;解除安裝會先要求系統管理員權限，並請你先關閉 DynaRun。
 - 首次啟動:無法可靠讀取 DynaRun 系統選擇畫面的選項按鈕時,什麼都不寫(只記 log)。
-- log 不再含有記憶體位址,啟動器與 dll 寫 log 時也不跟隨連結(符號連結、連接點)。
+- log 不再含有模組或匯入位址,啟動器與 dll 寫 log 時也不跟隨連結(符號連結、連接點)。
 - 實驗性、預設關閉、尚未用實體硬體驗證:`DYNAFIX_USBFIX`,處理 USB 裝置不再回應的情況。
 
 v1.3.6:
@@ -754,6 +782,12 @@ DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網�
 - 把 [Locale Emulator](#開啟系統-utf-8-選項時中文亂碼) 放到 `DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到）；
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
+DynaRunFix 除了上述檔案之外，還會在這台電腦上留下這些東西（解除安裝會盡可能移除；`com-copied.txt`、`com-backup`、`com-skipped.txt` 與 `setup.log` 會留在安裝資料夾，該資料夾因此不會被刪除）：
+- `HKLM\SOFTWARE\DynaRunFix`：`InstallDir`；`DynaRunExe`（DynaRun 的路徑，只有在它的資料夾和 exe 一般使用者無法更改時才記錄）；`ManifestInstalled`（已加上 manifest）；`ExeOrigTimePath`／`ExeOrigTime`（只在 `DynaRun V3.exe` 的原始修改時間還需要還原時存在）；`TaskbarPolicy`／`TaskbarPolicySid`（Windows 11 的釘選）；子機碼 `Shortcuts`（全機捷徑檔原本內容的備份）；另外還有 `Uninstall` 底下的項目。
+- 每位透過修正執行 DynaRun 的使用者的 `HKCU\Software\DynaRunFix`：`Shortcuts`（該使用者原本捷徑檔的備份）；`UpdateChecked`、`UpdateVersion`、`UpdateSha256`、`UpdateSkip`、`UpdateAsk`、`UpdateETag`、`DownloadETag`（更新檢查與下載）；`NoticeElevatedLauncher`、`NoticeRunAsAdminLayer`（只有在你對一次性通知回答「否」之後才寫入）。
+- Windows 11 且選了釘選時：`HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer` 下的 `StartLayoutFile` 與 `LockedStartLayout` = 1，以及安裝資料夾裡的 `TaskbarLayout.xml`。`LockedStartLayout` 是微軟文件中與 `StartLayoutFile` 搭配的值：兩者都設定時，Windows 會把這個配置視為鎖定。解除安裝（或不選釘選重新安裝）時，只有在 `StartLayoutFile` 仍指向我們的檔案時才會移除；組織自己設定的配置絕不會動。
+- 安裝資料夾裡除了程式檔之外：`TaskbarLayout.xml` 與 `DynaRun V3.lnk`（釘選所指向的捷徑，選了釘選時才有），以及 `setup.log`（系統管理員那一步做了或略過了什麼）。
+
 解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest（只有檔案與安裝程式自己的副本完全相同才會刪，不同的就留著）；若還原 exe 修改時間失敗，會保留原始時間的紀錄，下次執行再試；解除安裝是從已安裝的程式執行（安裝資料夾只有系統管理員能寫入，不會在 `%TEMP%` 另存副本），若安裝資料夾與裡面的安裝程式仍在使用中，會由 Windows 在下次重新開機時移除；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。解除安裝會先要求系統管理員權限，取消該確認的話什麼都不會改變；DynaRun 執行中時會先請你關閉。舊版曾把 DynaRun 的 COM 註冊複製到全機登錄；解除安裝會保留這些複本及其紀錄（安裝資料夾裡的 `com-copied.txt`、`com-backup`）。
 DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；唯一新增的檔案是 manifest，而且只在開啟 UTF-8 選項時），也不會修改你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`、`/notaskbar`、`/noautostart`、`/keep`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
 
@@ -765,7 +799,7 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
   最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。
   執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。Windows 7 到 10 的釘選手法是 Gee Law 描述的方式（[部落格文章](https://geelaw.blog/entries/msedge-pins/)；Firefox 也用同一手法）；不含任何 Mozilla 程式碼。
 - **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
-  取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值、安裝它的那個帳號的工作列原則值，並把釘選的啟動器捷徑改回指向 `DynaRun V3.exe`。
+  取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值、執行解除安裝的帳號、安裝時記錄的帳號，以及工作列配置檔仍是我們的其他帳號的工作列原則值（為此會短暫載入它們的登錄 hive），並把釘選的啟動器捷徑改回指向 `DynaRun V3.exe`。
 
 **更新。** DynaRun 一律先開啟，更新不會拖慢它。每天一次，DynaRun 啟動後，安裝好的安裝程式會在背景向 GitHub API 查詢本專案的最新版本（不會送出其他資料）。
 檢查只用 HTTPS，而且只連 GitHub 自己的主機（API、`github.com` 與 GitHub 的發行檔案主機；每一次重新導向都會檢查，查詢與下載都一樣）。
@@ -782,7 +816,7 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
 如果「文件」放在 OneDrive，而之前留下的 DynaRun 手冊或範例檔是「只在線上」，安裝程式會先讀取這些檔案讓 OneDrive 下載下來；
 Windows Installer 自己做不到，會出現錯誤 1305。不會改變檔案內容或 OneDrive 設定。
 
-**DynaRunFix 一律不會以高於「從桌面正常啟動」的權限執行 DynaRun**，而 DynaRun 本來就不需要系統管理員權限。啟動器會忽略 `DynaRun V3.exe` 的相容性設定「以系統管理員身分執行」；
+**DynaRunFix 一律不會以高於「從桌面正常啟動」的權限執行 DynaRun**，而 DynaRun 本來就不需要系統管理員權限。啟動器會在它所啟動的 DynaRun 行程環境的 `__COMPAT_LAYER` 加上 `RunAsInvoker`，其優先於 `DynaRun V3.exe` 的相容性設定「以系統管理員身分執行」(觀察結果，見[下方](#不需要以系統管理員身分執行))；
 如果啟動器本身是以系統管理員身分執行的，就先用桌面殼層(檔案總管)的 token 重新啟動自己並結束，所以 DynaRun(和 Locale Emulator)得到的，正是從桌面雙擊會得到的權限：UAC 下是使用者一般、未提升的 token。
 殼層的 token 本身已提升時（UAC 關閉，或使用內建的 Administrator：平常的桌面就是完整系統管理員），啟動器沿用它繼續執行並寫入 `dynafix.log`，沒有什麼需要放掉；此時 `dynafix.dll` 會略過圖表語言的轉向（見下方）。
 只有完全取不到殼層 token 時，啟動器才會顯示訊息、不啟動 DynaRun。token 是一般權限，或相容性設定被忽略時，會顯示一次性通知（英文或繁體中文；對「下次還要顯示這個通知嗎？」回答「否」即可關閉）。
@@ -815,21 +849,22 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest 與 `LICE
 沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:設定程式執行完後,選擇視窗不消失、CPU 一核 100%。
 強制重新啟動後語言變成英文,選購功能也是關閉的(設定程式執行後,登錄裡的語言值是 `English`,選購功能的啟用旗標是 `0`)。
 `dynafix.dll` 只在記憶體中包裝 DynaRun 的 `ShellExecuteA`:等設定程式結束、寫回選的語言、以和「工程模式 → 系統組態設定 → 存檔並離開」相同的值啟用勾選的功能,
-再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`(log 不含記憶體位址，檔案位置若被換成符號連結或連接點也不會跟隨；每行有日期與時間;每行最多 1000 個字元,更長的以 `...` 結尾)。`dynafix.dll` 與 launcher 可能同時寫這個檔案,它們透過一個具名鎖(`Local\DynaRunFix.dynafix.log`)輪流寫,行不會互相混在一起,但兩者的行會交錯。只有在 dll 或 launcher 啟動時才檢查大小:超過 10 MB 就裁成最新的 8 MB,從完整的一行開始。
+再透過 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun。每一步都記錄在 `%TEMP%\dynafix.log`(log 不含模組或匯入位址，檔案位置若被換成符號連結或連接點也不會跟隨；每行有日期與時間;每行最多 1000 個字元,更長的以 `...` 結尾)。`dynafix.dll` 與 launcher 可能同時寫這個檔案,它們透過一個具名鎖(`Local\DynaRunFix.dynafix.log`)輪流寫,行不會互相混在一起,但兩者的行會交錯。只有在 dll 或 launcher 啟動時才檢查大小:超過 10 MB 就裁成最新的 8 MB,從完整的一行開始。
 
 本文件不附 DynaRun 自己視窗的截圖。實際畫面:先出現 DynaRun 的語言選擇(英文或繁體中文),接著是它的系統選擇畫面
 (選機型與選配模組,例如勾選大氣監測、空燃比分析儀),自動重新啟動後主畫面會是所選的語言。
 
 為選購功能寫入的 `System_Setup` 值,就是使用者自己在 DynaRun 首次啟動的系統選擇畫面上的選擇,用 Process Monitor 觀察(只看登錄檔操作,在全新的 DynaRun 3.26.0 首次啟動上):寫入的啟用旗標,與 DynaRun 自己按「存檔並離開」時對同一組選擇寫入的值相同(型別相同,文字 `-1`)。
 DynaRun 自己存檔時另外會調整幾個 AFR 顯示設定,DynaRunFix 不會動它們(在設定對話框存檔一次之前維持預設值)。
-不會寫入該畫面讓使用者選的範圍以外的東西。`dynafix.dll` 無法可靠讀取選項按鈕時(例如特殊的佈景主題、縮放或高對比設定),完全不寫入功能值,只記 log（只有明確讀到是綠色、也就是已勾選的按鈕才會寫入，有任何疑慮就什麼都不寫）;
+不會寫入該畫面讓使用者選的範圍以外的東西。每當 DynaRun 啟動該設定程式時就會寫入(DynaRunFix 自己沒有「第一次啟動」旗標;通常只有第一次啟動會這樣),設定程式以非零結束碼結束時則不寫入(會記 log)。`dynafix.dll` 無法可靠讀取選項按鈕時(例如特殊的佈景主題、縮放或高對比設定),完全不寫入功能值,只記 log（只有明確讀到是綠色、也就是已勾選的按鈕才會寫入，有任何疑慮就什麼都不寫）;
 之後可在 DynaRun 的「工程模式 → 系統組態設定」自行開啟功能。
 
 根本原因、登錄值與測試狀態見 [docs/FIRST_START.md](docs/FIRST_START.md)。
 
 ### 不需要以系統管理員身分執行
 
-DynaRun 的所有畫面都不需要系統管理員權限，所以啟動器完全比照從桌面正常啟動的權限來啟動它（一般 UAC 桌面下不提升；UAC 關閉或使用內建 Administrator 時桌面本身就是提升的，DynaRun 也一樣，絕不更高），並忽略相容性設定「以系統管理員身分執行」。
+DynaRun 的所有畫面都不需要系統管理員權限，所以啟動器完全比照從桌面正常啟動的權限來啟動它（一般 UAC 桌面下不提升；UAC 關閉或使用內建 Administrator 時桌面本身就是提升的，DynaRun 也一樣，絕不更高）；經由啟動器啟動時，相容性設定「以系統管理員身分執行」不會使它提升。
+觀察結果：在開啟 UAC 的 Windows 11 上，對一個名為 `DynaRun V3.exe` 的小型測試程式設定該相容性設定：經由啟動器啟動時，它以未提升的權限執行、沒有 UAC 提示（啟動器會在 log 記下發現了該設定）；直接啟動同一個檔案時，Windows 則會要求提升。啟動器只改變它所啟動行程的環境；如果 Windows 仍要求提升，啟動會失敗（啟動器會說明無法啟動 DynaRun），而且不會有任何東西以提升的權限執行。
 也請不要直接以系統管理員身分執行 `DynaRun V3.exe`：DynaRun 的安裝程式把 MSComm、MSCOMCTL、MSHFlexGrid 等 ActiveX 元件只註冊在目前使用者（`HKCU\Software\Classes`），
 以系統管理員執行的程式會忽略 HKCU 的 COM 註冊（Windows 的規則），所以以系統管理員執行的 DynaRun 可能在啟動時卡住（「System Initializing. Please Wait. 115」），
 並改動它的使用者元件註冊。請改從 DynaRunFix 的捷徑啟動。
@@ -898,8 +933,8 @@ DynaRun 的安裝程式把所選語言的副本放在 `%APPDATA%\Dyna Pro Dynamo
 
 `dynafix.dll` 改把元件的要求導向使用者目錄中的那個檔案,不會寫入系統資料夾。
 
-- 只針對 `PEGRC32D.dll` 這個檔名(單純檔名,或系統資料夾的完整路徑)。導向後的載入一律只載入資源:不論元件傳入什麼旗標,
-  `dynafix.dll` 都只以 `LOAD_LIBRARY_AS_IMAGE_RESOURCE` 載入使用者目錄中的檔案,因此該檔案不會被當成程式碼執行。
+- 只針對 `PEGRC32D.dll` 這個檔名(單純檔名,或系統資料夾的完整路徑)。導向後的載入一律只載入資源:會載入程式碼的要求(沒有資料檔／影像資源旗標)不會被導向;資源要求則不論元件傳入什麼旗標,
+  `dynafix.dll` 都以 `LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE` 載入使用者目錄中的檔案,因此該檔案不會被當成程式碼執行。
 - 路徑由 `dynafix.dll` 以使用者設定檔資料夾與 `HKCU\Software\DynaPro\Operation_Data\Default_Language`(必須是單純的資料夾名稱)組成,
   不取自要求內容;必須是一般檔案,且設定檔資料夾以下的路徑沒有重新分析點。任何一項不符就照原要求繼續。不鎖定檔案雜湊或版本:
   就是 DynaRun 安裝程式放在那裡的檔案。
@@ -912,7 +947,7 @@ DynaRun 主視窗是最大化但沒有標題列的視窗,Windows 會把這種視
 DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的行為,XP 也一樣;工作列放在側邊時就看得到。
 
 `dynafix.dll` 讓 DynaRun 把主螢幕的工作區(扣掉工作列的範圍)當成螢幕大小:在 DynaRun 載入第一個表單之前,
-把 VB6 執行階段在記憶體中的螢幕大小值調整成工作區大小。DynaRun 的主視窗和整個儀表版面就會依工作區大小排出來,
+把 VB6 執行階段在記憶體中的螢幕大小值調整成工作區大小;這些值是以 Microsoft `MSVBVM60` 程式碼中的一段指令位元組特徵找出來的(只在記憶體中),只有它們等於真實螢幕大小時才修改,找不到特徵就不動它(並記 log)。DynaRun 的主視窗和整個儀表版面就會依工作區大小排出來,
 所有元件位置都正確(觀察結果)。執行階段在載入第一個表單時取用這個值,所以 launcher
 在 DynaRun 一啟動就掛上修正(經過 Locale Emulator 時,LEProc 放在 job 物件中,DynaRun 一建立就會立即通知)。
 另外仍保留把最大化視窗限制在工作區內的保險。工作列自動隱藏時該邊留 2 像素。`DYNAFIX_FULLSCREEN=1` 保留原本的
@@ -1012,7 +1047,7 @@ dynafix 所有的匯入掛鉤(字型、文字度量、檔案屬性、`GetProcAdd
 來自 kernel32/kernelbase/gdi32/gdi32full/user32 與 `api-ms-win-*` API 集合的匯入都會比對;沒有匯入名稱表的模組退回舊的位址比對。
 `dynafix.log` 會出現 `patched ... (by name)`、`... already held a hook: chained onto it`、無法修補的欄位的 `... not patched: ...`,以及每個模組一行 `import patch <module> [<table>]: N patched, M failed`。
 
-`tests\build-shexec-tests.cmd` 會建置並執行單元測試(目前是首次啟動設定程式的路徑比對,`src\setup_match.h`),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試(見 `tests\README.md`)。
+`tests\build-shexec-tests.cmd` 會建置並執行單元測試(首次啟動設定程式的路徑比對 `src\setup_match.h`、`DYNAFIX_*` 開關與 `dynapro.dll` 檔名的解析 `src\dfutil.h`、啟動器的部分功能),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試(見 `tests\README.md`)。
 診斷用的 `DYNAFIX_STATS=1`:每 5 秒 `dynafix.log` 會有一行 `stats(5s)`(只在有事發生時),內容是表單 `WM_SIZE` 的次數、其中重複的次數、THBResize `0x591` 訊息被放行或略過的次數,以及表單被顯示或隱藏的次數。
 啟動之後這些行就停止,表示防護已經結束了隱藏/顯示迴圈。
 

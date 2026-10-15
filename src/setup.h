@@ -1,5 +1,6 @@
 // Shared declarations of DynaRunFix-Setup.exe (setup.c, wizard.c, package.c).
 #include <windows.h>
+#include <wininet.h>
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
@@ -53,6 +54,8 @@ BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .
 void pkg_reject(const WCHAR *path);         // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts);   // https and on one of the ';'-separated hosts (NULL = any)
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused);   // redirects followed by hand, each hop checked
+BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch);   // where a redirect from cur to loc goes, if allowed
 int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const WCHAR *host, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 BOOL zip_password_plausible(const zipent *e, const char *pw);
