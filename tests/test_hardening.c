@@ -521,6 +521,32 @@ static void test_urls(void)
     CHECK(pkg_url_ok(L"https://anything.example/x", NULL), L"NULL = any host");
 }
 
+// Where a redirect may lead (the update check and the downloads follow redirects by hand, each hop checked)
+static void test_redirects(void)
+{
+    WCHAR out[300];
+    const WCHAR *api = L"https://api.github.com/repos/o/r/releases/latest";
+    const WCHAR *dl = L"https://github.com/o/r/releases/download/v1/x.exe";
+    CHECK(pkg_redirect_target(dl, L"https://release-assets.githubusercontent.com/a/b?c=d", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://release-assets.githubusercontent.com/a/b?c=d"), L"redirect to the asset host");
+    CHECK(pkg_redirect_target(dl, L"https://objects.githubusercontent.com/a", GITHUB_HOSTS, out, 300), L"redirect to objects host");
+    CHECK(!pkg_redirect_target(api, L"https://evil.example/x", GITHUB_HOSTS, out, 300), L"redirect off GitHub refused");
+    CHECK(!pkg_redirect_target(api, L"http://github.com/x", GITHUB_HOSTS, out, 300), L"redirect to plain http refused");
+    CHECK(!pkg_redirect_target(api, L"https://github.com.evil.example/x", GITHUB_HOSTS, out, 300), L"look-alike host refused");
+    CHECK(!pkg_redirect_target(api, L"https://github.com@evil.example/x", GITHUB_HOSTS, out, 300), L"user name in the target refused");
+    CHECK(!pkg_redirect_target(api, L"https://raw.githubusercontent.com/x", GITHUB_HOSTS, out, 300), L"unlisted GitHub host refused");
+    CHECK(!pkg_redirect_target(api, L"ftp://github.com/x", GITHUB_HOSTS, out, 300), L"another scheme refused");
+    CHECK(!pkg_redirect_target(api, L"//evil.example/x", GITHUB_HOSTS, out, 300), L"protocol-relative target refused");
+    CHECK(!pkg_redirect_target(api, L"relative/path", GITHUB_HOSTS, out, 300), L"relative path refused");
+    CHECK(!pkg_redirect_target(api, L"", GITHUB_HOSTS, out, 300), L"empty target refused");
+    CHECK(pkg_redirect_target(api, L"/repos/o/r/releases/1", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://api.github.com/repos/o/r/releases/1"), L"same-host path");
+    CHECK(pkg_redirect_target(L"https://api.github.com?x=1", L"/p", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://api.github.com/p"), L"same-host path from a URL with a query");
+    CHECK(!pkg_redirect_target(L"https://evil.example/a", L"/p", GITHUB_HOSTS, out, 300), L"same-host path on a host that is not allowed");
+    CHECK(!pkg_redirect_target(api, L"/this/is/a/rather/long/path/that/does/not/fit", GITHUB_HOSTS, out, 60), L"does not fit the buffer");
+    CHECK(!pkg_redirect_target(api, L"https://github.com/this/is/a/rather/long/url/that/does/not/fit", GITHUB_HOSTS, out, 40), L"absolute target that does not fit");
+    CHECK(pkg_redirect_target(L"https://dynapro.co.uk/a", L"https://dynapro.co.uk/b", DYNAPRO_HOST, out, 300), L"single pinned host: same host");
+    CHECK(!pkg_redirect_target(L"https://dynapro.co.uk/a", L"https://github.com/b", DYNAPRO_HOST, out, 300), L"single pinned host: other host refused");
+}
+
 static void test_misc(void)
 {
     WCHAR a[80], b[80];
@@ -589,6 +615,7 @@ int wmain(void)
     wprintf(L"[stage]\n"); test_stage();
     wprintf(L"[manifest]\n"); test_manifest();
     wprintf(L"[urls]\n"); test_urls();
+    wprintf(L"[redirects]\n"); test_redirects();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     {   // clean up

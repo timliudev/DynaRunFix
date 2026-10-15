@@ -13,5 +13,10 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul || exit /b 1
 cd /d "%~dp0.."
 if not exist build mkdir build
 cl /nologo /W3 /utf-8 /Fobuild\ /Fe:build\test_shexec_match.exe tests\test_shexec_match.c kernel32.lib || exit /b 1
-build\test_shexec_match.exe
+build\test_shexec_match.exe || exit /b 1
+cl /nologo /W3 /utf-8 /Fobuild\ /Fe:build\test_dfutil.exe tests\test_dfutil.c kernel32.lib user32.lib || exit /b 1
+build\test_dfutil.exe || exit /b 1
+rem launcher pieces (DynaRunExe read, session filter, token state); needs build\version.h from build.cmd
+cl /nologo /W3 /utf-8 /Ibuild /Fobuild\tl_ /Fe:build\test_launcher.exe tests\test_launcher.c kernel32.lib user32.lib advapi32.lib shell32.lib || exit /b 1
+build\test_launcher.exe
 exit /b %errorlevel%
