@@ -249,10 +249,16 @@ for TLS 1.2 or later, like the downloads), nothing happens.
 
 DynaRun must be closed while the fix is installed or updated: a running DynaRun keeps the old
 `dynafix.dll` (and Locale Emulator's dlls) loaded. The installer checks for a running `DynaRun V3.exe`
-(and for `DynaRunFix.exe` / `LEProc.exe` from its own folder) before it changes anything. The wizard
+(and for `DynaRunFix.exe` / `LEProc.exe` from its own folder) before it changes anything. A `DynaRun V3.exe` that runs from another
+folder does not use the files being replaced and does not hold up the install. The wizard
 then offers *Close DynaRun and install*: DynaRun is closed like with its own close button, and ended
 if it is still running 10 seconds later (a test run in progress stops, unsaved data is lost).
 `/quiet` changes nothing and ends with exit code **6**; `/quiet /close` closes DynaRun the same way first.
+Only a DynaRun of the same Windows session whose path can be read is closed. If one of another user's session (or one whose path cannot be
+read) is running, closing from here would not help: the wizard says so and offers no close button, and `/quiet /close` ends with exit code 6 without
+closing anything; that user has to close DynaRun first. Why it stopped with 6 (which program, its process and session number, whether it could be closed) is
+written to `setup.log` in the install folder, or, before that folder exists or without administrator rights, to `%TEMP%\DynaRunFix-setup.log`.
+For unattended installs run `/quiet /close` while nobody is working in DynaRun.
 After copying, each installed file is read back and compared with the installer's copy.
 
 If *Documents* is in OneDrive and an earlier copy of DynaRun's manuals or example files there is
@@ -811,7 +817,8 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
 安裝或更新修正時，DynaRun 必須是關閉的：執行中的 DynaRun 會一直用已經載入的舊 `dynafix.dll`（和 Locale Emulator 的 dll）。
 安裝程式在改動任何東西之前，會先檢查是否有執行中的 `DynaRun V3.exe`（以及從安裝資料夾執行的 `DynaRunFix.exe`／`LEProc.exe`）。
 精靈會顯示「關閉 DynaRun 並安裝」：像按 DynaRun 自己的關閉鈕一樣關掉它，10 秒後還沒結束就強制結束（正在進行的測試會中斷，沒存檔的資料會遺失）。
-`/quiet` 則不做任何變更，以結束代碼 **6** 結束；`/quiet /close` 會先用同樣方式關閉 DynaRun 再安裝。複製完成後，每個安裝的檔案都會讀回來和安裝程式內的版本比對。
+`/quiet` 則不做任何變更，以結束代碼 **6** 結束；`/quiet /close` 會先用同樣方式關閉 DynaRun 再安裝。
+從別的資料夾執行的 `DynaRun V3.exe` 不會用到要更換的檔案，不會擋住安裝。只有同一個登入工作階段、且讀得到路徑的 DynaRun 才會被關閉；別的使用者（或讀不到路徑）的 DynaRun 從這裡關不掉：精靈會說明並且不提供關閉按鈕，`/quiet /close` 也不關任何程式，直接以結束代碼 6 結束，需由該使用者先關閉 DynaRun。以結束代碼 6 結束的原因（哪個程式、處理序與工作階段編號、能否關閉）會寫在安裝資料夾的 `setup.log`；該資料夾尚未建立或沒有系統管理員權限時，寫在 `%TEMP%\DynaRunFix-setup.log`。無人值守的安裝請在沒人使用 DynaRun 時執行 `/quiet /close`。複製完成後，每個安裝的檔案都會讀回來和安裝程式內的版本比對。複製完成後，每個安裝的檔案都會讀回來和安裝程式內的版本比對。
 
 如果「文件」放在 OneDrive，而之前留下的 DynaRun 手冊或範例檔是「只在線上」，安裝程式會先讀取這些檔案讓 OneDrive 下載下來；
 Windows Installer 自己做不到，會出現錯誤 1305。不會改變檔案內容或 OneDrive 設定。

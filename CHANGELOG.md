@@ -2,6 +2,15 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## Unreleased
+
+- **A DynaRun of another folder no longer blocks the install; one that cannot be closed is said so.** Only a `DynaRun V3.exe` that is the
+  installed one (or whose path cannot be read) holds up the install. The wizard offers *Close DynaRun and install* only when everything in the
+  way can be closed (same Windows session, path readable); for another user's DynaRun it explains that and offers no close button, and the page
+  updates by itself once DynaRun is closed. `/quiet /close` does not try to close anything it cannot close and ends with exit code 6.
+- **Exit code 6 is explained in a log:** one line per program in the way (name, process id, session, whether it could be closed, path), in
+  `setup.log` of the install folder, or in `%TEMP%\DynaRunFix-setup.log` before that folder exists or without administrator rights. Nothing is shown with `/quiet`.
+
 ## v1.4.1 — 2026-10-14
 
 A fix release after a review of v1.4.0.
@@ -363,6 +372,14 @@ A fix release after a review of v1.4.0.
 ---
 
 ## 更新紀錄
+
+### 未發行
+
+- **別的資料夾的 DynaRun 不再擋住安裝;關不掉的會明確說明。** 只有已安裝的那個 `DynaRun V3.exe`(或讀不到路徑的)會擋住安裝。
+  只有擋住的程式都能關閉(同一個登入工作階段、讀得到路徑)時,精靈才提供「關閉 DynaRun 並安裝」;別的使用者的 DynaRun 則顯示說明、
+  不提供關閉按鈕,對方關閉後頁面會自動更新。`/quiet /close` 不會嘗試關閉關不掉的程式,直接以結束代碼 6 結束。
+- **結束代碼 6 會留下原因記錄:** 每個擋住的程式一行(名稱、處理序編號、工作階段、能否關閉、路徑),寫在安裝資料夾的 `setup.log`,
+  該資料夾尚未建立或沒有系統管理員權限時寫在 `%TEMP%\DynaRunFix-setup.log`。`/quiet` 不會顯示任何視窗。
 
 ### v1.4.1 — 2026-10-14
 

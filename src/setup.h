@@ -24,8 +24,9 @@ void start_dynarun(void);                  // the wizard's "Start DynaRun": thro
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
 int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
 #define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed
-enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4 };
-int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces
+enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4, RUN_CANCLOSE = 8, RUN_NOCLOSE = 16 };
+int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces. RUN_CANCLOSE: one of them can be closed
+                                            // by the setup; RUN_NOCLOSE: one cannot (another session, or its exe path cannot be told)
 
 /* update.c */
 int update_check(void);                     // /checkupdate: notes a newer release in HKCU\Software\DynaRunFix; no UI

@@ -524,42 +524,98 @@ static void process_path(DWORD pid, WCHAR *out, DWORD cch)   // the exe of a pro
 // A running DynaRun V3 has dynafix.dll (and under Locale Emulator LoaderDll.dll / LocaleEmulator.dll)
 // of the install folder loaded. Windows lets the setup rename such files and put new ones in place,
 // but that DynaRun keeps the old code, and "Start DynaRun" would only find it already running, so
-// DynaRun is closed first (the user agrees in the wizard, or passes /close). DynaRun is matched by
-// name (any folder; it may run elevated), the launcher and LEProc only when they run from the install folder.
-// strict (what is to be closed): only processes of this session whose exe path can be read and is the known DynaRun V3.exe
-// (g_exe) or, for the launcher and LEProc, a file of the install folder; others are left alone.
-typedef struct { DWORD pid; int bit; } runproc;
+// DynaRun is closed first (the user agrees in the wizard, or passes /close).
+// What holds up the install (judge_proc): the DynaRun V3.exe that is the known one (g_exe; a DynaRun of another folder does not use
+// our files), and the launcher and LEProc when they run from the install folder. A program whose exe path cannot be read counts as
+// ours (better than a half-updated install). The setup closes only what it can tell is ours and that runs in its own session; the
+// rest still holds up the install, but "close" would not help, and the wizard and the log say so.
+typedef struct { DWORD pid; int bit; DWORD sess; int why; WCHAR path[MAX_PATH]; } runproc;
+enum { JUDGE_SKIP, JUDGE_CLOSE, JUDGE_OTHERSESSION, JUDGE_NOPATH, JUDGE_NOEXE };   // not in the way / can be closed / cannot: why
 
-static int scan_programs(runproc *list, int max, int *count, BOOL strict)
+static BOOL same_path(const WCHAR *a, const WCHAR *b)     // case-insensitive; 8.3 and long names of one file match
 {
-    PROCESSENTRY32W pe; HANDLE s; WCHAR path[MAX_PATH], dir[MAX_PATH + 2]; int r = 0, bit, len; DWORD mysess = 0, sess;
+    WCHAR x[MAX_PATH], y[MAX_PATH]; DWORD m, n;
+    if (!a[0] || !b[0]) return FALSE;
+    if (!lstrcmpiW(a, b)) return TRUE;
+    m = GetLongPathNameW(a, x, MAX_PATH); n = GetLongPathNameW(b, y, MAX_PATH);
+    return m && m < MAX_PATH && n && n < MAX_PATH && !lstrcmpiW(x, y);
+}
+
+// bit: RUN_* of the program; path: its exe ("" when unreadable); exe: the known DynaRun V3.exe ("" when not known yet);
+// dir: the install folder with a trailing backslash
+static int judge_proc(int bit, BOOL same_session, const WCHAR *path, const WCHAR *exe, const WCHAR *dir)
+{
+    int len = lstrlenW(dir);
+    if (bit == RUN_DYNARUN) {
+        if (!path[0]) return JUDGE_NOPATH;
+        if (!exe[0]) return JUDGE_NOEXE;
+        if (!same_path(path, exe)) return JUDGE_SKIP;
+    } else {
+        if (!path[0]) return JUDGE_NOPATH;
+        if (!(lstrlenW(path) > len && CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, path, len, dir, len) == CSTR_EQUAL)) return JUDGE_SKIP;
+    }
+    return same_session ? JUDGE_CLOSE : JUDGE_OTHERSESSION;
+}
+
+// The programs in the way (up to max in list); the result has their RUN_* bits, with RUN_CANCLOSE / RUN_NOCLOSE for the two kinds.
+static int scan_programs(runproc *list, int max, int *count)
+{
+    PROCESSENTRY32W pe; HANDLE s; WCHAR path[MAX_PATH], dir[MAX_PATH + 2]; int r = 0, bit, why; DWORD mysess = 0, sess;
     *count = 0;
-    if (strict) ProcessIdToSessionId(GetCurrentProcessId(), &mysess);
+    ProcessIdToSessionId(GetCurrentProcessId(), &mysess);
     s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (s == INVALID_HANDLE_VALUE) return 0;
-    cat3(dir, g_dir, L"\\", NULL); len = lstrlenW(dir);
+    cat3(dir, g_dir, L"\\", NULL);
     pe.dwSize = sizeof(pe);
     if (Process32FirstW(s, &pe)) do {
         bit = !lstrcmpiW(pe.szExeFile, L"DynaRun V3.exe") ? RUN_DYNARUN : !lstrcmpiW(pe.szExeFile, L"DynaRunFix.exe") ? RUN_LAUNCHER :
               !lstrcmpiW(pe.szExeFile, L"LEProc.exe") ? RUN_LEPROC : 0;
         if (!bit) continue;
-        if (strict && (!ProcessIdToSessionId(pe.th32ProcessID, &sess) || sess != mysess)) continue;
-        if (bit != RUN_DYNARUN || strict) {
-            process_path(pe.th32ProcessID, path, MAX_PATH);
-            if (strict && !path[0]) continue;
-            if (bit == RUN_DYNARUN) { if (lstrcmpiW(path, g_exe)) continue; }
-            // not strict: a path that cannot be read counts as ours (better than a half-updated install)
-            else if (path[0] && !(lstrlenW(path) > len && CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, path, len, dir, len) == CSTR_EQUAL)) continue;
+        if (!ProcessIdToSessionId(pe.th32ProcessID, &sess)) sess = (DWORD)-1;
+        process_path(pe.th32ProcessID, path, MAX_PATH);
+        why = judge_proc(bit, sess == mysess, path, g_exe, dir);
+        if (why == JUDGE_SKIP) continue;
+        r |= bit | (why == JUDGE_CLOSE ? RUN_CANCLOSE : RUN_NOCLOSE);
+        if (list && *count < max) {
+            list[*count].pid = pe.th32ProcessID; list[*count].bit = bit; list[*count].sess = sess; list[*count].why = why;
+            lstrcpyW(list[*count].path, path); (*count)++;
         }
-        r |= bit;
-        if (*count < max) { list[*count].pid = pe.th32ProcessID; list[*count].bit = bit; (*count)++; }
     } while (Process32NextW(s, &pe));
     CloseHandle(s);
     return r;
 }
 
 int running_programs(void)
-{ runproc l[16]; int n; return scan_programs(l, 16, &n, FALSE); }
+{ int n; return scan_programs(NULL, 0, &n); }
+
+// Why the setup stops with RC_RUNNING (nothing is shown with /quiet): one line per program in a log. The elevated stage writes
+// setup.log in the install folder; before that folder exists (or without administrator rights) %TEMP%\DynaRunFix-setup.log.
+static void run_log(const WCHAR *line)
+{
+    static WCHAR p[MAX_PATH];
+    if (is_admin() && g_dir[0] && exists(g_dir)) { setup_log(line); return; }
+    if (GetTempPathW(MAX_PATH - 24, p)) append_line(lstrcatW(p, L"DynaRunFix-setup.log"), line);
+}
+
+static void log_running(const WCHAR *stage, const runproc *l, int n, int r)
+{
+    static const WCHAR *const names[] = { L"DynaRun V3.exe", L"DynaRunFix.exe", L"LEProc.exe" };
+    static const WCHAR *const reasons[] = { L"can be closed", L"cannot be closed: runs in another session",
+                                            L"cannot be closed: its exe path cannot be read", L"cannot be closed: the DynaRun folder is not known" };
+    WCHAR t[900]; SYSTEMTIME st; int i, k; DWORD me = 0;
+    GetLocalTime(&st); ProcessIdToSessionId(GetCurrentProcessId(), &me);
+    wsprintfW(t, L"%04u-%02u-%02u %02u:%02u:%02u  %s: stopped, exit code 6 (DynaRun is running), nothing was changed. %s", st.wYear, st.wMonth, st.wDay,
+              st.wHour, st.wMinute, st.wSecond, stage,
+              (r & RUN_NOCLOSE) ? (g_close ? L"/close was not used: a program that cannot be closed is running." : L"A program that cannot be closed is running.")
+                                : (g_close ? L"It was still running after /close." : L"Run with /close to close it."));
+    run_log(t);
+    for (i = 0; i < n; i++) {
+        k = l[i].bit == RUN_DYNARUN ? 0 : l[i].bit == RUN_LAUNCHER ? 1 : 2;
+        wsprintfW(t, L"  %s pid %lu, session %lu (this setup: %lu), %s%s%s", names[k], l[i].pid, l[i].sess, me, reasons[l[i].why - JUDGE_CLOSE],
+                  l[i].path[0] ? L", " : L"", l[i].path);
+        run_log(t);
+    }
+}
 
 static BOOL CALLBACK close_window(HWND h, LPARAM pid)
 {
@@ -572,7 +628,7 @@ static BOOL CALLBACK close_window(HWND h, LPARAM pid)
 static void wait_gone(runproc *l, int n, int bits, DWORD ms)
 {
     HANDLE h[16]; int i, k = 0;
-    for (i = 0; i < n; i++) if ((l[i].bit & bits) && (h[k] = OpenProcess(SYNCHRONIZE, FALSE, l[i].pid))) k++;
+    for (i = 0; i < n; i++) if ((l[i].bit & bits) && l[i].why == JUDGE_CLOSE && (h[k] = OpenProcess(SYNCHRONIZE, FALSE, l[i].pid))) k++;
     if (k) WaitForMultipleObjects(k, h, TRUE, ms);
     while (k) CloseHandle(h[--k]);
 }
@@ -582,16 +638,37 @@ static void wait_gone(runproc *l, int n, int bits, DWORD ms)
 // neither messages nor TerminateProcess from a process that is not elevated.
 static void close_programs(void)
 {
-    runproc l[16]; int n, i; HANDLE h;
-    if (!scan_programs(l, 16, &n, TRUE)) return;
-    for (i = 0; i < n; i++) if (l[i].bit == RUN_DYNARUN) EnumWindows(close_window, l[i].pid);
+    runproc *l = alloc(16 * sizeof(runproc)); int n, i; HANDLE h;      // on the heap: a stack of that size would need the C runtime's probe
+    if (!l || !(scan_programs(l, 16, &n) & RUN_CANCLOSE)) { release(l); return; }
+    for (i = 0; i < n; i++) if (l[i].bit == RUN_DYNARUN && l[i].why == JUDGE_CLOSE) EnumWindows(close_window, l[i].pid);
     wait_gone(l, n, RUN_DYNARUN, 10000);
     wait_gone(l, n, RUN_LAUNCHER | RUN_LEPROC, 2000);     // LEProc waits for DynaRun, the launcher ends by itself
-    scan_programs(l, 16, &n, TRUE);
+    scan_programs(l, 16, &n);
     for (i = 0; i < n; i++)
-        if ((h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, l[i].pid))) {
+        if (l[i].why == JUDGE_CLOSE && (h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, l[i].pid))) {
             TerminateProcess(h, 1); WaitForSingleObject(h, 5000); CloseHandle(h);
         }
+    release(l);
+}
+
+// The elevated install stages: closes DynaRun first when the user agreed (or /close), then TRUE (and the reason logged) when something
+// still holds up the install. Nothing is closed when part of it cannot be closed: the install stops anyway, and a test run would end for nothing.
+static BOOL still_running(const WCHAR *stage)
+{
+    runproc *l = alloc(16 * sizeof(runproc)); int n, r = scan_programs(l, l ? 16 : 0, &n);
+    if (g_close && r && !(r & RUN_NOCLOSE)) { close_programs(); r = scan_programs(l, l ? 16 : 0, &n); }
+    if (r && l) log_running(stage, l, n, r);
+    release(l);
+    return r != 0;
+}
+
+// Before the UAC prompt: TRUE (logged) when /quiet without /close ends here. With /close the elevated stage decides: it can read more.
+static BOOL running_early(const WCHAR *stage)
+{
+    runproc *l = alloc(16 * sizeof(runproc)); int n, r = scan_programs(l, l ? 16 : 0, &n);
+    if (r && !g_close && l) log_running(stage, l, n, r);
+    release(l);
+    return r && !g_close;
 }
 
 /* ---------- COM registrations: HKU\<sid>\Software\Classes -> HKLM\SOFTWARE\Classes ---------- */
@@ -1544,8 +1621,7 @@ static int machine_install_locked(const WCHAR *sid)
     HKEY k;
     if (!valid_user_sid(sid)) { error2(T(L"The user account is not valid.", L"使用者帳戶無效。"), sid); return 1; }
     lstrcpynW(g_user_sid, sid, 200);
-    if (g_close) close_programs();
-    if (running_programs()) return RC_RUNNING;          // checked again here: DynaRun may have been started since
+    if (still_running(L"install")) return RC_RUNNING;   // checked again here: DynaRun may have been started since
     if (!check_exe()) { error2(T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return 1; }
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
@@ -1856,8 +1932,7 @@ static int machine_full(const WCHAR *sid, const WCHAR *msi)
     static WCHAR me[200], txt[300], dir[MAX_PATH], staged[MAX_PATH]; int rc;
     if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return 3;
     if (!stage_lock()) { error2(busy_text(), NULL); return 1; }
-    if (g_close) close_programs();
-    if (running_programs()) { stage_unlock(); return RC_RUNNING; }
+    if (still_running(L"full install")) { stage_unlock(); return RC_RUNNING; }
     if (!stage_msi(msi, dir, staged)) {
         stage_unlock();
         msg(T(L"The DynaRun V3 setup could not be copied for installation.", L"無法複製 DynaRun V3 安裝檔以進行安裝。"), MB_ICONERROR);
@@ -1917,7 +1992,7 @@ int install_fix(void)
 {
     static WCHAR sid[200], args[600]; int rc;
     if (!user_sid(sid, 200)) return 1;
-    if (running_programs() && !g_close) return RC_RUNNING;   // before the UAC prompt; /quiet without /close ends here
+    if (running_early(L"install (before elevation)")) return RC_RUNNING;   // before the UAC prompt; /quiet without /close ends here
     CoInitialize(NULL);
     if (is_admin()) rc = machine_install(sid);
     else {
@@ -1933,7 +2008,7 @@ int install_all(const WCHAR *msi)
 {
     static WCHAR sid[200], args[MAX_PATH + 300]; int rc;
     if (!user_sid(sid, 200)) return 1;
-    if (running_programs() && !g_close) return RC_RUNNING;
+    if (running_early(L"full install (before elevation)")) return RC_RUNNING;
     CoInitialize(NULL);
     pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
     if (is_admin()) rc = machine_full(sid, msi);
