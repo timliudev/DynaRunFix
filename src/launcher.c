@@ -54,11 +54,22 @@ static BOOL CALLBACK findwin(HWND h, LPARAM l)
     return TRUE;
 }
 
+// Does a process belong to our session? have/mine: our own session id and whether it could be read; got/sid: the same for the process.
+// A process whose session cannot be told does not count.
+static BOOL in_session(BOOL have, DWORD mine, BOOL got, DWORD sid) { return !have || (got && sid == mine); }
+
+// The DynaRun of this sign-in session (another user's DynaRun, e.g. after fast user switching, is not ours to attach to and does not count).
 static DWORD running(void)
 {
-    PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD pid = 0;
+    PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD pid = 0, mine = 0, sid = 0;
+    BOOL have = ProcessIdToSessionId(GetCurrentProcessId(), &mine), got;
     pe.dwSize = sizeof(pe);
-    if (Process32First(s, &pe)) do { if (!lstrcmpiA(pe.szExeFile, "DynaRun V3.exe")) pid = pe.th32ProcessID; } while (Process32Next(s, &pe));
+    if (Process32First(s, &pe)) do {
+        if (!lstrcmpiA(pe.szExeFile, "DynaRun V3.exe")) {
+            got = ProcessIdToSessionId(pe.th32ProcessID, &sid);
+            if (in_session(have, mine, got, sid)) pid = pe.th32ProcessID;
+        }
+    } while (Process32Next(s, &pe));
     CloseHandle(s);
     return pid;
 }
@@ -264,15 +275,18 @@ typedef BOOL (WINAPI *cpwt_t)(HANDLE, DWORD, LPCWSTR, LPWSTR, DWORD, LPVOID, LPC
 typedef BOOL (WINAPI *ceb_t)(LPVOID *, HANDLE, BOOL);
 typedef BOOL (WINAPI *deb_t)(LPVOID);
 
-// TRUE if the token is elevated (TokenElevation, Vista+). Where the query does not exist (XP has no split token) FALSE; any
-// other failure of the query counts as elevated (fail closed).
-static BOOL token_elevated(HANDLE t)
+// Is the token elevated (TokenElevation, Vista+)? 1 yes, 0 no (also where the query does not exist: XP has no split token),
+// -1 the query failed and the answer is not known.
+static int token_state(HANDLE t)
 {
     DWORD el = 0, n = 0;
     if (GetTokenInformation(t, (TOKEN_INFORMATION_CLASS)20, &el, sizeof(el), &n)) return el != 0;
 #pragma warning(suppress: 4996)
-    return !(GetLastError() == ERROR_INVALID_PARAMETER && (BYTE)GetVersion() < 6);
+    return GetLastError() == ERROR_INVALID_PARAMETER && (BYTE)GetVersion() < 6 ? 0 : -1;
 }
+
+// TRUE if the token is elevated; an unknown state counts as elevated (fail closed: the caller then does not carry on as if it were a normal start).
+static BOOL token_elevated(HANDLE t) { return token_state(t) != 0; }
 
 // The shell's token as a primary token (the user's non-elevated one under UAC), NULL if it cannot be had.
 static HANDLE shell_token(void)
@@ -375,7 +389,13 @@ static int relaunch_non_elevated(void)
     n = GetModuleFileNameW(NULL, self, MAX_PATH);
     if (!n || n >= MAX_PATH) { llog("launcher: elevated, and the own path is not usable\r\n", 0, 0); return 0; }
     if (!(tok = shell_token())) return 0;
-    if (token_elevated(tok)) {
+    i = token_state(tok);
+    if (i < 0) {   // the shell token cannot be classified: nothing is started with it, nor carried on with
+        CloseHandle(tok);
+        llog("launcher: the elevation state of the desktop shell token cannot be told (error %u); not starting anything\r\n", GetLastError(), 0);
+        return 0;
+    }
+    if (i) {
         CloseHandle(tok);
         llog("launcher: the desktop shell token is elevated (UAC off, or the desktop runs as administrator); carrying on in this process, as a normal start would\r\n", 0, 0);
         return 2;
@@ -627,10 +647,26 @@ static void wait_desktop(void)
     llog("launcher: autostart waited %u ms for the desktop (%u = gave up)\r\n", tk - t0, tk - t0 >= 60000);
 }
 
+// The DynaRun V3.exe the setup recorded (HKLM only: ordinary users cannot write there), DEFAULT_EXE when there is none or the value is not
+// a usable string. size: the size of exe (MAX_PATH); a longer value does not fit and is not used (the default is, as for a missing one).
+static void read_dynarun_exe(HKEY root, const char *sub, char *exe, DWORD size)
+{
+    HKEY k; DWORD ty = 0, n = size;                 // n: the size of THIS buffer, whatever an earlier call left in a variable
+    lstrcpyA(exe, DEFAULT_EXE);
+    if (RegOpenKeyExA(root, sub, 0, KEY_QUERY_VALUE, &k)) return;
+    if (!RegQueryValueExA(k, "DynaRunExe", NULL, &ty, (BYTE *)exe, &n) && ty == REG_SZ && n && (n < size || !exe[size - 1])) {
+        if (n < size) exe[n] = 0;                   // also when stored without a terminator
+        if (!exe[0]) lstrcpyA(exe, DEFAULT_EXE);    // empty
+    }
+    else lstrcpyA(exe, DEFAULT_EXE);                // missing, not a string, or too long for the buffer (ERROR_MORE_DATA)
+    RegCloseKey(k);
+}
+
+#ifndef DRF_NO_MAIN
 void WinMainCRTStartup(void)
 {
     char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
-    PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; HKEY k; DWORD n = MAX_PATH; int i; BOOL ask, wasadmin, reported; ULONGLONG dl;
+    PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; DWORD n = MAX_PATH; int i; BOOL ask, wasadmin, reported; ULONGLONG dl;
 
     // From here on DLLs are looked for in System32 only (not the current folder, not the PATH). dynafix.dll is loaded by its full path.
     {
@@ -703,11 +739,7 @@ void WinMainCRTStartup(void)
     if (*cmd == '"') { cmd++; lstrcpynA(exe, cmd, MAX_PATH); p = exe; while (*p && *p != '"') p++; *p = 0; }
     else if (*cmd) lstrcpynA(exe, cmd, MAX_PATH);
     else {
-        lstrcpyA(exe, DEFAULT_EXE);
-        if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) {
-            if (RegQueryValueExA(k, "DynaRunExe", NULL, NULL, (BYTE *)exe, &n)) lstrcpyA(exe, DEFAULT_EXE);
-            RegCloseKey(k);
-        }
+        read_dynarun_exe(HKEY_LOCAL_MACHINE, "SOFTWARE\\DynaRunFix", exe, sizeof(exe));
     }
     lstrcpyA(dir, exe); p = dir + lstrlenA(dir); while (p > dir && *p != '\\') p--; *p = 0;
 
@@ -825,3 +857,4 @@ void WinMainCRTStartup(void)
     if (e) CloseHandle(e);
     finish();
 }
+#endif

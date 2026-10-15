@@ -179,12 +179,33 @@ static DWORD parse_len(const WCHAR *s)           // decimal number, saturating
 
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts) { return url_ok(u, hosts); }   // for the tests
 
+// The URL a redirect from `cur` to `loc` leads to, into out (cch chars): an absolute https target, or a new path on the same host.
+// FALSE when it cannot be followed (http://, another scheme, a protocol-relative or relative path, too long) or is not on `host`
+// (NULL = any host, https still required).
+BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch)
+{
+    int a, n;
+    if (url_ok(loc, NULL)) {                                                               // absolute https target
+        if (lstrlenW(loc) >= cch) return FALSE;
+        lstrcpyW(out, loc);
+    }
+    else if (loc[0] == '/' && loc[1] != '/') {                                             // same host, new path
+        if (!url_ok(cur, NULL) || lstrlenW(cur) >= cch) return FALSE;
+        for (a = 8; cur[a] && cur[a] != '/' && cur[a] != '?' && cur[a] != '#'; a++);
+        n = lstrlenW(loc);
+        if (a + n >= cch) return FALSE;
+        lstrcpynW(out, cur, a + 1); lstrcatW(out, loc);
+    }
+    else return FALSE;                                                                     // http://, another scheme, a relative path
+    return url_ok(out, host);
+}
+
 // Opens url without letting WinINet follow redirects: each hop is checked (https, and the pinned host) before a request is sent to it.
 // Returns the open request (status = its HTTP status, a 3xx without a Location included), or NULL: *refused when a URL was refused,
-// else *err is the Win32 error.
-static HINTERNET open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
+// else *err is the Win32 error. Also used by the update check (update.c).
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
 {
-    static WCHAR cur[URLCCH], loc[URLCCH]; HINTERNET h; DWORD n, hop; int a;
+    static WCHAR cur[URLCCH], loc[URLCCH], nxt[URLCCH]; HINTERNET h; DWORD n, hop;
     *status = 0; *err = 0; *refused = FALSE;
     lstrcpynW(cur, url, URLCCH);
     for (hop = 0; hop <= MAX_HOPS; hop++) {
@@ -203,18 +224,14 @@ static HINTERNET open_following(HINTERNET in, const WCHAR *url, const WCHAR *hos
         if (!HttpQueryInfoW(h, HTTP_QUERY_LOCATION, loc, &n, NULL) || !loc[0]) return h;   // no target: the caller reports the status
         InternetCloseHandle(h);
         if (hop == MAX_HOPS) break;
-        if (url_ok(loc, NULL)) lstrcpynW(cur, loc, URLCCH);                                // absolute https target
-        else if (loc[0] == '/' && loc[1] != '/') {                                         // same host, new path
-            for (a = 8; cur[a] && cur[a] != '/' && cur[a] != '?' && cur[a] != '#'; a++);
-            if (a + lstrlenW(loc) >= URLCCH) break;
-            cur[a] = 0; lstrcatW(cur, loc);
-        }
-        else break;                                                                        // http://, another scheme, a relative path
-        if (!url_ok(cur, host)) break;
+        if (!pkg_redirect_target(cur, loc, host, nxt, URLCCH)) break;
+        lstrcpyW(cur, nxt);
     }
     *refused = TRUE;
     return NULL;
 }
+
+static BOOL zip_nothing(const char *name, DWORD nlen, const zipent *e, void *ctx) { (void)name; (void)nlen; (void)e; (void)ctx; return TRUE; }
 
 static BOOL is_zip_name(const WCHAR *name)
 { int n = lstrlenW(name); return n >= 4 && ascii_ieq(name + n - 4, L".zip", 4); }
@@ -228,7 +245,6 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
 {
     static WCHAR part[MAX_PATH], tag[200], oldtag[200], hdr[400], num[32];
     static BYTE buf[CHUNK];
-    static zipent ze;
     HINTERNET in, h = NULL; HANDLE f; DWORD have, total, status, n, w, tries, timeout = 30000, proto; BOOL refused, nolen;
     LARGE_INTEGER sz; HKEY k; DWORD tn; int rc = PK_NET;
 
@@ -259,7 +275,7 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
         have = sz.LowPart;
         hdr[0] = 0;
         if (have && oldtag[0]) wsprintfW(hdr, L"Range: bytes=%lu-\r\nIf-Range: %s\r\n", have, oldtag);   // resume only the same file
-        h = open_following(in, url, host, hdr[0] ? hdr : NULL, &status, err, &refused);
+        h = pkg_open_following(in, url, host, hdr[0] ? hdr : NULL, &status, err, &refused);
         if (!h) {
             CloseHandle(f);
             if (refused) { *err = 0; rc = PK_URL; break; }                  // redirected off https or off the host
@@ -301,7 +317,7 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
         CloseHandle(f);
         InternetCloseHandle(h); h = NULL;
         if (rc == PK_FORMAT) DeleteFileW(part);
-        if (rc == PK_OK && nolen && is_zip_name(name) && zip_open(part, &ze) != PK_OK) rc = PK_NET;   // cut off: try to continue
+        if (rc == PK_OK && nolen && is_zip_name(name) && zip_walk(part, zip_nothing, NULL) != PK_OK) rc = PK_NET;   // cut off: try to continue
         if (rc != PK_NET) break;
         Sleep(1000);
     }
@@ -374,6 +390,129 @@ int zip_open(const WCHAR *zip, zipent *e)
     }
 out:
     release(t); release(cd); CloseHandle(f);
+    return rc;
+}
+
+int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx)
+{
+    HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD size, tail, i, cdoff, cdsize, adj, lho, nl, count, seen = 0; BYTE *t = NULL, *cd = NULL, *p, lh[30]; int rc = PK_FORMAT; zipent e;
+    if (f == INVALID_HANDLE_VALUE) return PK_IO;
+    crc_init();
+    size = GetFileSize(f, NULL);
+    tail = size < 65557 ? size : 65557;
+    if (size < 22 || !(t = alloc(tail)) || !read_at(f, size - tail, t, tail)) goto out;
+    for (i = tail - 22 + 1; i-- > 0;) if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) break;
+    if (i == (DWORD)-1) goto out;
+    count = U16(t + i + 10); cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
+    if (count == 0xFFFF || cdsize == 0xFFFFFFFF || cdoff == 0xFFFFFFFF) goto out;      // Zip64
+    adj = (cdoff + cdsize + (tail - i) == size) ? 0 : 4;
+    if (cdsize > size || !(cd = alloc(cdsize + 1)) || !read_at(f, cdoff + adj, cd, cdsize)) goto out;
+    for (p = cd; seen < count; p += 46 + nl + U16(p + 30) + U16(p + 32), seen++) {
+        if (p + 46 > cd + cdsize || U32(p) != 0x02014b50) goto out;
+        nl = U16(p + 28);
+        if (p + 46 + nl + U16(p + 30) + U16(p + 32) > cd + cdsize) goto out;
+        zero(&e, sizeof(e)); lstrcpynW(e.path, zip, MAX_PATH);
+        e.flags = U16(p + 8); e.method = U16(p + 10); e.dostime = U16(p + 12);
+        e.crc = U32(p + 16); e.csize = U32(p + 20); e.usize = U32(p + 24); lho = U32(p + 42);
+        if (e.csize == 0xFFFFFFFF || e.usize == 0xFFFFFFFF || lho == 0xFFFFFFFF) goto out;
+        lho += adj;
+        if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) goto out;
+        e.data = lho + 30 + U16(lh + 26) + U16(lh + 28);
+        if (!fn((const char *)p + 46, nl, &e, ctx)) { rc = PK_CANCEL; goto out; }
+    }
+    rc = PK_OK;
+out:
+    release(t); release(cd); CloseHandle(f);
+    return rc;
+}
+
+static BOOL name_char_bad(BYTE c)
+{ return c < 0x20 || c == 0x7F || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|'; }
+
+static BOOL reserved_device(const char *c, DWORD n)         // CON, PRN, AUX, NUL, COM1-9, LPT1-9 (also with an extension)
+{
+    static const char *const names[] = { "con", "prn", "aux", "nul", NULL };
+    DWORD base = 0, i; int k;
+    while (base < n && c[base] != '.') base++;
+    for (k = 0; names[k]; k++) {
+        if (base != 3) break;
+        for (i = 0; i < 3 && (c[i] | 0x20) == names[k][i]; i++);
+        if (i == 3) return TRUE;
+    }
+    if (base == 4 && c[3] >= '1' && c[3] <= '9' &&
+        (((c[0] | 0x20) == 'c' && (c[1] | 0x20) == 'o' && (c[2] | 0x20) == 'm') || ((c[0] | 0x20) == 'l' && (c[1] | 0x20) == 'p' && (c[2] | 0x20) == 't'))) return TRUE;
+    return FALSE;
+}
+
+BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir)
+{
+    DWORD i, start = 0;
+    *isdir = FALSE;
+    if (!nlen || nlen > 240 || name[0] == '/') return FALSE;
+    if (name[nlen - 1] == '/') { *isdir = TRUE; nlen--; if (!nlen) return FALSE; }
+    for (i = 0; i <= nlen; i++) {
+        if (i < nlen && name_char_bad((BYTE)name[i])) return FALSE;
+        if (i == nlen || name[i] == '/') {
+            DWORD n = i - start; const char *c = name + start;
+            if (!n) return FALSE;                                          // "a//b"
+            if ((n == 1 && c[0] == '.') || (n == 2 && c[0] == '.' && c[1] == '.')) return FALSE;
+            if (c[n - 1] == '.' || c[n - 1] == ' ') return FALSE;         // Windows drops them: "..." / ".. " would become ".."
+            if (reserved_device(c, n)) return FALSE;
+            start = i + 1;
+        }
+    }
+    return TRUE;
+}
+
+#define ZIP_MAX_FILES 500
+#define ZIP_MAX_ENTRY (32UL * 1024UL * 1024UL)
+#define ZIP_MAX_TOTAL (96UL * 1024UL * 1024UL)
+
+typedef struct { const WCHAR *dest; volatile LONG *cancel; int files, entries; DWORD total; int rc; } xall;
+
+static BOOL make_dirs(WCHAR *path, int from)        // creates every folder of path beyond the first `from` characters
+{
+    int i;
+    for (i = from; path[i]; i++) {
+        if (path[i] != '\\') continue;
+        path[i] = 0;
+        if (!CreateDirectoryW(path, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) { path[i] = '\\'; return FALSE; }
+        path[i] = '\\';
+    }
+    return TRUE;
+}
+
+static BOOL xall_visit(const char *name, DWORD nlen, const zipent *e, void *ctx)
+{
+    xall *x = (xall *)ctx; static WCHAR path[MAX_PATH]; BOOL isdir; int dl = lstrlenW(x->dest), n, i; DWORD a;
+    if (*x->cancel) { x->rc = PK_CANCEL; return FALSE; }
+    if (!zip_name_safe(name, nlen, &isdir) || (e->flags & 1) || (e->method != 0 && e->method != 8) ||
+        ++x->entries > ZIP_MAX_FILES || e->usize > ZIP_MAX_ENTRY || (x->total += e->usize) > ZIP_MAX_TOTAL ||
+        dl + 2 + (int)nlen >= MAX_PATH - 1) { x->rc = PK_FORMAT; return FALSE; }
+    lstrcpyW(path, x->dest); path[dl] = '\\';
+    n = MultiByteToWideChar((e->flags & 0x800) ? CP_UTF8 : CP_OEMCP, 0, name, isdir ? (int)nlen - 1 : (int)nlen, path + dl + 1, MAX_PATH - dl - 2);
+    if (n <= 0) { x->rc = PK_FORMAT; return FALSE; }
+    path[dl + 1 + n] = 0;
+    for (i = dl + 1; path[i]; i++) if (path[i] == '/') path[i] = '\\';
+    if (!make_dirs(path, dl + 1) || (isdir && !CreateDirectoryW(path, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)) { x->rc = PK_IO; return FALSE; }
+    if (isdir) return TRUE;
+    a = GetFileAttributesW(path);
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) { x->rc = PK_FORMAT; return FALSE; }   // a file named like a folder made earlier
+    x->rc = zip_extract(e, "", path, NULL, x->cancel);
+    if (x->rc == PK_PASSWORD) x->rc = PK_FORMAT;              // CRC or size mismatch: the entry is damaged
+    if (x->rc != PK_OK) return FALSE;
+    x->files++;
+    return TRUE;
+}
+
+int zip_extract_all(const WCHAR *zip, const WCHAR *dest, volatile LONG *cancel, int *nfiles)
+{
+    xall x; int rc;
+    zero(&x, sizeof(x)); x.dest = dest; x.cancel = cancel; x.rc = PK_OK;
+    rc = zip_walk(zip, xall_visit, &x);
+    if (nfiles) *nfiles = x.files;
+    if (rc == PK_CANCEL) return x.rc != PK_OK ? x.rc : PK_CANCEL;
     return rc;
 }
 
