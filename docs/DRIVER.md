@@ -6,6 +6,38 @@ Do this once on a PC that has never been connected to a Dyna Pro dynamometer. Wi
 device under *Other devices* and DynaRun cannot talk to it. DynaRunFix does not bundle the driver; it comes from
 Dyna Pro. The user-facing summary is in the [README](../README.md#usage).
 
+## Quick way: use the setup wizard
+
+The DynaRunFix setup can do the steps below for you. Use it unless it tells you it cannot; the [manual method](#steps) stays
+available.
+
+* In the main installer, leave **Install the Dyna Pro USB driver** ticked (it is ticked by default and hidden if the driver is
+  already installed or Windows is older than 10). Or, any time later, use the Start menu shortcut **安裝 Dyna Pro USB 驅動程式**
+  or run `DynaRunFix-Setup.exe /driver`.
+* The wizard downloads the official "Dyna Pro USB.zip" from dynapro.co.uk (it is not bundled) and checks its SHA-256. If the
+  file on the site has changed, it refuses to install it; use the manual method then.
+* Windows asks for administrator permission once (UAC). The wizard suspends BitLocker for exactly one restart, sets the one-time
+  advanced boot options and registers a task that continues the wizard when you sign in.
+* After the restart, press **7** in the start-up menu (*Disable driver signature enforcement*). The wizard shows the page below;
+  photographing it with your phone first is a good idea.
+
+  | Press 7 |
+  |---|
+  | ![Startup Settings: press 7, Disable driver signature enforcement](img/driver-press-7.png) |
+
+* If you miss 7, the wizard says so after you sign in and offers **再試一次** (Try again).
+* Then Windows shows its red warning: choose **仍然安裝此驅動程式軟體** (*Install this driver software anyway*). Driver signature
+  enforcement comes back at the next normal restart.
+
+Notes: Windows 10 or 11 is required. The driver files go to `%ProgramData%\DynaRunFix\driver` and the log is
+`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver. This path is new and has not yet been
+verified on a real PC.
+
+If something goes wrong: choosing **Cancel** on the wizard's retry or install page takes back the logon task, the boot option and
+the BitLocker suspension. If you closed the wizard some other way and want those undone, the manual steps below do not depend on
+it; you can also run `DynaRunFix-Setup.exe /driver-cancel` (asks for administrator permission; it only removes the task, the
+one-time boot option and the BitLocker suspension, it does not install or remove a driver).
+
 ## What you need
 
 * The driver zip from Dyna Pro's site:
@@ -112,6 +144,30 @@ as **DynaPro Dynamometer**.
 
 第一次把這台電腦接上 Dyna Pro 測功機時做一次。沒有驅動程式的話,Windows 會把裝置列在「其他裝置」,DynaRun 無法與它通訊。
 DynaRunFix 不附驅動程式,驅動程式由 Dyna Pro 提供。使用者版說明見 [README](../README.md#使用方式)。
+
+### 快速方式:使用安裝精靈
+
+DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到,建議直接用它;[手動方式](#步驟)仍然可用。
+
+* 在主安裝程式中,保持勾選 **安裝 Dyna Pro USB 驅動程式**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏)。
+  之後隨時也可以用開始功能表捷徑 **安裝 Dyna Pro USB 驅動程式**,或執行 `DynaRunFix-Setup.exe /driver`。
+* 精靈會從 dynapro.co.uk 下載官方的「Dyna Pro USB.zip」(不內附)並檢查 SHA-256。網站上的檔案若有變動就拒絕安裝,這時請改用手動方式。
+* Windows 只會要求一次系統管理員權限(UAC)。精靈只暫停一次重新啟動的 BitLocker,設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
+* 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。
+
+  | 按 7 |
+  |---|
+  | ![啟動設定:按 7,停用驅動程式強制簽章](img/driver-press-7.png) |
+
+* 沒按到 7 的話,登入後精靈會告知,並提供 **再試一次**。
+* 接著 Windows 會跳出紅色警告,請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。
+
+附註:需要 Windows 10 或 11。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。
+解除安裝 DynaRunFix 不會移除驅動程式。這個方式是新的,尚未在實體電腦上驗證。
+
+如果出了問題:在精靈的重試或安裝頁面按 **取消**,會撤回登入工作、開機選項與 BitLocker 暫停。若是用其他方式關掉精靈、想把這些還原,
+可以執行 `DynaRunFix-Setup.exe /driver-cancel`(會要求系統管理員權限;只移除工作、一次性開機選項與 BitLocker 暫停,不會安裝或移除驅動程式)。
+下面的手動步驟不依賴精靈。
 
 ### 需要準備
 

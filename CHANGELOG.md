@@ -2,6 +2,18 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## Unreleased
+
+- **Setup wizard installs the Dyna Pro USB driver.** The main installer has a new option (on by default, hidden when the driver is
+  already installed or Windows is older than 10): it downloads Dyna Pro's official `Dyna Pro USB.zip` from dynapro.co.uk (not
+  bundled; its SHA-256 is checked and a changed file is refused), asks for administrator permission once, suspends BitLocker for
+  exactly one restart, requests the advanced start-up menu for the next start and registers a task that continues the wizard after
+  you sign in. You press 7 in the menu; if you miss it the wizard says so and offers to try again. Then Windows' red warning appears:
+  choose "Install this driver software anyway". Driver signature enforcement comes back at the next normal restart. It can also be
+  started later from the Start menu ("Install Dyna Pro USB driver") or with `DynaRunFix-Setup.exe /driver`. Files go to
+  `%ProgramData%\DynaRunFix\driver`, the log is `%ProgramData%\DynaRunFix\driver.log`; uninstalling DynaRunFix does not remove the
+  driver. Windows 10/11 only. See [docs/DRIVER.md](docs/DRIVER.md). Not yet verified on a real PC.
+
 ## v1.4.0 — 2026-10-14
 
 - **Uninstall:** it runs from the installed program and no longer leaves `DynaRunFix-uninstall-<n>.exe` in `%TEMP%` (also not after a
@@ -324,6 +336,16 @@
 ---
 
 ## 更新紀錄
+
+### 尚未發行
+
+- **安裝精靈可安裝 Dyna Pro USB 驅動程式。** 主安裝程式新增一個選項(預設勾選;驅動程式已安裝或 Windows 低於 10 時隱藏):
+  從 dynapro.co.uk 下載 Dyna Pro 官方的 `Dyna Pro USB.zip`(不內附;會檢查 SHA-256,檔案有變就拒絕安裝),只要求一次系統管理員權限,
+  只暫停一次重新啟動的 BitLocker,要求下次開機顯示進階啟動選單,並登錄一個工作,讓精靈在你登入後繼續。選單出現時按 7;
+  沒按到的話精靈會告知並提供「再試一次」。接著 Windows 會跳出紅色警告,請選「仍然安裝此驅動程式軟體」。
+  驅動程式強制簽章在下次正常重新啟動後恢復。之後也可以從開始功能表(「安裝 Dyna Pro USB 驅動程式」)或用
+  `DynaRunFix-Setup.exe /driver` 啟動。檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`;
+  解除安裝 DynaRunFix 不會移除驅動程式。僅限 Windows 10/11。見 [docs/DRIVER.md](docs/DRIVER.md)。尚未在實體電腦上驗證。
 
 ### v1.4.0 — 2026-10-14
 
