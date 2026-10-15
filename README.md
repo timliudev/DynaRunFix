@@ -20,7 +20,7 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 >   APIs in `DynaRun V3.exe`, the other modules in DynaRun's folder and its OCX controls; the font-related imports of
 >   `THBRes25.dll`, `PEGRP32E.dll`, `MSVBVM60.DLL`, `ole32`, `oleaut32`, `MFC42`, `comctl32` and `dynapro.dll` (delay-load imports
 >   included); `CreateFileA` in `dynapro.dll` (to observe the device open; results are passed on unchanged) and, only with the
->   opt-in USB switch, `WaitForSingleObject` in `dynapro.dll`; and `LoadLibraryExA` / `LoadLibraryExW` in the graph control's own modules `Pesgo32e.ocx` and
+>   opt-in USB switch, the `DPSetData` watchdog of `dynapro.dll` (below); and `LoadLibraryExA` / `LoadLibraryExW` in the graph control's own modules `Pesgo32e.ocx` and
 >   `PEGRP32E.dll` (Gigasoft ProEssentials), only for the request for its language resource `PEGRC32D.dll`, see
 >   [Graph menu in the wrong language](#graph-popup-menu-stays-english-without-administrator-rights);
 > - replaces the results of DynaRun's `GetProcAddress` lookups of `ShellExecuteA` and `DPConnect` with its own wrappers, and,
@@ -37,6 +37,14 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 > Windows' UTF-8 option is on, adds a manifest file next to `DynaRun V3.exe` (see [Usage](#usage); for that it briefly changes the modification time of that exe and puts it back, the exe's content is never changed). DynaRunFix never runs
 > DynaRun with more rights than a normal start from your desktop (with UAC off, that normal start is already full administrator), or does not start it (see [Usage](#usage)). DynaRunFix does not touch any licensing,
 > activation or copy-protection mechanism or component.
+>
+> Only if you tick the driver option of the setup wizard (or run `DynaRunFix-Setup.exe /driver`; `/quiet` never does), DynaRunFix also
+> changes the system while the Dyna Pro USB driver is installed: it saves the driver it downloaded from dynapro.co.uk in
+> `%ProgramData%\DynaRunFix`, suspends BitLocker (only when protection is on), makes Windows show its advanced start-up menu once at the
+> next start, registers a scheduled task that continues the wizard when you sign in and restarts the computer; after you pressed 7
+> in that menu and answered Windows' red warning, it installs the driver. Driver signature checking is off for that one start only. The
+> task and the boot option are removed and BitLocker is turned on again when the installation ends or is cancelled. Without that option
+> none of this happens. Details: [Usage](#usage) and [docs/DRIVER.md](docs/DRIVER.md).
 >
 > You need your own legally installed copy of DynaRun V3, and it is up to you to make sure that using this
 > fix is consistent with your licence agreement with Dyna Pro. DynaRun V3 is licensed to you by Dyna Pro
@@ -78,7 +86,11 @@ whenever DynaRun starts its first-time setup helper (normally only on the very f
 
 ## What's new
 
-v1.4.1 (2026-10-14):
+v1.5.0 (released 2026-10-16):
+- New: the setup wizard can install the Dyna Pro USB driver (Windows 10/11 only): an option on its first page, or later with the Start menu shortcut or `DynaRunFix-Setup.exe /driver`. One restart: press 7 in the menu, then answer Windows' red warning (it appears twice). BitLocker is suspended only when its protection is on and is turned on again when the installation ends or is cancelled (`/driver-cancel` takes back a started installation). Not yet verified on a real PC. See [Usage](#usage) and [docs/DRIVER.md](docs/DRIVER.md).
+- New: a `DynaRun V3.exe` of another folder no longer blocks the install; one that cannot be closed (another user's session, unreadable path) is explained, and `/quiet /close` then ends with exit code 6. The reason is written to `setup.log` (or `%TEMP%\DynaRunFix-setup.log`).
+- The setup's own log lines are never written through a link. The setup's exit codes and switches are listed in [Usage](#usage).
+- Also in this release, fixes after a review of v1.4.0:
 - Fix: a DynaRun installed in a folder whose path is longer than the launcher's own path (a non-default location) could not be started through the launcher ("Cannot start DynaRun"): the recorded path is now read in full.
 - The update check now follows redirects itself and checks every hop before a request is sent to it (as the downloads already did); before, only the address it ended up at was checked.
 - The launcher no longer takes another user's DynaRun (fast user switching) for ours, and stops instead of carrying on when the elevation state of the desktop shell's token cannot be told.
@@ -161,10 +173,15 @@ All versions: [CHANGELOG.md](CHANGELOG.md).
    from Dyna Pro**, shows Dyna Pro's license (read from the setup and shown by DynaRunFix itself) and installs DynaRun V3 and the fix only after you accept it (if the
    license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead).
    If DynaRun V3 is already installed, it only installs the fix. Windows asks once for permission: click **Yes**.
+   The first page of the wizard has up to three check boxes: pin DynaRun to the taskbar, start DynaRun when Windows starts and, on
+   Windows 10/11 when the driver is not installed yet, **Also install the Dyna Pro USB driver (one restart needed)** (see below).
 3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
    once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
 
-   First time on this PC? Install the Dyna Pro USB driver first: see [docs/DRIVER.md](docs/DRIVER.md).
+   First time on this PC? The Dyna Pro USB driver is needed too. On Windows 10/11 the setup wizard can install it (the check box on its first
+   page; it downloads the driver, restarts the computer once, you press **7** in the menu that appears and choose *Install this driver
+   software anyway* twice, and it continues by itself after you sign in), later also with the Start menu shortcut *Install Dyna Pro USB
+   driver* or `DynaRunFix-Setup.exe /driver`. Or install it by hand: see [docs/DRIVER.md](docs/DRIVER.md).
 
 | | | |
 |---|---|---|
@@ -201,26 +218,47 @@ What the installer does for the fix:
   in the machine-wide registry for the elevated steps (uninstall) to use; `setup.log` in the install folder says so. On Windows XP links (junctions) in that path cannot be detected, only the permission checks apply;
 - puts [Locale Emulator](#garbled-chinese-or-other-dbcs-text-with-windows-utf-8-option) in `DynaRunFix\le`
   (used only on a Traditional Chinese system with the UTF-8 option on, or whose FontAssoc lacks `ANSI(00)=YES`);
+- on Windows 10/11, adds the Start menu shortcut *Install Dyna Pro USB driver* (all users; it runs `DynaRunFix-Setup.exe /driver`);
 - registers an uninstaller in *Programs and Features* / *Installed apps*.
 
 What DynaRunFix keeps on the machine besides the files above (uninstall removes these where it can; the files `com-copied.txt`, `com-backup`, `com-skipped.txt` and `setup.log` stay in the install folder, which then is not deleted):
 - `HKLM\SOFTWARE\DynaRunFix`: `InstallDir`; `DynaRunExe` (DynaRun's path, only when its folder and exe cannot be changed by ordinary users); `ManifestInstalled` (the manifest was added); `ExeOrigTimePath` / `ExeOrigTime` (only while the original modification time of `DynaRun V3.exe` still has to be restored); `TaskbarPolicy` / `TaskbarPolicySid` (the Windows 11 pin); and the subkey `Shortcuts` (backup of the original machine-wide shortcut files), besides the entry under `Uninstall`.
-- `HKCU\Software\DynaRunFix` of each user who ran DynaRun through the fix: `Shortcuts` (backup of that user's original shortcut files); `UpdateChecked`, `UpdateVersion`, `UpdateSha256`, `UpdateSkip`, `UpdateAsk`, `UpdateETag`, `DownloadETag` (the update check and the downloads); `NoticeElevatedLauncher`, `NoticeRunAsAdminLayer` (written only when you answer *No* to showing a one-time notice again).
+- `HKCU\Software\DynaRunFix` of each user who ran DynaRun through the fix: `Shortcuts` (backup of that user's original shortcut files); `UpdateChecked`, `UpdateVersion`, `UpdateSha256`, `UpdateSkip`, `UpdateAsk`, `UpdateETag`, `DownloadETag`, `DriverETag` (the update check and the downloads); `NoticeElevatedLauncher`, `NoticeRunAsAdminLayer` (written only when you answer *No* to showing a one-time notice again).
 - On Windows 11 with the pin option: `StartLayoutFile` and `LockedStartLayout` = 1 under `HKEY_USERS\<user>\Software\Policies\Microsoft\Windows\Explorer` and `TaskbarLayout.xml` in the install folder. `LockedStartLayout` is the value Microsoft documents together with `StartLayoutFile`: while both are set, Windows treats the layout as locked. They are removed on uninstall (or when you install again without the pin option) only if `StartLayoutFile` still names our file; an organization's own layout is never touched.
 - In the install folder besides the program files: `TaskbarLayout.xml` and `DynaRun V3.lnk` (the shortcut the pin points at; with the pin option), and `setup.log` (what the administrator step did or skipped).
+- Only if the driver option was used: the folder `%ProgramData%\DynaRunFix` (changeable by administrators only) with a copy of the setup, the unpacked driver in `driver\` and `driver.log`; the value `DriverBitLockerSuspended` = 1 under `HKLM\SOFTWARE\DynaRunFix` (only while BitLocker is suspended by the driver option); the scheduled task `DynaRunFix-DriverContinue` and the one-time boot option `onetimeadvancedoptions` (both only until the installation ends or is cancelled); and the BitLocker suspension itself (only if protection was on; see the driver option below). The driver, once installed, is part of Windows' driver store.
 
 Uninstalling restores the original shortcut files and removes the manifest it added only if the file is identical to the installer's own copy (a manifest that differs is left alone); if
 restoring the exe's modification time fails, the record of the original time is kept and the restore is tried again at the next run; the uninstall runs from the installed program (the install folder is administrators-only; no copy is made in `%TEMP%`), and the install folder with its setup file is removed by Windows at the next restart if it is still in use; other accounts'
 shortcuts that still start the fix are pointed back at `DynaRun V3.exe`. It asks whether to remove the fix only or
 DynaRun V3 too (*Remove all* then runs Dyna Pro's own uninstaller of DynaRun V3). It asks for administrator permission first;
-if you cancel that prompt, nothing is changed. If DynaRun is running, it asks to close it first. Older versions copied DynaRun's COM
+if you cancel that prompt, nothing is changed. If DynaRun is running, it asks to close it first. It also removes the driver Start menu shortcut, a driver installation that is still pending (the scheduled task and the one-time boot option) and `%ProgramData%\DynaRunFix` (so `driver.log` goes too). If DynaRunFix suspended BitLocker for the driver installation and it is still suspended, uninstalling resumes it (also when no task is waiting any more, and also with `/keep`). An installed driver stays. Older versions copied DynaRun's COM
 registrations to the machine-wide registry; uninstalling keeps those copies and their records (`com-copied.txt`, `com-backup`
-in the install folder). DynaRun's exe and program content stay unchanged (the original shortcut files are backed up and restored; the only file added is the manifest, and only with the UTF-8 option on), and your data files are never changed. Windows XP, 7, 10 and 11 are supported; options: `/quiet`,
-`/uninstall`, `/notaskbar`, `/noautostart`, `/keep`. `/quiet` installs only the fix and needs DynaRun V3 installed (exit
-code 1 if it is not found).
+in the install folder). DynaRun's exe and program content stay unchanged (the original shortcut files are backed up and restored; the only file added is the manifest, and only with the UTF-8 option on), and your data files are never changed.
 
-Two options on the first page of the wizard, both on by default (`/quiet` applies both unless switched off with
-`/notaskbar` / `/noautostart`):
+Windows XP, 7, 10 and 11 are supported (the driver option needs Windows 10 or 11). Command-line options:
+- `/quiet`: no window; installs only the fix and needs DynaRun V3 installed (exit code 1 if it is not found). It never installs the driver.
+- `/close`: with `/quiet`, closes a running DynaRun first (see below).
+- `/uninstall`: uninstalls (also what *Programs and Features* runs); `/notaskbar`, `/noautostart`: leave out the taskbar pin and the start with Windows (below); `/keep`: leave the pin, the start at sign-in and the desktop shortcut as they are (what an update uses).
+- `/driver`: opens the driver pages of the wizard directly (download, restart, install), without installing DynaRun or the fix; this is what the Start menu shortcut runs.
+- `/driver-cancel`: asks for administrator permission and takes back a started driver installation (the scheduled task, the one-time boot option and the BitLocker suspension); it installs and removes no driver.
+
+Exit codes of the setup:
+
+| Code | Meaning |
+|---|---|
+| 0 | Done: the install, update or uninstall finished. |
+| 1 | Error, for example: `/quiet` and DynaRun V3 not found, the user account could not be read, the install folder could not be written, another setup step is already running, or the window could not be created. The message (not shown with `/quiet`) and `setup.log` say what. |
+| 2 | Cancelled: the wizard was closed before the end, the administrator prompt was declined, DynaRun's own setup was cancelled, or the uninstall question was answered *No*. |
+| 3 | Only inside the elevated stage: the administrator prompt was answered with another account than the one the install is for. The setup handles this itself (it runs DynaRun's setup as the starting user), so it is not normally seen. |
+| 4 | DynaRun V3's own setup (or its removal) failed, or its file could not be prepared (copied and checked) for the install. |
+| 5 | DynaRun V3 was installed, but `DynaRun V3.exe` was not found afterwards. |
+| 6 | DynaRun (or the launcher / Locale Emulator of the install folder) is running: nothing was changed (see below). |
+
+The driver steps report problems in the wizard and in `driver.log`.
+
+Up to three options on the first page of the wizard, all on by default (`/quiet` applies the first two unless switched off with
+`/notaskbar` / `/noautostart`, and never the third):
 - **Pin DynaRun to the taskbar.** Windows 7 to 10 pin the launcher shortcut directly; Windows XP / Vista add it to
   Quick Launch. Windows 11 lets no program pin itself, so the installer uses Microsoft's
   [taskbar layout policy](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps) for the user
@@ -233,6 +271,25 @@ Two options on the first page of the wizard, both on by default (`/quiet` applie
 - **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
   starts the launcher (`DynaRunFix.exe /autostart`) at sign-in. Installing again with the box cleared removes it; uninstall removes the Run value for every account, the taskbar policy values of the account that runs the uninstall, of the account the install recorded and of every other account whose taskbar layout file is still ours (their registry hives are loaded briefly for that), and points the pinned
   launcher shortcuts back at `DynaRun V3.exe`.
+- **Also install the Dyna Pro USB driver (one restart needed).** Shown only on Windows 10/11 and only when the driver is not installed
+  yet. Steps with screenshots: [docs/DRIVER.md](docs/DRIVER.md). In order, the wizard
+  1. downloads `Dyna Pro USB.zip` (about 2 MB) over HTTPS from `dynapro.co.uk` only, and checks it against a SHA-256 that is built into the
+     program; a different file is refused (if Dyna Pro changes the file, a new DynaRunFix release or the manual steps are needed);
+  2. asks for administrator permission and saves the setup and the unpacked driver in `%ProgramData%\DynaRunFix` (a folder only administrators
+     can change);
+  3. **only if BitLocker protection is on**, suspends it (`manage-bde -protectors -disable` for the system drive with `-RebootCount 3`, so
+     protection turns on again by itself after 3 restarts at the latest; the wizard also turns it on again when the installation ends or
+     is cancelled, and remembers that in `HKLM\SOFTWARE\DynaRunFix`, value `DriverBitLockerSuspended`). While it is suspended the
+     drive is not protected. Protection that is already off, or that you suspended yourself, is left as it is. The wizard's first driver
+     page says this before anything happens;
+  4. asks Windows for its advanced start-up menu at the next start only (`bcdedit /set {current} onetimeadvancedoptions on`) and registers the
+     scheduled task `DynaRunFix-DriverContinue`, which continues the wizard when you sign in;
+  5. restarts the computer when you click *Restart now*. In the menu you press **7** (*Disable driver signature enforcement*); that is off
+     for that one start only;
+  6. after you sign in, installs the driver (`pnputil`); Windows shows its red warning twice (once for each of the two driver files), choose
+     *Install this driver software anyway* each time. The task and the boot option are then removed and BitLocker is turned on again.
+  If you do not go on, choose *Cancel* in the wizard or run `DynaRunFix-Setup.exe /driver-cancel`: that takes back the task, the boot option and
+  the BitLocker suspension. Nothing of this is done without ticking the option (or using `/driver`).
 
 **Updates.** DynaRun always opens first; the update never delays it. Once a day, after DynaRun was started, the
 installed setup asks GitHub's API for the latest release of this repository (nothing else is sent) in the background.
@@ -304,6 +361,10 @@ Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25.dll import of Po
   attestation (which repository and workflow built them). To check a downloaded file yourself:
   `gh attestation verify DynaRunFix-Setup.exe --repo timliudev/DynaRunFix`. This shows where a file was built, not that it is safe;
   the installer is not code-signed (see the SmartScreen note above).
+- **The Dyna Pro USB driver (Dyna Pro's file):** downloaded only over HTTPS from `dynapro.co.uk` (the same connection and redirect checks as for the
+  DynaRun setup) and used only if its SHA-256 is the one built into the installer; any other file is deleted. It is unpacked only after that check
+  (entry names that would leave the target folder are refused) and the INF is checked again before it is installed. The driver itself is not
+  DynaRunFix's: it is Dyna Pro's package, which DynaRunFix neither signs nor changes.
 
 ## First-time setup
 
@@ -501,6 +562,9 @@ program can use it at a time) or does not answer (cable, power), DynaRun shows n
 "USB data connection error" dialog (Abort / Retry / Ignore); after *Ignore* it keeps trying to connect in the
 background.
 
+If the Dyna Pro was never connected to this PC, the cause may be the missing USB driver: Device Manager then lists the device under *Other devices*.
+Install the driver with the setup wizard (option on its first page, or `DynaRunFix-Setup.exe /driver`) or by hand, see [docs/DRIVER.md](docs/DRIVER.md) (Windows 8 and older: [older Windows](docs/DRIVER.md#older-windows)).
+
 `dynafix.dll` adds diagnostics in memory (it redirects the `CreateFileA` import entry of `dynapro.dll` to watch the device open; results are passed on unchanged and no file is modified):
 
 * `%TEMP%\dynafix.log` gets every change in the result of DynaRun's connection attempts, a failed device open
@@ -522,8 +586,7 @@ background.
 nothing changes without it). Use it only if you accept the trade-offs below.
 
 What it is for: when the Dyna Pro stops answering in the middle of a run, DynaRun's window can stop responding for good if
-its `DPSetData` call into `dynapro.dll` does not return. Logging the calls at the API boundary shows `dynapro.dll` calling
-`WaitForSingleObject` with an infinite timeout inside `DPSetData`; that this wait never ends once the device stops answering is an
+its `DPSetData` call into `dynapro.dll` does not return. That a `DPSetData` call never returns once the device stops answering is an
 assumption, not something that was measured.
 
 Set `DYNAFIX_USBFIX=1` before DynaRunFix is started (system or user environment variable, or `set` in the shell that starts it):
@@ -539,9 +602,8 @@ DynaRun's own calls at the API boundary (DynaRun 3.26.0). Dyna Pro does not docu
 assumed it is said so here. There is no version check.
 
 How it works, plainly: no Dyna Pro file on disk is modified. `dynafix.dll` calls the exported `DPSetData` and `DPConnStatus` of
-`dynapro.dll` and, while DynaRun runs and only with the switch set, redirects the `WaitForSingleObject` import-table entry of
-`dynapro.dll` in memory (it acts only on the helper thread) and replaces the `DPSetData` that DynaRun looks up with its own wrapper.
-If no such import can be redirected the watchdog is not switched on (`DPSetData watchdog off: ...` in the log).
+`dynapro.dll` and, while DynaRun runs and only with the switch set, wraps `DPSetData` in a watchdog in memory: if a call does not return in time, DynaRun gets control back and the call is abandoned (the call itself is left to end on a helper thread).
+If the watchdog cannot be set up it is not switched on (`DPSetData watchdog off: ...` in the log).
 
 Trade-offs:
 
@@ -563,7 +625,7 @@ Trade-offs:
 * The three values DynaRun passes in `p` are copied for the helper thread and copied back when the call completes normally, so
   the caller sees the same data as without the fix; after an abandon `p` is not touched again.
 
-`dynafix.log` shows `DPSetData watchdog on (usbfix), N WaitForSingleObject import(s) patched`, `usbfix: DPSetData blocked ...`,
+`dynafix.log` shows `DPSetData watchdog on (usbfix), N hook(s) set`, `usbfix: DPSetData blocked ...`,
 `the abandoned call returned after N ms` and the count of dropped calls.
 
 ### Some .Dpr files will not open (empty File Run Properties, no curves)
@@ -608,7 +670,7 @@ kernel32/kernelbase/gdi32/gdi32full/user32 and `api-ms-win-*` API sets match; a 
 the old address match. `dynafix.log` shows `patched ... (by name)`, `... already held a hook: chained onto it`,
 `... not patched: ...` for each slot that could not be patched, and a per-module `import patch <module> [<table>]: N patched, M failed` line.
 `tests\build-shexec-tests.cmd` builds and runs the unit tests (the first-start helper path matching, `src\setup_match.h`; the `DYNAFIX_*` switch and `dynapro.dll` name parsing, `src\dfutil.h`; parts of the launcher); it exits with 0 if all pass. `tests\build-tests.cmd` builds the log test harness and
-`tests\build-hardening-tests.cmd` builds and runs the installer hardening tests (see `tests\README.md`).
+`tests\build-hardening-tests.cmd` builds and runs the installer hardening tests, and `tests\build-driver-tests.cmd` the driver tests (see `tests\README.md`).
 Diagnostic `DYNAFIX_STATS=1`: every 5 s `dynafix.log` gets one `stats(5s)` line (only when something happened) with the form
 `WM_SIZE` count, how many were duplicates, how many THBResize `0x591` messages were passed on or skipped and how many forms were
 shown or hidden. After start-up the lines stop, which shows that the guard has ended the hide/show loop.
@@ -661,7 +723,7 @@ The taskbar pin technique for Windows 7 to 10 was described by Gee Law ([blog po
 > - 把該行程中已載入模組的匯入表項目導向自己的函式:`THBRes25.dll` 的 `PostMessageA`;Microsoft 的 `MSVBVM60.DLL` 與 `scrrun.dll`
 >   匯入的檔案屬性 API、`GetProcAddress` 與文字 API;`DynaRun V3.exe`、DynaRun 資料夾內其他模組及其 OCX 元件的字型 API;
 >   `THBRes25.dll`、`PEGRP32E.dll`、`MSVBVM60.DLL`、`ole32`、`oleaut32`、`MFC42`、`comctl32` 與 `dynapro.dll` 中字型相關的匯入(含延遲載入的匯入);`dynapro.dll` 的 `CreateFileA`(只用來觀察裝置開啟,
->   結果原樣傳回)以及,只有在開啟選用的 USB 開關時才有的 `dynapro.dll` 的 `WaitForSingleObject`;還有繪圖元件自己的模組 `Pesgo32e.ocx` 與 `PEGRP32E.dll`
+>   結果原樣傳回)以及,只有在開啟選用的 USB 開關時才有的 `dynapro.dll` `DPSetData` 監看(見下文);還有繪圖元件自己的模組 `Pesgo32e.ocx` 與 `PEGRP32E.dll`
 >   (Gigasoft ProEssentials)的 `LoadLibraryExA` / `LoadLibraryExW`,只針對它索取語言資源檔 `PEGRC32D.dll` 的那一次要求,見
 >   [沒有系統管理員權限時,圖表右鍵選單是英文](#沒有系統管理員權限時圖表右鍵選單是英文);
 > - 把 DynaRun 以 `GetProcAddress` 查到的 `ShellExecuteA`、`DPConnect` 換成自己的包裝函式,只有在開啟選用的 USB 開關時才再加上 `DPSetData`;
@@ -673,6 +735,11 @@ The taskbar pin technique for Windows 7 to 10 was described by Gee Law ([blog po
 > 安裝程式會把 DynaRun 的捷徑改為經由啟動器執行(會備份原本的捷徑檔),並且只有在開啟 Windows UTF-8 選項時,
 > 才在 `DynaRun V3.exe` 旁加上一個 manifest 檔(見[使用方式](#使用方式);為此會短暫改變該 exe 的修改時間後還原,exe 的內容絕不會被改動)。DynaRunFix 絕不會以高於「從你的桌面正常啟動」的權限執行 DynaRun(UAC 關閉時,正常啟動本來就是完整系統管理員),否則就不啟動(見[使用方式](#使用方式))。
 > DynaRunFix 不碰任何授權、啟用或防拷機制或元件。
+>
+> 只有在你勾選安裝精靈的驅動程式選項(或執行 `DynaRunFix-Setup.exe /driver`;`/quiet` 絕不會),DynaRunFix 才會在安裝 Dyna Pro USB 驅動程式期間額外改變系統:
+> 把從 dynapro.co.uk 下載的驅動程式存放在 `%ProgramData%\DynaRunFix`,暫停 BitLocker(只有保護為開啟時),讓 Windows 在下次開機時顯示一次進階啟動選單,
+> 登錄一個在你登入後讓精靈繼續的排程工作,並重新啟動電腦;你在該選單按 7、並回應 Windows 的紅色警告之後,才會安裝驅動程式。驅動程式簽章檢查只在那一次開機期間關閉。
+> 安裝結束或取消時,工作與開機選項會被移除,BitLocker 也會恢復。沒有勾選該選項就不會做這些事。詳見[使用方式](#使用方式)與 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
 >
 > 你必須自備合法安裝的 DynaRun V3,並請自行確認使用本修正符合你與 Dyna Pro 之間的授權條款。
 > DynaRun V3 由 Dyna Pro 依其條款另行授權給你;本專案的 MIT 授權只涵蓋 DynaRunFix 本身。
@@ -698,7 +765,11 @@ DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;�
 log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
-v1.4.1(2026-10-14):
+v1.5.0(2026-10-16 發行):
+- 新增:安裝精靈可以安裝 Dyna Pro USB 驅動程式(僅限 Windows 10/11):第一頁有一個選項,之後也可以用開始功能表捷徑或 `DynaRunFix-Setup.exe /driver`。需重新開機一次:在選單按 7,再回應 Windows 的紅色警告(會出現兩次)。BitLocker 只有保護為開啟時才會暫停,安裝結束或取消時會恢復(`/driver-cancel` 可撤回已開始的安裝)。尚未在實體電腦上驗證。見[使用方式](#使用方式)與 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
+- 新增:別的資料夾的 `DynaRun V3.exe` 不再擋住安裝;關不掉的(別的使用者的工作階段、讀不到路徑)會明確說明,`/quiet /close` 此時以結束代碼 6 結束。原因寫在 `setup.log`(或 `%TEMP%\DynaRunFix-setup.log`)。
+- 安裝程式自己的記錄檔絕不透過連結寫入。安裝程式的參數與結束代碼列在[使用方式](#使用方式)。
+- 本版同時包含 v1.4.0 審查後的修正:
 - 修正:DynaRun 裝在路徑比啟動器自己的路徑還長的資料夾(非預設位置)時,無法經由啟動器啟動(「無法啟動 DynaRun」):現在會完整讀取記錄的路徑。
 - 更新檢查現在自己處理重新導向,每一跳都在送出要求之前先檢查(下載本來就是這樣);之前只檢查最後到達的網址。
 - 啟動器不再把其他使用者(快速切換使用者)的 DynaRun 當成自己的;無法判斷桌面殼層 token 是否已提升時,會停止而不是繼續。
@@ -763,10 +834,13 @@ v1.2.2:
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
    顯示 Dyna Pro 的授權合約（取自安裝檔，由 DynaRunFix 自己顯示），你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。
    Windows 會詢問一次是否允許變更，請按 **是**。
+   精靈第一頁最多有三個核取方塊:釘選到工作列、開機時自動啟動 DynaRun,以及(Windows 10/11 且尚未安裝驅動程式時)**同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**(見下方)。
 3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
    請按 **是**，DynaRun 會自己重新啟動。
 
-   這台電腦第一次連接 Dyna Pro?請先安裝 Dyna Pro USB 驅動程式,見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
+   這台電腦第一次連接 Dyna Pro?還需要 Dyna Pro USB 驅動程式。Windows 10/11 上可以由安裝精靈安裝(精靈第一頁的核取方塊:它會下載驅動程式、重新開機一次,
+   你在出現的選單按 **7**、並兩次選擇「仍然安裝此驅動程式軟體」,登入後它會自動繼續);之後也可以用開始功能表捷徑「安裝 Dyna Pro USB 驅動程式」或
+   `DynaRunFix-Setup.exe /driver`。也可以手動安裝,見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
 
 | | | |
 |---|---|---|
@@ -786,18 +860,41 @@ DynaRunFix 不包含任何 Dyna Pro 的檔案：安裝檔來自 Dyna Pro 官網�
 - 把現有的 DynaRun V3 捷徑（桌面、開始功能表、釘選到工作列；所有使用者與目前使用者）改為經由啟動器執行，名稱和圖示都保留(「以系統管理員身分執行」旗標不會保留:DynaRun 絕不會以高於「從你的桌面正常啟動」的權限執行(UAC 關閉時,正常啟動本來就是完整系統管理員);原本的捷徑檔會備份)；沒有桌面捷徑時會建立一個。我們的捷徑一律用 DynaRun 的藍色 logo（取自 Dyna Pro 原本捷徑的圖示檔；`DynaRun V3.exe` 本身只有視窗用的表格圖示），所以執行中的 DynaRun 在工作列上顯示的就是這個 logo；
 - 只有開啟 Windows「使用 Unicode UTF-8 提供全球語言支援」時，才在 `DynaRun V3.exe` 旁加上[字碼頁 manifest](#開啟系統-utf-8-選項時中文亂碼)(exe 的修改時間會短暫改變後還原,並短暫以暫停狀態建立 `DynaRun V3.exe` 行程後立刻結束它,讓 Windows 讀取 manifest；不會執行任何 DynaRun 程式碼,exe 的內容不會被改動)。DynaRun 的資料夾或 exe 一般使用者可以更改、或路徑不是單純的本機路徑時不會加，也不會把 DynaRun 的路徑記進全機登錄供系統管理員那幾步（解除安裝）使用，安裝資料夾裡的 `setup.log` 會說明；Windows XP 無法偵測該路徑中的連結（連接點），只做權限檢查；
 - 把 [Locale Emulator](#開啟系統-utf-8-選項時中文亂碼) 放到 `DynaRunFix\le`（只有繁中系統開了 UTF-8 選項，或 FontAssoc 缺 `ANSI(00)=YES` 時才會用到）；
+- 在 Windows 10/11 上,加入開始功能表捷徑「安裝 Dyna Pro USB 驅動程式」(所有使用者;它執行 `DynaRunFix-Setup.exe /driver`)；
 - 在「程式和功能」／「已安裝的應用程式」登錄解除安裝項目。
 
 DynaRunFix 除了上述檔案之外，還會在這台電腦上留下這些東西（解除安裝會盡可能移除；`com-copied.txt`、`com-backup`、`com-skipped.txt` 與 `setup.log` 會留在安裝資料夾，該資料夾因此不會被刪除）：
 - `HKLM\SOFTWARE\DynaRunFix`：`InstallDir`；`DynaRunExe`（DynaRun 的路徑，只有在它的資料夾和 exe 一般使用者無法更改時才記錄）；`ManifestInstalled`（已加上 manifest）；`ExeOrigTimePath`／`ExeOrigTime`（只在 `DynaRun V3.exe` 的原始修改時間還需要還原時存在）；`TaskbarPolicy`／`TaskbarPolicySid`（Windows 11 的釘選）；子機碼 `Shortcuts`（全機捷徑檔原本內容的備份）；另外還有 `Uninstall` 底下的項目。
-- 每位透過修正執行 DynaRun 的使用者的 `HKCU\Software\DynaRunFix`：`Shortcuts`（該使用者原本捷徑檔的備份）；`UpdateChecked`、`UpdateVersion`、`UpdateSha256`、`UpdateSkip`、`UpdateAsk`、`UpdateETag`、`DownloadETag`（更新檢查與下載）；`NoticeElevatedLauncher`、`NoticeRunAsAdminLayer`（只有在你對一次性通知回答「否」之後才寫入）。
+- 每位透過修正執行 DynaRun 的使用者的 `HKCU\Software\DynaRunFix`：`Shortcuts`（該使用者原本捷徑檔的備份）；`UpdateChecked`、`UpdateVersion`、`UpdateSha256`、`UpdateSkip`、`UpdateAsk`、`UpdateETag`、`DownloadETag`、`DriverETag`（更新檢查與下載）；`NoticeElevatedLauncher`、`NoticeRunAsAdminLayer`（只有在你對一次性通知回答「否」之後才寫入）。
 - Windows 11 且選了釘選時：`HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer` 下的 `StartLayoutFile` 與 `LockedStartLayout` = 1，以及安裝資料夾裡的 `TaskbarLayout.xml`。`LockedStartLayout` 是微軟文件中與 `StartLayoutFile` 搭配的值：兩者都設定時，Windows 會把這個配置視為鎖定。解除安裝（或不選釘選重新安裝）時，只有在 `StartLayoutFile` 仍指向我們的檔案時才會移除；組織自己設定的配置絕不會動。
 - 安裝資料夾裡除了程式檔之外：`TaskbarLayout.xml` 與 `DynaRun V3.lnk`（釘選所指向的捷徑，選了釘選時才有），以及 `setup.log`（系統管理員那一步做了或略過了什麼）。
+- 只有用過驅動程式選項時:資料夾 `%ProgramData%\DynaRunFix`（只有系統管理員能更改），內有安裝程式的副本、解開的驅動程式（`driver\`）與 `driver.log`；`HKLM\SOFTWARE\DynaRunFix` 下的值 `DriverBitLockerSuspended` = 1（只在驅動程式選項暫停 BitLocker 期間）；排程工作 `DynaRunFix-DriverContinue` 與一次性開機選項 `onetimeadvancedoptions`（兩者只在安裝結束或取消之前存在）；以及 BitLocker 暫停本身（只有保護原本為開啟時，見下方的驅動程式選項）。驅動程式一旦安裝，就屬於 Windows 的驅動程式存放區。
 
-解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest（只有檔案與安裝程式自己的副本完全相同才會刪，不同的就留著）；若還原 exe 修改時間失敗，會保留原始時間的紀錄，下次執行再試；解除安裝是從已安裝的程式執行（安裝資料夾只有系統管理員能寫入，不會在 `%TEMP%` 另存副本），若安裝資料夾與裡面的安裝程式仍在使用中，會由 Windows 在下次重新開機時移除；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。解除安裝會先要求系統管理員權限，取消該確認的話什麼都不會改變；DynaRun 執行中時會先請你關閉。舊版曾把 DynaRun 的 COM 註冊複製到全機登錄；解除安裝會保留這些複本及其紀錄（安裝資料夾裡的 `com-copied.txt`、`com-backup`）。
-DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；唯一新增的檔案是 manifest，而且只在開啟 UTF-8 選項時），也不會修改你的資料檔。支援 XP、7、10、11；參數：`/quiet`、`/uninstall`、`/notaskbar`、`/noautostart`、`/keep`（`/quiet` 只安裝修正，需要已經裝好 DynaRun V3，找不到時以結束代碼 1 結束）。
+解除安裝會把捷徑檔還原成原本的內容，並移除它加上的 manifest（只有檔案與安裝程式自己的副本完全相同才會刪，不同的就留著）；若還原 exe 修改時間失敗，會保留原始時間的紀錄，下次執行再試；解除安裝是從已安裝的程式執行（安裝資料夾只有系統管理員能寫入，不會在 `%TEMP%` 另存副本），若安裝資料夾與裡面的安裝程式仍在使用中，會由 Windows 在下次重新開機時移除；其他帳號仍指向修正版的捷徑會改回指向 `DynaRun V3.exe`。解除安裝時可選「只移除修正」或「全部移除」（接著用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3）。解除安裝會先要求系統管理員權限，取消該確認的話什麼都不會改變；DynaRun 執行中時會先請你關閉。解除安裝也會移除驅動程式的開始功能表捷徑、尚未完成的驅動程式安裝（排程工作與一次性開機選項）以及 `%ProgramData%\DynaRunFix`（`driver.log` 也一併刪除）。如果 BitLocker 是 DynaRunFix 為了安裝驅動程式而暫停的、且仍在暫停,解除安裝會把它恢復（即使已沒有等待中的工作,使用 `/keep` 時也一樣）。已安裝的驅動程式會保留。舊版曾把 DynaRun 的 COM 註冊複製到全機登錄；解除安裝會保留這些複本及其紀錄（安裝資料夾裡的 `com-copied.txt`、`com-backup`）。
+DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；唯一新增的檔案是 manifest，而且只在開啟 UTF-8 選項時），也不會修改你的資料檔。
 
-精靈第一頁有兩個選項，預設都勾選（`/quiet` 也預設套用，可用 `/notaskbar`、`/noautostart` 關閉）：
+支援 XP、7、10、11（驅動程式選項需要 Windows 10 或 11）。命令列參數：
+- `/quiet`：不顯示視窗；只安裝修正，需要已經裝好 DynaRun V3（找不到時以結束代碼 1 結束）。它絕不會安裝驅動程式。
+- `/close`：配合 `/quiet`，先關閉執行中的 DynaRun（見下方）。
+- `/uninstall`：解除安裝（「程式和功能」執行的也是它）；`/notaskbar`、`/noautostart`：不釘選到工作列、不在開機時啟動（見下方）；`/keep`：讓釘選、開機自動啟動和桌面捷徑維持原樣（更新時使用）。
+- `/driver`：直接開啟精靈的驅動程式頁面（下載、重新開機、安裝），不安裝 DynaRun 或修正；開始功能表捷徑執行的就是它。
+- `/driver-cancel`：要求系統管理員權限，撤回已開始的驅動程式安裝（排程工作、一次性開機選項與 BitLocker 暫停）；它不安裝也不移除驅動程式。
+
+安裝程式的結束代碼：
+
+| 代碼 | 意義 |
+|---|---|
+| 0 | 完成：安裝、更新或解除安裝已做完。 |
+| 1 | 錯誤，例如：`/quiet` 但找不到 DynaRun V3、讀不到使用者帳戶、安裝資料夾無法寫入、已有另一個安裝步驟在執行，或無法建立視窗。訊息（`/quiet` 時不顯示）與 `setup.log` 會說明原因。 |
+| 2 | 已取消：精靈在結束前被關閉、系統管理員確認被拒絕、DynaRun 自己的安裝程式被取消，或解除安裝的詢問回答了「否」。 |
+| 3 | 只出現在提升權限的那一步：系統管理員確認是用另一個帳戶回答的，不是這次安裝所屬的帳戶。安裝程式自己會處理（以啟動的使用者身分執行 DynaRun 的安裝程式），所以通常看不到。 |
+| 4 | DynaRun V3 自己的安裝程式（或其移除）失敗，或安裝檔無法準備好（複製並檢查）。 |
+| 5 | DynaRun V3 已安裝，但之後找不到 `DynaRun V3.exe`。 |
+| 6 | DynaRun（或安裝資料夾裡的啟動器／Locale Emulator）正在執行：沒有改變任何東西（見下方）。 |
+
+驅動程式的步驟若有問題，會顯示在精靈與 `driver.log`。
+
+精靈第一頁最多有三個選項，預設都勾選（`/quiet` 預設套用前兩個，可用 `/notaskbar`、`/noautostart` 關閉，第三個則絕不套用）：
 - **釘選到工作列。** Windows 7 到 10 直接釘選啟動器捷徑；Windows XP / Vista 放進「快速啟動」。Windows 11 不允許程式自行釘選，
   所以安裝程式改用微軟的[工作列配置原則](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps)
   （安裝資料夾裡的 `TaskbarLayout.xml`；系統管理員那一步會在 `HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer`
@@ -806,6 +903,15 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
   執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。Windows 7 到 10 的釘選手法是 Gee Law 描述的方式（[部落格文章](https://geelaw.blog/entries/msedge-pins/)；Firefox 也用同一手法）；不含任何 Mozilla 程式碼。
 - **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
   取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值、執行解除安裝的帳號、安裝時記錄的帳號，以及工作列配置檔仍是我們的其他帳號的工作列原則值（為此會短暫載入它們的登錄 hive），並把釘選的啟動器捷徑改回指向 `DynaRun V3.exe`。
+- **同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）。** 只在 Windows 10/11 且尚未安裝驅動程式時顯示。步驟與畫面見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。精靈依序會：
+  1. 只從 `dynapro.co.uk` 以 HTTPS 下載 `Dyna Pro USB.zip`（約 2 MB），並用程式內建的 SHA-256 核對；檔案不同就拒絕（Dyna Pro 若更動該檔，需要新版 DynaRunFix 或改用手動步驟）；
+  2. 要求系統管理員權限，把安裝程式與解開的驅動程式存放在 `%ProgramData%\DynaRunFix`（只有系統管理員能更改的資料夾）；
+  3. **只有 BitLocker 保護為開啟時**才暫停它（對系統磁碟機執行 `manage-bde -protectors -disable` 並加上 `-RebootCount 3`，所以最多 3 次重新啟動後保護會自動恢復；安裝結束或取消時精靈也會讓它恢復，
+     並在 `HKLM\SOFTWARE\DynaRunFix` 的值 `DriverBitLockerSuspended` 記住這件事）。暫停期間磁碟機沒有受到保護。原本就關閉、或你自己暫停的保護維持原狀。精靈的第一個驅動程式頁面會在做任何事之前先說明這一點；
+  4. 要求 Windows 只在下次開機時顯示進階啟動選單（`bcdedit /set {current} onetimeadvancedoptions on`），並登錄排程工作 `DynaRunFix-DriverContinue`，在你登入後讓精靈繼續；
+  5. 你按「重新開機」後重新啟動電腦。你在選單按 **7**（停用驅動程式強制簽章）；它只在那一次開機期間關閉；
+  6. 登入後安裝驅動程式（`pnputil`）；Windows 會跳出紅色警告兩次（兩個驅動程式檔各一次），每次都請選「仍然安裝此驅動程式軟體」。接著移除工作與開機選項，BitLocker 也恢復。
+  不繼續的話，請在精靈按「取消」，或執行 `DynaRunFix-Setup.exe /driver-cancel`：它會撤回工作、開機選項與 BitLocker 暫停。沒有勾選該選項（或使用 `/driver`）就不會做這些事。
 
 **更新。** DynaRun 一律先開啟，更新不會拖慢它。每天一次，DynaRun 啟動後，安裝好的安裝程式會在背景向 GitHub API 查詢本專案的最新版本（不會送出其他資料）。
 檢查只用 HTTPS，而且只連 GitHub 自己的主機（API、`github.com` 與 GitHub 的發行檔案主機；每一次重新導向都會檢查，查詢與下載都一樣）。
@@ -847,6 +953,8 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest 與 `LICE
 - **DynaRunFix 自己的更新:** 安裝檔會用 GitHub 為該版本檔案列出的 SHA-256 核對。每個版本的說明都附有 `SHA256SUMS.txt`(也作為檔案附在版本上),
   版本檔案並附有建置來源證明(由哪個儲存庫、哪個工作流程建置)。自行檢查下載的檔案:
   `gh attestation verify DynaRunFix-Setup.exe --repo timliudev/DynaRunFix`。這只能顯示檔案建置自何處,不代表檔案安全;安裝程式沒有程式碼簽章(見上方 SmartScreen 說明)。
+- **Dyna Pro USB 驅動程式(Dyna Pro 的檔案):** 只透過 HTTPS 從 `dynapro.co.uk` 下載(連線與重新導向的檢查和 DynaRun 安裝檔相同),並且只有在 SHA-256 與安裝程式內建的值相同時才會使用;其他檔案會被刪除。
+  通過檢查後才解開(會離開目標資料夾的項目名稱會被拒絕),安裝前會再檢查一次 INF。驅動程式本身不是 DynaRunFix 的:它是 Dyna Pro 的套件,DynaRunFix 不簽署也不更改它。
 
 ### 首次設定
 首次啟動時 DynaRun 會先問語言,再顯示「Dyna Pro系統選擇」(機型與選購功能)。按 **OK** 後 Windows 會詢問一次是否允許
@@ -984,6 +1092,9 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 或沒有回應(線材、電源)時,DynaRun 約 13 秒內都不顯示任何東西,之後才跳出「USB資料連線錯誤」
 (中止/重試/略過);按「略過」後仍會在背景持續嘗試連線。
 
+如果這台電腦從來沒有連接過 Dyna Pro,原因可能是缺少 USB 驅動程式:裝置管理員會把裝置列在「其他裝置」。
+請用安裝精靈(第一頁的選項,或 `DynaRunFix-Setup.exe /driver`)或手動安裝驅動程式,見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)(Windows 8 與更舊的版本:[舊版 Windows](docs/DRIVER.md#舊版-windows))。
+
 `dynafix.dll` 在記憶體中加上診斷(把 `dynapro.dll` 的 `CreateFileA` 匯入表項目導向自己的函式來觀察開啟裝置,結果原樣傳回,不修改任何檔案):
 
 * `%TEMP%\dynafix.log` 會記下 DynaRun 連線嘗試結果的每次變化、開啟裝置失敗(`error 32` = 被其他程式占用,`5` = 存取被拒)
@@ -1000,7 +1111,7 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 只有在接受下列取捨時才使用。
 
 用途:量測中 Dyna Pro 突然不再回應時,如果 DynaRun 呼叫 `dynapro.dll` 的 `DPSetData` 一直不返回,DynaRun 的視窗可能永遠沒有反應。
-對呼叫做 API 邊界記錄可看到 `dynapro.dll` 在 `DPSetData` 內以無限逾時呼叫 `WaitForSingleObject`;裝置不再回應後這個等待是否永遠不結束,是假設,並未實測。
+裝置不再回應後 `DPSetData` 呼叫是否永遠不返回,是假設,並未實測。
 
 在啟動 DynaRunFix 前設定 `DYNAFIX_USBFIX=1`(系統或使用者環境變數,或在啟動它的命令列先 `set`):
 
@@ -1012,8 +1123,8 @@ DynaRun 的狀態列(紀錄模式、日期、時間)。這是 DynaRun 原本的�
 Dyna Pro 沒有公開這些函式的文件;只是假設的部分,文中都會說明。不檢查版本。
 
 運作方式(直白地說):不修改磁碟上任何 Dyna Pro 的檔案。`dynafix.dll` 呼叫 `dynapro.dll` 匯出的 `DPSetData`、`DPConnStatus`,
-並且在 DynaRun 執行期間、只有設了開關時,於記憶體中把 `dynapro.dll` 的 `WaitForSingleObject` 匯入表項目導向自己的函式(只對輔助執行緒作用),
-同時把 DynaRun 查到的 `DPSetData` 換成自己的包裝函式。找不到可轉向的匯入項目時不會啟用監看(log 會有 `DPSetData watchdog off: ...`)。
+並且在 DynaRun 執行期間、只有設了開關時,於記憶體中為 `DPSetData` 加上監看:呼叫若沒有及時返回,DynaRun 會取回控制權,該次呼叫被放棄(呼叫本身留在輔助執行緒上結束)。
+監看無法設定時不會啟用(log 會有 `DPSetData watchdog off: ...`)。
 
 取捨:
 
@@ -1029,7 +1140,7 @@ Dyna Pro 沒有公開這些函式的文件;只是假設的部分,文中都會說
 * 假設,照實說明:`dynapro.dll` 能接受 `DPSetData` 由輔助執行緒而不是 DynaRun 自己的執行緒呼叫(未經驗證),以及 `p` 是三個值(這是在 DynaRun 的呼叫中觀察到的)。複製的剛好是三個值,放進四周有緩衝空間的暫存區,不會蓋到 `dynafix.dll` 的其他資料。
 * DynaRun 傳入 `p` 的三個值會複製給輔助執行緒,呼叫正常結束時再複製回去,所以呼叫端看到的資料與沒有這個修正時相同;被放棄之後就不再碰 `p`。
 
-`dynafix.log` 會出現 `DPSetData watchdog on (usbfix), N WaitForSingleObject import(s) patched`、`usbfix: DPSetData blocked ...`、
+`dynafix.log` 會出現 `DPSetData watchdog on (usbfix), N hook(s) set`、`usbfix: DPSetData blocked ...`、
 `the abandoned call returned after N ms` 與被丟棄呼叫的次數。
 
 ### 部分 .Dpr 打不開(File Run Properties 全空、沒有曲線)
@@ -1054,7 +1165,7 @@ dynafix 所有的匯入掛鉤(字型、文字度量、檔案屬性、`GetProcAdd
 來自 kernel32/kernelbase/gdi32/gdi32full/user32 與 `api-ms-win-*` API 集合的匯入都會比對;沒有匯入名稱表的模組退回舊的位址比對。
 `dynafix.log` 會出現 `patched ... (by name)`、`... already held a hook: chained onto it`、無法修補的欄位的 `... not patched: ...`,以及每個模組一行 `import patch <module> [<table>]: N patched, M failed`。
 
-`tests\build-shexec-tests.cmd` 會建置並執行單元測試(首次啟動設定程式的路徑比對 `src\setup_match.h`、`DYNAFIX_*` 開關與 `dynapro.dll` 檔名的解析 `src\dfutil.h`、啟動器的部分功能),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試(見 `tests\README.md`)。
+`tests\build-shexec-tests.cmd` 會建置並執行單元測試(首次啟動設定程式的路徑比對 `src\setup_match.h`、`DYNAFIX_*` 開關與 `dynapro.dll` 檔名的解析 `src\dfutil.h`、啟動器的部分功能),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試,`tests\build-driver-tests.cmd` 建置並執行驅動程式測試(見 `tests\README.md`)。
 診斷用的 `DYNAFIX_STATS=1`:每 5 秒 `dynafix.log` 會有一行 `stats(5s)`(只在有事發生時),內容是表單 `WM_SIZE` 的次數、其中重複的次數、THBResize `0x591` 訊息被放行或略過的次數,以及表單被顯示或隱藏的次數。
 啟動之後這些行就停止,表示防護已經結束了隱藏/顯示迴圈。
 

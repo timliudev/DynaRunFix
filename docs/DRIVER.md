@@ -11,13 +11,16 @@ Dyna Pro. The user-facing summary is in the [README](../README.md#usage).
 The DynaRunFix setup can do the steps below for you. Use it unless it tells you it cannot; the [manual method](#steps) stays
 available.
 
-* In the main installer, leave **Install the Dyna Pro USB driver** ticked (it is ticked by default and hidden if the driver is
-  already installed or Windows is older than 10). Or, any time later, use the Start menu shortcut **安裝 Dyna Pro USB 驅動程式**
-  or run `DynaRunFix-Setup.exe /driver`.
+* In the main installer, leave **Also install the Dyna Pro USB driver (one restart needed)** ticked (it is ticked by default and
+  hidden if the driver is already installed or Windows is older than 10; Windows 8, 7, Vista and XP use the manual steps, see [older Windows](#older-windows)). Or, any time later, use the Start menu shortcut
+  **Install Dyna Pro USB driver** (**安裝 Dyna Pro USB 驅動程式** on a Traditional Chinese Windows) or run `DynaRunFix-Setup.exe /driver`.
 * The wizard downloads the official "Dyna Pro USB.zip" from dynapro.co.uk (it is not bundled) and checks its SHA-256. If the
   file on the site has changed, it refuses to install it; use the manual method then.
-* Windows asks for administrator permission once (UAC). If BitLocker protection is on, the wizard suspends it until the driver is installed (at most 3 restarts as a safety net, then it is resumed automatically), sets the one-time
-  advanced boot options and registers a task that continues the wizard when you sign in.
+* Windows asks for administrator permission (UAC). On an administrator account that is once; a standard user may be asked for an
+  administrator's password again after the restart. If BitLocker protection is on, the wizard suspends it until the driver is installed
+  (at most 3 restarts as a safety net, then it is resumed automatically; it is also resumed when the installation finishes or you cancel),
+  sets the one-time advanced boot options and registers a task that continues the wizard when you sign in. While it is suspended, the
+  drive is not protected; if you decide not to go on, cancel in the wizard (or run `/driver-cancel`, see below) so that it is resumed.
 * After the restart, press **7** in the start-up menu (*Disable driver signature enforcement*). The wizard shows the page below;
   photographing it with your phone first is a good idea.
 
@@ -25,15 +28,13 @@ available.
   |---|
   | ![Startup Settings: press 7, Disable driver signature enforcement](img/driver-press-7.png) |
 
-* If you miss 7, the wizard says so after you sign in and offers **再試一次** (Try again).
+* If you miss 7, the wizard says so after you sign in and offers **Try again**.
 * Then Windows shows its red warning **twice** (once for each of the two driver files, ftdibus and ftdiport): choose
-  **仍然安裝此驅動程式軟體** (*Install this driver software anyway*) each time. Driver signature enforcement comes back at the next normal restart.
+  **Install this driver software anyway** each time. Driver signature enforcement comes back at the next normal restart.
 
-Notes: Windows 10 or 11 is required. The driver files go to `%ProgramData%\DynaRunFix\driver` and the log is
-`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver. Tested in a Windows 11 VM (zh-TW) with a simulated
-device: the Startup Settings list appears directly after the restart, the retry after missing 7 works, the driver installs into the
-driver store with no device present, and a device added later binds to it once signature enforcement is back on. Not yet tested on a
-physical PC with real hardware, or with BitLocker.
+Notes: the wizard needs Windows 10 or 11 (on older Windows use the [older Windows](#older-windows) steps below). The driver files go to `%ProgramData%\DynaRunFix\driver` and the log is
+`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver (it does resume BitLocker if DynaRunFix suspended it and it is still suspended). Not yet verified on a real PC; the BitLocker path has not been tried on real hardware.
+If the wizard says the working folder could not be prepared (an old folder is still in use, or it can be changed by other users), restart Windows and try again.
 
 If something goes wrong: choosing **Cancel** on the wizard's retry or install page takes back the logon task, the boot option and
 the BitLocker suspension. If you closed the wizard some other way and want those undone, the manual steps below do not depend on
@@ -48,9 +49,10 @@ one-time boot option and the BitLocker suspension, it does not install or remove
 
 ## Why the extra steps
 
-The driver is FTDI's FTDIBUS/FTDIPORT driver (2.08.24, 2012) with its INF edited to add the Dyna Pro device ID
-`USB\VID_0403&PID_FDBC` ("DynaPro Dynamometer"). Microsoft signed the driver catalog before that edit, so Windows
-refuses the edited INF: *"The hash for the file is not present in the specified catalog file"*. To install it,
+The driver is FTDI's FTDIBUS/FTDIPORT driver (2.08.24, 2012) with the Dyna Pro device ID
+`USB\VID_0403&PID_FDBC` ("DynaPro Dynamometer"). In the vendor's package, ftdibus.inf and ftdiport.inf are FTDI's INF with Dyna Pro device
+names added, and they are not in the Microsoft-signed ftdibus.cat / ftdiport.cat that ship with them, so Windows cannot validate them and
+refuses them: *"The hash for the file is not present in the specified catalog file"*. To install it,
 driver signature enforcement has to be turned off for one start of Windows.
 
 ## Steps
@@ -72,7 +74,9 @@ Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 Protection resumes by itself after at most 3 restarts; once the driver is installed you can resume it right away with `Resume-BitLocker -MountPoint "C:"`. If the recovery key is asked anyway, you can find it at
 <https://aka.ms/myrecoverykey> (sign in with the Microsoft account the PC is linked to).
 
-If you are not sure whether the PC is encrypted, running the command does no harm.
+If you are not sure whether the PC is encrypted, you can check first (`Get-BitLockerVolume`, or *Manage BitLocker* in Control Panel). On an
+encrypted PC the drive is **not protected** while it is suspended: until protection is resumed (`Resume-BitLocker -MountPoint "C:"`) or the 3 restarts
+have run out, anyone who has the PC can read the drive. So if you suspended it and then do not go on with the driver, resume it yourself.
 
 ### 3. Restart with driver signature enforcement disabled
 
@@ -91,6 +95,8 @@ Open *Start*, click the power button, hold **Shift** and click **Restart**. Then
 | ![Startup Settings: press 7, Disable driver signature enforcement](img/driver-press-7.png) |
 
 This setting lasts only for that one start of Windows, which is enough: the install in step 4 needs it once.
+
+These steps are for Windows 10 and 11, and Windows 8 / 8.1 is the same (Shift + Restart, then 7). For older Windows see [older Windows](#older-windows).
 
 ### 4. Plug in the Dyna Pro and point Windows at the driver folder
 
@@ -122,7 +128,24 @@ as **DynaPro Dynamometer**.
 |---|
 | ![DynaPro Dynamometer under Universal Serial Bus controllers](img/driver-device-installed.png) |
 
-*Windows 11 (Traditional Chinese) in a VM with a simulated device. The device name under Other devices may differ on a real PC.*
+*Windows 11 (Traditional Chinese). The device name under Other devices may differ on your PC.*
+
+## Older Windows
+
+The wizard needs Windows 10 or 11. On older Windows do the [steps](#steps) above, but replace step 3 (restart with driver signature
+enforcement disabled) and the device-manager clicks of step 4 as below. These steps are from Microsoft's documented behaviour and have
+not been tried by DynaRunFix on those systems.
+
+* **Windows 8 / 8.1:** the same as step 3: hold **Shift**, click **Restart**, *Troubleshoot* > *Advanced options* > *Startup Settings* >
+  *Restart*, then press **7** (*Disable driver signature enforcement*). 32-bit Windows 8 does not enforce driver signing and only shows the
+  warning, so it can skip this. In Device Manager choose **Install this driver software anyway** on the red warning.
+* **Windows Vista / 7:** restart and press **F8** repeatedly before the Windows logo appears. In *Advanced Boot Options* choose
+  **Disable Driver Signature Enforcement**. After the restart open Device Manager, right-click the device, *Update Driver Software* >
+  *Browse my computer for driver software* > *Let me pick* > **Have Disk...**, pick the `ftdibus.inf` in the unzipped folder, and click
+  **Install this driver software anyway** on the red warning. 32-bit Vista / 7 do not enforce driver signing and only show the warning, so the F8 step can be
+  skipped there.
+* **Windows XP:** driver signatures are not enforced, so there is no restart step. In Device Manager, *Update Driver*, point it at the
+  unzipped folder; when Windows says the software has not passed Windows Logo testing, click **Continue Anyway**.
 
 ## Troubleshooting
 
@@ -135,6 +158,8 @@ as **DynaPro Dynamometer**.
 
 * **Startup Settings asks for a BitLocker recovery key.** Enter it (<https://aka.ms/myrecoverykey>), or restart
   normally, do step 2 and try again.
+* **The drive stays unprotected.** If you suspended BitLocker (step 2, or the wizard did) and did not go on, resume it with
+  `Resume-BitLocker -MountPoint "C:"` in an administrator PowerShell.
 * **The device is not under *Other devices*.** Check the USB cable and that the Dyna Pro is switched on; unplug and
   plug it in again.
 
@@ -151,10 +176,10 @@ DynaRunFix 不附驅動程式,驅動程式由 Dyna Pro 提供。使用者版說�
 
 DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到,建議直接用它;[手動方式](#步驟)仍然可用。
 
-* 在主安裝程式中,保持勾選 **安裝 Dyna Pro USB 驅動程式**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏)。
+* 在主安裝程式中,保持勾選 **同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏;Windows 8、7、Vista、XP 請用手動步驟,見[舊版 Windows](#舊版-windows))。
   之後隨時也可以用開始功能表捷徑 **安裝 Dyna Pro USB 驅動程式**,或執行 `DynaRunFix-Setup.exe /driver`。
 * 精靈會從 dynapro.co.uk 下載官方的「Dyna Pro USB.zip」(不內附)並檢查 SHA-256。網站上的檔案若有變動就拒絕安裝,這時請改用手動方式。
-* Windows 只會要求一次系統管理員權限(UAC)。若 BitLocker 保護為開啟,精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
+* Windows 會要求系統管理員權限(UAC)。使用系統管理員帳戶時只會問一次;標準使用者在重新啟動後可能會再被要求輸入系統管理員密碼。若 BitLocker 保護為開啟,精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復;安裝完成或你按取消時也會恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。暫停期間磁碟機沒有受到保護;如果你決定不繼續,請在精靈中按取消(或執行 `/driver-cancel`,見下方),讓保護恢復。
 * 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。
 
   | 按 7 |
@@ -162,10 +187,11 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
   | ![啟動設定:按 7,停用驅動程式強制簽章](img/driver-press-7.png) |
 
 * 沒按到 7 的話,登入後精靈會告知,並提供 **再試一次**。
-* 接著 Windows 會跳出紅色警告,請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。
+* 接著 Windows 會跳出紅色警告,而且會出現兩次(兩個驅動程式檔 ftdibus 與 ftdiport 各一次),每次都請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。
 
-附註:需要 Windows 10 或 11。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。
-解除安裝 DynaRunFix 不會移除驅動程式。已在 Windows 11(繁體中文)虛擬機器中以模擬裝置測試:重新啟動後直接出現「啟動設定」清單、錯過 7 後重試可正常運作、沒有裝置時驅動程式也能安裝到驅動程式存放區、之後新增的裝置在簽章檢查恢復後會自動套用該驅動程式。尚未在實體電腦、真實硬體或啟用 BitLocker 的環境測試。
+附註:精靈需要 Windows 10 或 11(舊版 Windows 請看下面的[舊版 Windows](#舊版-windows))。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。
+解除安裝 DynaRunFix 不會移除驅動程式(但如果 BitLocker 是 DynaRunFix 暫停的、且仍在暫停,會把它恢復)。尚未在實體電腦上驗證;BitLocker 的路徑也還沒有在實體硬體上試過。
+如果精靈說工作資料夾無法準備好(舊資料夾仍在使用中,或其他使用者可以更改它),請重新啟動 Windows 再試一次。
 
 如果出了問題:在精靈的重試或安裝頁面按 **取消**,會撤回登入工作、開機選項與 BitLocker 暫停。若是用其他方式關掉精靈、想把這些還原,
 可以執行 `DynaRunFix-Setup.exe /driver-cancel`(會要求系統管理員權限;只移除工作、一次性開機選項與 BitLocker 暫停,不會安裝或移除驅動程式)。
@@ -179,9 +205,10 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 
 ### 為什麼要多這幾步
 
-這是 FTDI 的 FTDIBUS/FTDIPORT 驅動程式(2.08.24,2012 年),INF 被修改過,加入了 Dyna Pro 的裝置 ID
-`USB\VID_0403&PID_FDBC`(「DynaPro Dynamometer」)。Microsoft 是在修改之前簽署驅動程式目錄的,
-所以 Windows 會拒絕修改過的 INF:「指定的類別目錄檔案中沒有該檔案的雜湊」。要安裝就得在 Windows 啟動一次的期間停用驅動程式強制簽章。
+這是 FTDI 的 FTDIBUS/FTDIPORT 驅動程式(2.08.24,2012 年),加有 Dyna Pro 的裝置 ID
+`USB\VID_0403&PID_FDBC`(「DynaPro Dynamometer」)。廠商封裝中的 ftdibus.inf、ftdiport.inf 是加上 Dyna Pro 裝置名稱的 FTDI INF,
+且不在隨附的 Microsoft 簽署目錄檔(ftdibus.cat/ftdiport.cat)中,因此 Windows 無法驗證,會拒絕:「指定的類別目錄檔案中沒有該檔案的雜湊」。
+要安裝就得在 Windows 啟動一次的期間停用驅動程式強制簽章。
 
 ### 步驟
 
@@ -201,7 +228,7 @@ Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 
 最多 3 次重新啟動之後保護會自動恢復;驅動程式安裝完成後也可以用 `Resume-BitLocker -MountPoint "C:"` 立刻恢復。如果還是被要求輸入復原金鑰,可以到 <https://aka.ms/myrecoverykey> 查詢(登入與這台電腦綁定的 Microsoft 帳號)。
 
-不確定有沒有加密的話,直接執行這行指令也無妨。
+不確定有沒有加密的話,可以先確認(`Get-BitLockerVolume`,或控制台的「管理 BitLocker」)。加密的電腦在暫停期間磁碟機**沒有受到保護**:在你用 `Resume-BitLocker -MountPoint "C:"` 恢復保護、或 3 次重新啟動用完之前,拿到這台電腦的人都能讀取磁碟機。所以如果你暫停了它、之後不繼續安裝驅動程式,請自己把它恢復。
 
 #### 3. 停用驅動程式強制簽章後重新啟動
 
@@ -220,6 +247,8 @@ Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 | ![啟動設定:按 7,停用驅動程式強制簽章](img/driver-press-7.png) |
 
 這個設定只在這一次的 Windows 啟動期間有效,這樣就夠了:步驟 4 的安裝只需要它一次。
+
+這些步驟適用 Windows 10 與 11,Windows 8 / 8.1 相同(Shift + 重新啟動,再按 7)。更舊的 Windows 請看[舊版 Windows](#舊版-windows)。
 
 #### 4. 接上 Dyna Pro,指定驅動程式資料夾
 
@@ -250,7 +279,18 @@ Windows 顯示驅動程式安裝完成後,裝置會列在 **通用序列匯流�
 |---|
 | ![通用序列匯流排控制器底下的 DynaPro Dynamometer](img/driver-device-installed.png) |
 
-*虛擬機裡的 Win11(繁體中文),裝置為模擬。真實電腦上「其他裝置」底下的裝置名稱可能不同。*
+*Windows 11(繁體中文)。你的電腦上「其他裝置」底下的裝置名稱可能不同。*
+
+### 舊版 Windows
+
+精靈需要 Windows 10 或 11。舊版 Windows 請照上面的[步驟](#步驟)做,但步驟 3(以停用驅動程式強制簽章的方式重新啟動)與步驟 4 的裝置管理員操作請改為如下。
+這些步驟依據 Microsoft 文件記載的行為,DynaRunFix 尚未在這些系統上試過。
+
+* **Windows 8 / 8.1:** 與步驟 3 相同:按住 **Shift** 再按 **重新啟動**,*疑難排解* > *進階選項* > *啟動設定* > *重新啟動*,然後按 **7**(*停用驅動程式強制簽章*)。32 位元的 Windows 8 不強制驅動程式簽章、只會顯示警告,可以略過這一步。在裝置管理員,紅色警告出現時選 **仍然安裝此驅動程式軟體**。
+* **Windows Vista / 7:** 重新開機,在出現 Windows 標誌之前連續按 **F8**,在「進階開機選項」選 **停用驅動程式強制簽章**。重新啟動後開啟裝置管理員,
+  對裝置按右鍵,*更新驅動程式軟體* > *瀏覽電腦上的驅動程式軟體* > *讓我從清單選擇* > **從磁片安裝...**,選解壓縮資料夾裡的 `ftdibus.inf`,
+  紅色警告出現時選 **仍然安裝此驅動程式軟體**。32 位元的 Vista / 7 不強制驅動程式簽章、只會顯示警告,可以略過 F8 這一步。
+* **Windows XP:** 不強制驅動程式簽章,沒有重新啟動的步驟。在裝置管理員選 *更新驅動程式*,指向解壓縮的資料夾;Windows 說軟體未通過 Windows 標誌測試時,按 **仍然繼續**。
 
 ### 疑難排解
 
@@ -262,4 +302,5 @@ Windows 顯示驅動程式安裝完成後,裝置會列在 **通用序列匯流�
   | ![Windows 錯誤:指定的類別目錄檔案中沒有該檔案的雜湊](img/driver-hash-error.png) |
 
 * **啟動設定要求輸入 BitLocker 復原金鑰。** 輸入金鑰(<https://aka.ms/myrecoverykey>),或正常重新啟動、做完步驟 2 再試一次。
+* **磁碟機一直沒有受到保護。** 如果你(或精靈)暫停了 BitLocker 卻沒有繼續安裝,請以系統管理員身分開啟 PowerShell,執行 `Resume-BitLocker -MountPoint "C:"` 恢復。
 * **「其他裝置」底下沒有裝置。** 檢查 USB 線與 Dyna Pro 是否已開機,拔掉再插一次。

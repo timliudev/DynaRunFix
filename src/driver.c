@@ -1,7 +1,8 @@
 // The Dyna Pro USB driver (wizard pages in wizard.c, user documentation in docs/DRIVER.md).
 //
 // Dyna Pro's "Dyna Pro USB.zip" holds FTDI's FTDIBUS/FTDIPORT driver 2.08.24 (2012) with the Dyna Pro device id
-// USB\VID_0403&PID_FDBC added to ftdibus.inf. Microsoft signed the catalog before that edit, so Windows 10/11 installs the package only
+// USB\VID_0403&PID_FDBC in ftdibus.inf. In that package ftdibus.inf and ftdiport.inf are not in the Microsoft-signed ftdibus.cat /
+// ftdiport.cat that ship with them, so Windows 10/11 installs it only
 // while driver signature enforcement is off, which a user can switch on for one start of Windows ("Startup Settings", key 7).
 // This file automates that:
 //
@@ -136,6 +137,13 @@ BOOL drv_ci_enforced(DWORD options) { return (options & CI_OPT_ENABLED) != 0; }
 BOOL drv_bde_suspend(int ps)
 {
     return ps != BDE_PS_OFF && ps != BDE_PS_NONE;
+}
+
+// The same decision at prep time: also when our own flag says we suspended it earlier. A volume we suspended reports protection off, so a
+// retry would otherwise not run manage-bde again and the restart count (-RebootCount 3) would not start over.
+BOOL drv_bde_suspend_now(int ps, BOOL ours)
+{
+    return drv_bde_suspend(ps) || ours;
 }
 
 /* ---------- the task's XML ---------- */
@@ -329,6 +337,8 @@ static void base_dir(WCHAR *out)
 
 // Owner Administrators; SYSTEM and Administrators full control, Users read and execute; the DACL does not inherit from ProgramData.
 static const WCHAR SDDL_OWNED[] = L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
+// The same for the one kept file (a file: no inheritance flags).
+static const WCHAR SDDL_FILE[] = L"O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)";
 static const WCHAR SDDL_PLAIN[] = L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 
 static BOOL make_protected(const WCHAR *dir, const WCHAR *sddl)
@@ -341,31 +351,85 @@ static BOOL make_protected(const WCHAR *dir, const WCHAR *sddl)
     return ok;
 }
 
-// A folder that exists already: owner and DACL set to ours (an ordinary user may have created it).
-static void reset_security(const WCHAR *dir)
+// A folder (or file) that exists already: owner and DACL set to ours (an ordinary user may have created it).
+static void reset_security(const WCHAR *dir, const WCHAR *sddl)
 {
     PSECURITY_DESCRIPTOR sd; PSID owner = NULL; PACL dacl = NULL; BOOL present = FALSE, def = FALSE;
     enable_privilege(L"SeTakeOwnershipPrivilege"); enable_privilege(L"SeRestorePrivilege"); enable_privilege(L"SeBackupPrivilege");
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(SDDL_OWNED, SDDL_REVISION_1, &sd, NULL)) return;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL)) return;
     if (GetSecurityDescriptorOwner(sd, &owner, &def) && GetSecurityDescriptorDacl(sd, &present, &dacl, &def) && owner && present)
         SetNamedSecurityInfoW((LPWSTR)dir, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, owner, NULL, dacl, NULL);
     LocalFree(sd);
 }
 
-// A new, empty %ProgramData%\DynaRunFix that only SYSTEM and the Administrators can change. keep_exe: our own copy of the setup is running
-// from there (a retry after the restart) and stays. FALSE when that cannot be reached (the folder is still changeable by users).
+// Why the staging folder could not be made (OutputDebugString only: the folder is not trusted, so nothing is written into it).
+static void base_fail(const WCHAR *why) { OutputDebugStringW(L"DynaRunFix driver: staging folder: "); OutputDebugStringW(why); OutputDebugStringW(L"\n"); }
+
+// Does dir hold nothing but the one top-level file named keep?
+static BOOL holds_only(const WCHAR *dir, const WCHAR *keep)
+{
+    WCHAR p[MAX_PATH]; WIN32_FIND_DATAW fd; HANDLE f; BOOL only = TRUE;
+    if (lstrlenW(dir) + 3 >= MAX_PATH) return FALSE;
+    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
+    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
+    do {
+        if (!lstrcmpW(fd.cFileName, L".") || !lstrcmpW(fd.cFileName, L"..")) continue;
+        if (lstrcmpiW(fd.cFileName, keep) || (fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) only = FALSE;
+    } while (only && FindNextFileW(f, &fd));
+    FindClose(f);
+    return only;
+}
+
+// The kept copy of the setup: a plain file with one link only (a hard link would share its security with a file elsewhere).
+static BOOL plain_single_file(const WCHAR *path)
+{
+    BY_HANDLE_FILE_INFORMATION bi; BOOL ok;
+    HANDLE h = CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) return FALSE;
+    ok = GetFileInformationByHandle(h, &bi) && !(bi.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) && bi.nNumberOfLinks == 1;
+    CloseHandle(h);
+    return ok;
+}
+
+// A new, empty %ProgramData%\DynaRunFix that only SYSTEM and the Administrators can change; the later elevated steps run what is staged there.
+// An existing folder is removed first; one that cannot be removed (something in it is held open, e.g. by an ordinary user: an open handle
+// keeps its access whatever the ACL says) is never adopted: FALSE. The new folder is created with the protected DACL (no window with the
+// parent's inheritance) and checked. keep_exe: our own copy of the setup is running from there (a retry after the restart): that one
+// file stays, and the folder must hold nothing else. FALSE also when the folder is still changeable by users.
 static BOOL make_base(const WCHAR *base, BOOL keep_exe, const WCHAR *sid)
 {
     static const WCHAR KEEP[] = L"DynaRunFix-Setup.exe\0";
     DWORD a = GetFileAttributesW(base);
     if (a != INVALID_FILE_ATTRIBUTES) {
-        if (a & FILE_ATTRIBUTE_REPARSE_POINT) { if (!RemoveDirectoryW(base)) return FALSE; }      // a link: removed, never followed
-        else if (!(a & FILE_ATTRIBUTE_DIRECTORY)) { if (!DeleteFileW(base)) return FALSE; }
-        else { reset_security(base); delete_tree(base, keep_exe ? KEEP : NULL, 0); }
+        if (a & FILE_ATTRIBUTE_REPARSE_POINT) {                                  // a link: removed, never followed
+            if (!((a & FILE_ATTRIBUTE_DIRECTORY) ? RemoveDirectoryW(base) : DeleteFileW(base))) { base_fail(L"a link could not be removed"); return FALSE; }
+        }
+        else if (!(a & FILE_ATTRIBUTE_DIRECTORY)) { if (!DeleteFileW(base)) { base_fail(L"a file with that name could not be removed"); return FALSE; } }
+        else { reset_security(base, SDDL_OWNED); delete_tree(base, keep_exe ? KEEP : NULL, 0); }
     }
-    if (!exists(base) && !make_protected(base, SDDL_OWNED) && !make_protected(base, SDDL_PLAIN)) return FALSE;
-    if (a != INVALID_FILE_ATTRIBUTES && exists(base)) reset_security(base);
-    return exists(base) && !path_user_writable(base, sid);
+    if (exists(base)) {
+        if (!keep_exe || !holds_only(base, KEEP)) { base_fail(L"the old folder could not be removed (something in it is in use)"); return FALSE; }
+        reset_security(base, SDDL_OWNED);                                                    // only our own running copy is left in it
+    } else if (!make_protected(base, SDDL_OWNED) && !make_protected(base, SDDL_PLAIN)) { base_fail(L"the folder could not be created"); return FALSE; }
+    if (!exists(base) || path_user_writable(base, sid)) { base_fail(L"the folder is not protected (owner or permissions)"); return FALSE; }
+    if (keep_exe) {                                                              // the kept setup copy: its owner and permissions are ours too
+        WCHAR f[MAX_PATH];
+        if (lstrlenW(base) + lstrlenW(KEEP) + 2 >= MAX_PATH) { base_fail(L"the path is too long"); return FALSE; }
+        lstrcpyW(f, base); lstrcatW(f, L"\\"); lstrcatW(f, KEEP);
+        if (exists(f)) {
+            if (!plain_single_file(f)) { base_fail(L"the kept setup file is a link or has several links"); return FALSE; }
+            reset_security(f, SDDL_FILE);
+            if (path_user_writable(f, sid)) { base_fail(L"the kept setup file is not protected (owner or permissions)"); return FALSE; }
+        }
+    }
+    return TRUE;
+}
+
+// The log goes into the staging folder only once the folder has been checked (an ordinary user could have made it).
+static void log_in_base(const WCHAR *base, const WCHAR *sid)
+{
+    g_logfile[0] = 0;
+    if (exists(base) && !path_user_writable(base, sid) && lstrlenW(base) + 12 < MAX_PATH) { lstrcpyW(g_logfile, base); lstrcatW(g_logfile, L"\\driver.log"); }
 }
 
 /* ---------- elevated parts ---------- */
@@ -482,11 +546,11 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip)
     if (!valid_user_sid(sid)) return DRV_E_SID;
     base_dir(base);
     if (lstrlenW(base) + 40 >= MAX_PATH) return DRV_E_DIR;
-    lstrcpyW(g_logfile, base); lstrcatW(g_logfile, L"\\driver.log");
     lstrcpyW(p, base); lstrcatW(p, L"\\" SETUP_NAME);
     inside = !lstrcmpiW(g_self, p);
     if (stage) {
         if (!make_base(base, inside, sid)) return DRV_E_DIR;
+        log_in_base(base, sid);
         drv_log(L"prep: staging");
         lstrcpyW(z, base); lstrcatW(z, L"\\driver.zip");
         if (!CopyFileW(zip, z, TRUE)) return DRV_E_COPY;                      // our own copy: what was checked is what is unpacked
@@ -500,17 +564,18 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip)
         if (!staged_inf_ok(base)) return DRV_E_INF;
     } else {                                                                   // a retry: the staged driver must still be ours
         if (!exists(base) || path_user_writable(base, sid)) return DRV_E_DIR;
+        log_in_base(base, sid);
         if (!staged_inf_ok(base)) return DRV_E_INF;
     }
     if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) return DRV_E_COPY;     // the task starts this copy
     // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
-    // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry runs prep again and resets the count.
+    // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry suspends again and starts the count over.
     // "Not encrypted" is not an error.
-    // Only when protection is on (see drv_bde_suspend): what is off or was suspended by the user is not ours to switch on again later.
+    // Only when protection is on (see drv_bde_suspend), or when we suspended it ourselves earlier (a retry): what is off or was suspended by the user is not ours to switch on again later.
     sys_drive(dr);
     ps = bde_protection(dr);
     drv_log2(L"bitlocker protection status (0 off, 1 on, 2 unknown, -1 none, -2 not readable)", NULL, ps);
-    if (drv_bde_suspend(ps)) {
+    if (drv_bde_suspend_now(ps, bde_flag())) {
         lstrcpyW(args, L"-protectors -disable "); lstrcatW(args, dr); lstrcatW(args, L" -RebootCount 3");
         if (run_tool(L"manage-bde.exe", args) == 0) set_bde_flag(TRUE);
     }
@@ -530,9 +595,9 @@ static int install_locked(void)
 {
     static WCHAR base[MAX_PATH], inf[MAX_PATH + 40], args[2 * MAX_PATH + 40]; int res = DRV_SUCCESS; DWORD rc;
     base_dir(base);
-    lstrcpyW(g_logfile, base); lstrcatW(g_logfile, L"\\driver.log");
     // what is installed must be what prep staged: the folder is ours (only SYSTEM / Administrators can change it)
     if (!exists(base) || path_user_writable(base, NULL)) return DRV_E_DIR;
+    log_in_base(base, NULL);
     if (!staged_inf_ok(base)) return DRV_E_INF;
     lstrcpyW(inf, base); lstrcatW(inf, BUS_INF_REL);
     if (!drv_pnputil_args(args, 2 * MAX_PATH + 40, inf)) return DRV_E_DIR;
@@ -566,7 +631,7 @@ int driver_install(void)
 int driver_cancel(void)
 {
     static WCHAR base[MAX_PATH];
-    if (is_admin()) { base_dir(base); lstrcpyW(g_logfile, base); lstrcatW(g_logfile, L"\\driver.log"); cancel_locked(); return 0; }
+    if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return 0; }
     return run_elevated(L"/driver-cancel", NULL);
 }
 
@@ -597,13 +662,16 @@ void driver_machine_stage(const WCHAR *setup)
 }
 
 // The installed driver stays: it belongs to Windows' driver store and to the user's dynamometer.
+// Called before HKLM\SOFTWARE\DynaRunFix is deleted: that key holds the flag that tells us we suspended BitLocker. The suspension is
+// ended whenever the flag is set, with or without a waiting task.
 void driver_machine_uninstall(void)
 {
     static WCHAR base[MAX_PATH]; WCHAR p[MAX_PATH]; int i;
     for (i = 0; i < 2; i++) if (lnk_path(p, i)) DeleteFileW(p);
     base_dir(base);
-    lstrcpyW(g_logfile, base); lstrcatW(g_logfile, L"\\driver.log");
-    if (exists(base) && run_tool(L"schtasks.exe", L"/query /tn " TASK_NAME) == 0) cancel_locked();
+    log_in_base(base, NULL);
+    if (exists(base) && run_tool(L"schtasks.exe", L"/query /tn " TASK_NAME) == 0) cancel_locked();   // the task, the boot option, BitLocker
+    else bde_resume();                                                         // no task any more (finished, cancelled by hand): BitLocker only
     delete_tree(base, NULL, 0);
 }
 

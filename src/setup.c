@@ -174,11 +174,16 @@ static BOOL write_file(const WCHAR *p, const void *d, DWORD n)
     return ok;
 }
 
+// Appends one line to a log. A link is never followed: a reparse point (symbolic link, junction) or a file with several hard links
+// is refused, so the elevated stage cannot be made to write somewhere else through a file planted in %TEMP%.
 static void append_line(const WCHAR *p, const WCHAR *line)
 {
     static char u[2048]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof(u) - 2, NULL, NULL); DWORD w;
-    HANDLE h = CreateFileW(p, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE || n <= 0) { if (h != INVALID_HANDLE_VALUE) CloseHandle(h); return; }
+    BY_HANDLE_FILE_INFORMATION bi;
+    HANDLE h = CreateFileW(p, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    if (n <= 0 || !GetFileInformationByHandle(h, &bi) || (bi.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+        bi.nNumberOfLinks > 1) { CloseHandle(h); return; }
     u[n - 1] = '\r'; u[n] = '\n';
     WriteFile(h, u, n + 1, &w, NULL);
     CloseHandle(h);
@@ -1798,6 +1803,9 @@ static int machine_uninstall(const WCHAR *skip_sid)
         }
     }
     if (deleted) { if (g_exe_trusted) { if (touch_report(touch(g_exe)) == TOUCH_STUCK) stuck = TRUE; } else setup_log(L"the manifest state was not refreshed: DynaRun's folder or exe can be changed by ordinary users"); }
+    // Before the key goes: the driver part ends a waiting task and resumes BitLocker if DynaRunFix suspended it (the flag is in the key).
+    // An installed driver stays.
+    driver_machine_uninstall();
     // stuck: the original time stamp of DynaRun V3.exe could not be put back; ExeOrigTimePath / ExeOrigTime stay for the next install or
     // uninstall (touch_report says so) - the key is not deleted then
     if (!keep && !stuck) RegDeleteKeyW(HKEY_LOCAL_MACHINE, APPKEY);
@@ -1805,7 +1813,6 @@ static int machine_uninstall(const WCHAR *skip_sid)
         RegDeleteValueW(k, L"InstallDir"); RegDeleteValueW(k, L"TaskbarPolicy"); RegDeleteValueW(k, L"TaskbarPolicySid"); RegCloseKey(k);
     }
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, UNINSTKEY);
-    driver_machine_uninstall();                      // the driver shortcut and, if one is waiting, the task of the driver installation (an installed driver stays)
     delete_tree(g_dir, KEEP, 0);
     stage_unlock();
     return 0;

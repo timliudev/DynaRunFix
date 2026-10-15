@@ -32,7 +32,7 @@ static volatile LONG g_cancel;
 static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_pkg_found, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static int g_nfound;   // packages pkg_find_local has handed us so far
 static HANDLE g_thread;
-static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[512];
+static WCHAR g_pkg[MAX_PATH], g_msi[MAX_PATH], g_ver[64], g_note[1100];
 static zipent g_zip;
 static char g_pw[256];
 static char *g_rtf;
@@ -349,14 +349,17 @@ static void set_page(int p)
                         L"   1.  download the driver from the Dyna Pro website (dynapro.co.uk, about 2 MB)\n"
                         L"   2.  restart the computer once: a menu appears, press 7 on the keyboard\n"
                         L"   3.  come back by itself after you sign in and finish the installation\n\n"
-                        L"Dyna Pro changed the driver's settings file after Microsoft signed it, so Windows only accepts it while "
-                        L"driver signature checking is off for that one start. It is back on by itself at the next restart.",
+                        L"The driver's setting files (INF) in the vendor's package are not in the Microsoft-signed catalog files that ship with them, so Windows cannot validate them and only accepts the driver while "
+                        L"driver signature checking is off for that one start. It is back on by itself at the next restart.\n\n"
+                        L"If this PC is protected by BitLocker, the protection is suspended until the driver is installed. "
+                        L"It resumes by itself, after at most 3 restarts.",
                         L"要讓電腦和馬力機連線，需要安裝 Dyna Pro 提供的 USB 驅動程式。\n\n接下來會：\n"
                         L"   1.  從 Dyna Pro 官網下載驅動程式（dynapro.co.uk，約 2 MB）\n"
                         L"   2.  請你重新開機一次，開機時會出現一個選單，請按鍵盤上的 7\n"
                         L"   3.  登入後本程式會自動回來，完成安裝\n\n"
-                        L"Dyna Pro 在 Microsoft 簽章後修改過驅動程式的設定檔，所以 Windows 只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
-                        L"下次重新開機會自動恢復。"));
+                        L"廠商封裝中的驅動程式設定檔（INF）不在隨附的 Microsoft 簽署目錄檔中，Windows 無法驗證，所以只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
+                        L"下次重新開機會自動恢復。\n\n"
+                        L"如果這台電腦有啟用 BitLocker，保護會暫停到驅動程式安裝完成為止，之後會自動恢復（最多經過 3 次重新開機）。"));
         buttons(T(L"Download and continue", L"下載並繼續"), g_drvmode == DRV_MODE_NONE ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"), NULL);
         if (g_note[0]) status(g_note, TRUE);
         break;
@@ -670,6 +673,8 @@ static void drv_error(int rc)
     case PK_NET: wsprintfW(g_note, T(L"No connection to the Dyna Pro website (error %lu).", L"連不上 Dyna Pro 官網（錯誤 %lu）。"), g_neterr); break;
     case DRV_E_BCD: lstrcpyW(g_note, T(L"Windows could not be told to show its start-up menu at the next start (bcdedit failed).", L"無法設定「下次開機顯示進階選單」（bcdedit 失敗）。")); break;
     case DRV_E_TASK: lstrcpyW(g_note, T(L"The task that continues the installation after the restart could not be created.", L"無法建立重新開機後繼續安裝的排程工作。")); break;
+    case DRV_E_DIR: lstrcpyW(g_note, T(L"The working folder %ProgramData%\\DynaRunFix could not be made safe (an old folder is still in use, or it can be changed by other users). Nothing was installed. Close other programs, restart the PC and try again.",
+                                       L"無法把工作資料夾 %ProgramData%\\DynaRunFix 設為安全狀態（舊資料夾仍在使用中，或其他使用者可以修改它）。沒有安裝任何東西。請關閉其他程式、重新啟動電腦後再試一次。")); break;
     case DRV_E_PNP: lstrcpyW(g_note, T(L"Windows did not accept the driver. Driver signature checking may still have been on.", L"Windows 沒有接受這個驅動程式，可能是簽章檢查還開著。")); break;
     default: wsprintfW(g_note, T(L"The driver could not be prepared (code %d).", L"無法準備驅動程式（代碼 %d）。"), rc); break;
     }
@@ -687,9 +692,23 @@ static void drv_reboot_now(void)
 static void drv_start(void)
 {
     if (!driver_supported()) {
-        lstrcpyW(g_note, T(L"This version of Windows is too old for the automatic installation (it needs Windows 10 or later). The manual steps work on older versions.",
-                           L"這個 Windows 版本太舊，無法自動安裝（需要 Windows 10 或更新版本）。舊版本請照手動安裝說明操作。"));
-        lstrcatW(g_note, T(L"\n\nClick \"Open the manual steps\".", L"\n\n請按「開啟手動安裝說明」。"));
+        DWORD b = os_build();         // 9200+: Windows 8 / 8.1, 6000+: Vista / 7, below: XP
+        lstrcpyW(g_note, T(L"This version of Windows is too old for the automatic installation (it needs Windows 10 or later). Install the driver by hand:\n\n",
+                           L"這個 Windows 版本太舊，無法自動安裝（需要 Windows 10 或更新版本）。請手動安裝：\n\n"));
+        if (b >= 9200)
+            lstrcatW(g_note, T(L"Windows 8 / 8.1: hold Shift and click Restart, then Troubleshoot > Advanced options > Startup Settings > Restart, and press 7 (Disable driver signature enforcement; 32-bit editions do not enforce driver signing and only show the warning, so they can skip this). "
+                               L"Then install the driver in Device Manager (Update driver > Browse my computer) and choose \"Install this driver software anyway\" on the red warning.",
+                               L"Windows 8 / 8.1：按住 Shift 再按「重新啟動」，依序選 疑難排解 > 進階選項 > 啟動設定 > 重新啟動，然後按 7（停用驅動程式強制簽章；32 位元版不強制驅動程式簽章、只會顯示警告，可略過這一步）。"
+                               L"接著在裝置管理員安裝驅動程式（更新驅動程式 > 瀏覽電腦上的驅動程式），並在紅色警告選「仍然安裝此驅動程式軟體」。"));
+        else if (b >= 6000)
+            lstrcatW(g_note, T(L"Windows Vista / 7: restart and press F8 repeatedly before the Windows logo appears, choose \"Disable Driver Signature Enforcement\" in Advanced Boot Options "
+                               L"(32-bit editions do not enforce driver signing and only show the warning, so they can skip this). Then in Device Manager use Update Driver > Browse my computer > Have Disk, and choose \"Install this driver software anyway\" on the red warning.",
+                               L"Windows Vista / 7：重新開機，在出現 Windows 標誌之前連續按 F8，在「進階開機選項」選「停用驅動程式強制簽章」（32 位元版不強制驅動程式簽章、只會顯示警告，可略過這一步）。"
+                               L"接著在裝置管理員用 更新驅動程式 > 瀏覽電腦 > 從磁片安裝，並在紅色警告選「仍然安裝此驅動程式軟體」。"));
+        else
+            lstrcatW(g_note, T(L"Windows XP does not enforce driver signatures. Install the driver in Device Manager; when Windows says the software has not passed Windows Logo testing, click \"Continue Anyway\".",
+                               L"Windows XP 不強制驅動程式簽章。請在裝置管理員安裝驅動程式；Windows 說軟體未通過 Windows 標誌測試時，按「仍然繼續」。"));
+        lstrcatW(g_note, T(L"\n\nThe manual steps have the details: click \"Open the manual steps\".", L"\n\n詳細說明請按「開啟手動安裝說明」。"));
         set_page(P_DRV_ERROR);
         return;
     }

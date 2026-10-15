@@ -64,6 +64,33 @@ static void test_release(void)
     CHECK(!verify_note(L"v9.9.9", L"" DIGEST), L"no usable answer: refused");
 }
 
+// the order of release numbers: compared number by number, not as text ("1.10.0" is newer than "1.9.9")
+static BOOL ver_newer(const char *a, const char *b)
+{
+    DWORD x[3], y[3];
+    return parse_ver(a, x) && parse_ver(b, y) && newer(x, y);
+}
+
+static void test_versions(void)
+{
+    DWORD v[3];
+    CHECK(ver_newer("1.5.0", "1.4.1"), L"1.5.0 is newer than 1.4.1");
+    CHECK(!ver_newer("1.4.1", "1.5.0"), L"1.4.1 is not newer than 1.5.0 (no downgrade)");
+    CHECK(ver_newer("v1.10.0", "v1.5.0"), L"1.10.0 is newer than 1.5.0 (numbers, not text)");
+    CHECK(!ver_newer("1.5.0", "1.10.0"), L"1.5.0 is not newer than 1.10.0");
+    CHECK(ver_newer("1.10.0", "1.9.9"), L"1.10.0 is newer than 1.9.9");
+    CHECK(!ver_newer("1.9.9", "1.10.0"), L"1.9.9 is not newer than 1.10.0");
+    CHECK(!ver_newer("1.5.0", "1.5.0"), L"the same version is not newer");
+    CHECK(!ver_newer("v1.5.0", "1.5.0"), L"a leading v does not matter");
+    CHECK(ver_newer("2.0.0", "1.99.99"), L"a higher major number wins");
+    CHECK(ver_newer("1.5.1", "1.5"), L"a missing number counts as 0");
+    CHECK(!ver_newer("1.5", "1.5.0"), L"1.5 and 1.5.0 are the same");
+    CHECK(!parse_ver("dev", v), L"a developer build is not a release");
+    CHECK(!parse_ver("1.5.0-rc1", v), L"a pre-release tag is not a release");
+    CHECK(!parse_ver("1.2.3.4", v), L"four numbers are not a release");
+    CHECK(!parse_ver("", v) && !parse_ver("v", v), L"empty is not a release");
+}
+
 static void mkfile(const WCHAR *p, const char *c)
 { HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL); DWORD w; WriteFile(h, c, (DWORD)strlen(c), &w, NULL); CloseHandle(h); }
 
@@ -136,6 +163,7 @@ int wmain(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     GetTempPathW(MAX_PATH, dir); wsprintfW(dir + lstrlenW(dir), L"drf-upd-%lu", GetCurrentProcessId()); CreateDirectoryW(dir, NULL);
     wprintf(L"[release]\n"); test_release();
+    wprintf(L"[versions]\n"); test_versions();
     wprintf(L"[hold]\n"); test_hold(dir);
     wprintf(L"[log]\n"); test_log(dir);
     wsprintfW(c, L"cmd.exe /c rmdir /s /q \"%s\"", dir);

@@ -20,6 +20,12 @@ foreach ($t in @(@('logtest.exe', $Mode), @('logtest_l.exe', 'launcher'))) {
     Result "long strings, $($t[0])" ($p.ExitCode -eq 0 -and $LASTEXITCODE -eq 0)
 }
 
+# 1b. load_sys (dynafix.c): a system DLL by name loads, a missing one does not
+if ($Mode -ne 'old') {
+    $p = Start-Process "$Bin\logtest.exe" -ArgumentList 'loadsys' -Wait -PassThru -NoNewWindow
+    Result "load_sys, logtest.exe" ($p.ExitCode -eq 0)
+}
+
 # 2. 4 processes x 2 threads x $Lines lines, trim running in each, file pre-filled to just over 10 MB
 $n = $Lines
 Remove-Item $log -ErrorAction SilentlyContinue
