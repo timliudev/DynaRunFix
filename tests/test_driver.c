@@ -130,6 +130,16 @@ static void test_ci(void)
     { int s = driver_ci_state(); wprintf(L"info: code integrity on this machine: %s\n", s == DRV_CI_ENFORCED ? L"enforced" : s == DRV_CI_OFF ? L"off" : L"unknown"); CHECK(s == DRV_CI_ENFORCED || s == DRV_CI_OFF || s == DRV_CI_UNKNOWN, L"state is one of the three"); }
 }
 
+static void test_bde(void)
+{
+    CHECK(drv_bde_suspend(BDE_PS_ON), L"protection on: suspend");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF), L"protection off (also suspended by the user, or no key protectors): leave alone");
+    CHECK(!drv_bde_suspend(BDE_PS_NONE), L"no BitLocker on the volume / namespace missing: nothing to suspend");
+    CHECK(drv_bde_suspend(BDE_PS_UNKNOWN), L"status unknown: old behaviour, try");
+    CHECK(drv_bde_suspend(BDE_PS_ERROR), L"WMI not readable: old behaviour, try");
+    CHECK(drv_bde_suspend(7), L"an unexpected value is not 'off'");
+}
+
 /* ---------- 3. task XML ---------- */
 
 static int count_str(const WCHAR *s, const WCHAR *sub)
@@ -480,6 +490,7 @@ int wmain(void)
     CreateDirectoryW(g_base, NULL);
     wprintf(L"[inf]\n"); test_inf();
     wprintf(L"[code integrity]\n"); test_ci();
+    wprintf(L"[bitlocker]\n"); test_bde();
     wprintf(L"[task xml]\n"); test_xml();
     wprintf(L"[tools]\n"); test_tools();
     wprintf(L"[zip names]\n"); test_zip_names();

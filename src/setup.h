@@ -112,6 +112,7 @@ int driver_verb(int argc, WCHAR **argv);    // command line verbs; DRV_NOVERB wh
 void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: the Start menu shortcut "Install Dyna Pro USB driver"
 BOOL drv_inf_matches(const BYTE *data, DWORD n);          // pure helpers, unit-tested (tests\test_driver.c)
 BOOL drv_ci_enforced(DWORD code_integrity_options);
+BOOL drv_bde_suspend(int protection_status);   // BDE_PS_* (driver.c): suspend BitLocker for this status?
 int drv_task_xml(WCHAR *out, int cch, const WCHAR *sid, const WCHAR *exe);
 BOOL drv_sys_tool(const WCHAR *windir, BOOL wow64, const WCHAR *tool, WCHAR *out, int cch);
 BOOL drv_pnputil_ok(DWORD code);

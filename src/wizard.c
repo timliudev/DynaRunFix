@@ -402,8 +402,8 @@ static void set_page(int p)
         break;
     case P_DRV_WARN:
         text(ID_TITLE, T(L"Last step: install the driver", L"最後一步：安裝驅動程式"));
-        text(ID_BODY, T(L"Driver signature checking is off for this start. Windows may show a red warning like this one: choose \"Install this driver software anyway\".",
-                        L"這次開機已暫時關閉簽章檢查。Windows 可能會跳出像下面這樣的紅色警告（無法驗證此驅動程式軟體的發行者），請選「仍然安裝此驅動程式軟體」。"));
+        text(ID_BODY, T(L"Driver signature checking is off for this start. Windows may show a red warning like this one, twice (one for each driver file): choose \"Install this driver software anyway\" each time.",
+                        L"這次開機已暫時關閉簽章檢查。Windows 可能會跳出像下面這樣的紅色警告（無法驗證此驅動程式軟體的發行者），而且會出現兩次（各對應一個驅動程式檔），每次都請選「仍然安裝此驅動程式軟體」。"));
         show_image(1);
         buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
         if (g_note[0]) status(g_note, TRUE);

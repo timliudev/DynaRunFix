@@ -27,12 +27,14 @@
 #include <shellapi.h>
 #include <sddl.h>
 #include <aclapi.h>
+#include <wbemidl.h>
 #include "setup.h"
 
 // SHA-256 of "Dyna Pro USB.zip" as served by Dyna Pro on 2026-10-15 (2335114 bytes; Last-Modified 2026-05-09). A different file is never installed.
 #define DRIVER_ZIP_SHA256 L"c3ae487018956767d65a08e3d5cd8434da42cdce81988753515ee0f72c49e943"
 #define DRIVER_ZIP_NAME   L"Dyna Pro USB.zip"
 #define TASK_NAME         L"DynaRunFix-DriverContinue"
+enum { BDE_PS_ERROR = -2, BDE_PS_NONE = -1, BDE_PS_OFF = 0, BDE_PS_ON = 1, BDE_PS_UNKNOWN = 2 };   // protection status (WMI values, plus ours)
 #define BDE_VALUE         L"DriverBitLockerSuspended"       // HKLM\SOFTWARE\DynaRunFix: 1 while we have BitLocker suspended until the driver is installed
 #define DRV_APPKEY        L"SOFTWARE\\DynaRunFix"
 #define SETUP_NAME        L"DynaRunFix-Setup.exe"
@@ -125,6 +127,16 @@ BOOL drv_inf_matches(const BYTE *data, DWORD n)
 
 // The one place that decides what "enforcement is on" means.
 BOOL drv_ci_enforced(DWORD options) { return (options & CI_OPT_ENABLED) != 0; }
+
+// BitLocker: whether to suspend protection, from the OS volume's protection status (bde_protection below; BDE_PS_*).
+// Only "protection on" needs it, and only a suspension we made may be undone later (bde_resume enables protection again): a volume that
+// is off (nothing encrypted yet, or no key protectors) or not BitLocker-capable has nothing to suspend, and one a user has suspended
+// by hand must stay as the user left it. A status we could not read (unknown, query failed) is not "off": the old behaviour stays
+// (try the suspension, remember it on success) because a protected PC that is not suspended asks for the recovery key at the restart menu.
+BOOL drv_bde_suspend(int ps)
+{
+    return ps != BDE_PS_OFF && ps != BDE_PS_NONE;
+}
 
 /* ---------- the task's XML ---------- */
 
@@ -384,6 +396,48 @@ static void sys_drive(WCHAR *out)               // "C:" (the drive Windows is on
     out[0] = w[0]; out[1] = ':'; out[2] = 0;
 }
 
+/* ---------- BitLocker protection status (WMI) ---------- */
+
+static const GUID BDE_CLSID_WbemLocator = { 0x4590f811, 0x1d3a, 0x11d0, { 0x89, 0x1f, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24 } };
+static const GUID BDE_IID_IWbemLocator  = { 0xdc12a687, 0x737f, 0x11cf, { 0x88, 0x4d, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24 } };
+
+// Win32_EncryptableVolume.ProtectionStatus of the Windows drive ("C:"): BDE_PS_OFF / BDE_PS_ON / BDE_PS_UNKNOWN as WMI says,
+// BDE_PS_NONE: no BitLocker here (namespace or class missing, e.g. Home editions; or no such volume), BDE_PS_ERROR: could not ask.
+static int bde_protection(const WCHAR *drive)
+{
+    static const WCHAR q1[] = L"SELECT ProtectionStatus FROM Win32_EncryptableVolume WHERE DriveLetter = '";
+    WCHAR q[120]; int ps = BDE_PS_ERROR; HRESULT hr, hrc;
+    IWbemLocator *loc = NULL; IWbemServices *svc = NULL; IEnumWbemClassObject *en = NULL; IWbemClassObject *obj = NULL;
+    BSTR bns = NULL, bql = NULL, bq = NULL, bprop = NULL; ULONG got = 0; VARIANT v;
+    hrc = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);                   // RPC_E_CHANGED_MODE: already initialised another way, usable
+    if (FAILED(hrc) && hrc != RPC_E_CHANGED_MODE) return BDE_PS_ERROR;
+    lstrcpyW(q, q1); lstrcatW(q, drive); lstrcatW(q, L"'");
+    bns = SysAllocString(L"ROOT\\CIMV2\\Security\\MicrosoftVolumeEncryption"); bql = SysAllocString(L"WQL");
+    bq = SysAllocString(q); bprop = SysAllocString(L"ProtectionStatus");
+    if (!bns || !bql || !bq || !bprop) goto done;
+    if (FAILED(CoCreateInstance(&BDE_CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &BDE_IID_IWbemLocator, (void **)&loc))) goto done;
+    hr = IWbemLocator_ConnectServer(loc, bns, NULL, NULL, NULL, 0, NULL, NULL, &svc);
+    if (FAILED(hr)) { if (hr == WBEM_E_INVALID_NAMESPACE) ps = BDE_PS_NONE; goto done; }
+    if (FAILED(CoSetProxyBlanket((IUnknown *)svc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE))) goto done;
+    hr = IWbemServices_ExecQuery(svc, bql, bq, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &en);
+    if (FAILED(hr)) { if (hr == WBEM_E_INVALID_CLASS) ps = BDE_PS_NONE; goto done; }
+    CoSetProxyBlanket((IUnknown *)en, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
+    hr = IEnumWbemClassObject_Next(en, 10000, 1, &obj, &got);               // 10 s at most
+    if (hr == WBEM_S_FALSE && !got) { ps = BDE_PS_NONE; goto done; }          // no such encryptable volume
+    if (FAILED(hr) || hr == WBEM_S_TIMEDOUT || !got) goto done;
+    VariantInit(&v);
+    if (SUCCEEDED(IWbemClassObject_Get(obj, bprop, 0, &v, NULL, NULL)) && v.vt == VT_I4) ps = (v.lVal == BDE_PS_OFF || v.lVal == BDE_PS_ON) ? (int)v.lVal : BDE_PS_UNKNOWN;
+    VariantClear(&v);
+done:
+    if (obj) IWbemClassObject_Release(obj);
+    if (en) IEnumWbemClassObject_Release(en);
+    if (svc) IWbemServices_Release(svc);
+    if (loc) IWbemLocator_Release(loc);
+    SysFreeString(bns); SysFreeString(bql); SysFreeString(bq); SysFreeString(bprop);
+    if (SUCCEEDED(hrc)) CoUninitialize();
+    return ps;
+}
+
 static BOOL bde_flag(void)
 {
     HKEY k; DWORD v = 0, n = 4;
@@ -423,7 +477,7 @@ static void cancel_locked(void)
 static int prep_locked(const WCHAR *sid, const WCHAR *zip)
 {
     static WCHAR base[MAX_PATH], p[MAX_PATH + 40], z[MAX_PATH + 40], args[2 * MAX_PATH + 80], hex[65], xml[3000], dr[4];
-    ULONGLONG size; volatile LONG nocancel = 0; int n, files;
+    ULONGLONG size; volatile LONG nocancel = 0; int n, files, ps;
     BOOL stage = lstrcmpW(zip, L"-") != 0, inside;
     if (!valid_user_sid(sid)) return DRV_E_SID;
     base_dir(base);
@@ -452,9 +506,14 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip)
     // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
     // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry runs prep again and resets the count.
     // "Not encrypted" is not an error.
+    // Only when protection is on (see drv_bde_suspend): what is off or was suspended by the user is not ours to switch on again later.
     sys_drive(dr);
-    lstrcpyW(args, L"-protectors -disable "); lstrcatW(args, dr); lstrcatW(args, L" -RebootCount 3");
-    if (run_tool(L"manage-bde.exe", args) == 0) set_bde_flag(TRUE);
+    ps = bde_protection(dr);
+    drv_log2(L"bitlocker protection status (0 off, 1 on, 2 unknown, -1 none, -2 not readable)", NULL, ps);
+    if (drv_bde_suspend(ps)) {
+        lstrcpyW(args, L"-protectors -disable "); lstrcatW(args, dr); lstrcatW(args, L" -RebootCount 3");
+        if (run_tool(L"manage-bde.exe", args) == 0) set_bde_flag(TRUE);
+    }
     if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { bde_resume(); return DRV_E_BCD; }
     n = drv_task_xml(xml, 3000, sid, p);
     lstrcpyW(z, base); lstrcatW(z, L"\\task.xml");

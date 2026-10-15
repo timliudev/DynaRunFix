@@ -16,7 +16,7 @@ available.
   or run `DynaRunFix-Setup.exe /driver`.
 * The wizard downloads the official "Dyna Pro USB.zip" from dynapro.co.uk (it is not bundled) and checks its SHA-256. If the
   file on the site has changed, it refuses to install it; use the manual method then.
-* Windows asks for administrator permission once (UAC). The wizard suspends BitLocker until the driver is installed (at most 3 restarts as a safety net, then it is resumed automatically), sets the one-time
+* Windows asks for administrator permission once (UAC). If BitLocker protection is on, the wizard suspends it until the driver is installed (at most 3 restarts as a safety net, then it is resumed automatically), sets the one-time
   advanced boot options and registers a task that continues the wizard when you sign in.
 * After the restart, press **7** in the start-up menu (*Disable driver signature enforcement*). The wizard shows the page below;
   photographing it with your phone first is a good idea.
@@ -26,12 +26,14 @@ available.
   | ![Startup Settings: press 7, Disable driver signature enforcement](img/driver-press-7.png) |
 
 * If you miss 7, the wizard says so after you sign in and offers **再試一次** (Try again).
-* Then Windows shows its red warning: choose **仍然安裝此驅動程式軟體** (*Install this driver software anyway*). Driver signature
-  enforcement comes back at the next normal restart.
+* Then Windows shows its red warning **twice** (once for each of the two driver files, ftdibus and ftdiport): choose
+  **仍然安裝此驅動程式軟體** (*Install this driver software anyway*) each time. Driver signature enforcement comes back at the next normal restart.
 
 Notes: Windows 10 or 11 is required. The driver files go to `%ProgramData%\DynaRunFix\driver` and the log is
-`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver. This path is new and has not yet been
-verified on a real PC.
+`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver. Tested in a Windows 11 VM (zh-TW) with a simulated
+device: the Startup Settings list appears directly after the restart, the retry after missing 7 works, the driver installs into the
+driver store with no device present, and a device added later binds to it once signature enforcement is back on. Not yet tested on a
+physical PC with real hardware, or with BitLocker.
 
 If something goes wrong: choosing **Cancel** on the wizard's retry or install page takes back the logon task, the boot option and
 the BitLocker suspension. If you closed the wizard some other way and want those undone, the manual steps below do not depend on
@@ -105,7 +107,7 @@ This setting lasts only for that one start of Windows, which is enough: the inst
 
 ### 5. "Windows can't verify the publisher"
 
-A red *Windows Security* window appears. Click **Install this driver software anyway**.
+A red *Windows Security* window appears, and it appears **twice** (once for each of the two driver files, ftdibus and ftdiport). Click **Install this driver software anyway** each time.
 
 | Install this driver software anyway |
 |---|
@@ -152,7 +154,7 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 * 在主安裝程式中,保持勾選 **安裝 Dyna Pro USB 驅動程式**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏)。
   之後隨時也可以用開始功能表捷徑 **安裝 Dyna Pro USB 驅動程式**,或執行 `DynaRunFix-Setup.exe /driver`。
 * 精靈會從 dynapro.co.uk 下載官方的「Dyna Pro USB.zip」(不內附)並檢查 SHA-256。網站上的檔案若有變動就拒絕安裝,這時請改用手動方式。
-* Windows 只會要求一次系統管理員權限(UAC)。精靈會暫停 BitLocker 直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
+* Windows 只會要求一次系統管理員權限(UAC)。若 BitLocker 保護為開啟,精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
 * 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。
 
   | 按 7 |
@@ -163,7 +165,7 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 * 接著 Windows 會跳出紅色警告,請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。
 
 附註:需要 Windows 10 或 11。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。
-解除安裝 DynaRunFix 不會移除驅動程式。這個方式是新的,尚未在實體電腦上驗證。
+解除安裝 DynaRunFix 不會移除驅動程式。已在 Windows 11(繁體中文)虛擬機器中以模擬裝置測試:重新啟動後直接出現「啟動設定」清單、錯過 7 後重試可正常運作、沒有裝置時驅動程式也能安裝到驅動程式存放區、之後新增的裝置在簽章檢查恢復後會自動套用該驅動程式。尚未在實體電腦、真實硬體或啟用 BitLocker 的環境測試。
 
 如果出了問題:在精靈的重試或安裝頁面按 **取消**,會撤回登入工作、開機選項與 BitLocker 暫停。若是用其他方式關掉精靈、想把這些還原,
 可以執行 `DynaRunFix-Setup.exe /driver-cancel`(會要求系統管理員權限;只移除工作、一次性開機選項與 BitLocker 暫停,不會安裝或移除驅動程式)。
@@ -234,7 +236,7 @@ Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 
 #### 5. 「Windows 無法驗證此驅動程式軟體的發行者」
 
-會出現紅色的「Windows 安全性」視窗,按 **仍然安裝此驅動程式軟體**。
+會出現紅色的「Windows 安全性」視窗,而且會出現兩次(兩個驅動程式檔 ftdibus 與 ftdiport 各一次),每次都按 **仍然安裝此驅動程式軟體**。
 
 | 仍然安裝此驅動程式軟體 |
 |---|

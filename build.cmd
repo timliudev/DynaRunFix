@@ -53,6 +53,6 @@ rem (Get-FileHash is then "not recognized"), so the child gets the default one.
 set PSModulePath=
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-le.ps1 -OutDir build\le >nul || exit /b 1
 rc /nologo /Ibuild /fo build\setup.res src\setup.rc || exit /b 1
-link %LFLAGS% %DLFLAGS% /DELAYLOAD:msi.dll /DELAYLOAD:wininet.dll /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS,5.01 /MANIFEST:EMBED /MANIFESTINPUT:src\setup.manifest /MANIFESTUAC:NO /OPT:REF /OUT:build\DynaRunFix-Setup.exe build\setup.obj build\wizard.obj build\package.obj build\update.obj build\driver.obj build\crt.obj build\loadcfg.obj build\miniz.obj build\setup.res kernel32.lib user32.lib gdi32.lib advapi32.lib shell32.lib ole32.lib comdlg32.lib comctl32.lib wininet.lib msi.lib uuid.lib delayimp.lib || exit /b 1
+link %LFLAGS% %DLFLAGS% /DELAYLOAD:msi.dll /DELAYLOAD:wininet.dll /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS,5.01 /MANIFEST:EMBED /MANIFESTINPUT:src\setup.manifest /MANIFESTUAC:NO /OPT:REF /OUT:build\DynaRunFix-Setup.exe build\setup.obj build\wizard.obj build\package.obj build\update.obj build\driver.obj build\crt.obj build\loadcfg.obj build\miniz.obj build\setup.res kernel32.lib user32.lib gdi32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib comdlg32.lib comctl32.lib wininet.lib msi.lib uuid.lib delayimp.lib || exit /b 1
 echo.
 echo Build OK: build\DynaRunFix-Setup.exe (installer), build\DynaRunFix.exe, build\dynafix.dll

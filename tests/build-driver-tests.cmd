@@ -16,6 +16,6 @@ cd /d "%~dp0.."
 if not exist build\version.h (echo build\version.h missing - run build.cmd first & exit /b 1)
 if not exist build\tests mkdir build\tests
 rem (setup.c and driver.c are compiled into the test; the embedded manifest keeps Windows from asking for elevation)
-cl /nologo /W3 /utf-8 /Ibuild /Isrc /Fobuild\tests\d_ /Fe:build\tests\test_driver.exe tests\test_driver.c build\package.obj build\miniz.obj kernel32.lib user32.lib gdi32.lib advapi32.lib shell32.lib ole32.lib comdlg32.lib wininet.lib msi.lib uuid.lib /link /MANIFEST:EMBED /MANIFESTINPUT:src\setup.manifest /MANIFESTUAC:NO || exit /b 1
+cl /nologo /W3 /utf-8 /Ibuild /Isrc /Fobuild\tests\d_ /Fe:build\tests\test_driver.exe tests\test_driver.c build\package.obj build\miniz.obj kernel32.lib user32.lib gdi32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib comdlg32.lib wininet.lib msi.lib uuid.lib /link /MANIFEST:EMBED /MANIFESTINPUT:src\setup.manifest /MANIFESTUAC:NO || exit /b 1
 build\tests\test_driver.exe
 exit /b %errorlevel%
