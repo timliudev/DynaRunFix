@@ -23,6 +23,10 @@
 16 RCDATA "build\\le\\COPYING.LESSER"
 17 RCDATA "build\\le\\THIRD-PARTY.txt"
 
+// Screenshots of the driver installation (docs\img; the wizard draws them with GDI+): the restart menu where the user presses 7, and the "install anyway" question
+18 RCDATA "docs/img/driver-press-7.png"
+19 RCDATA "docs/img/driver-install-anyway.png"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 0,0,0,0
 PRODUCTVERSION 0,0,0,0

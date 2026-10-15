@@ -1,4 +1,5 @@
 // Shared declarations of DynaRunFix-Setup.exe (setup.c, wizard.c, package.c).
+#pragma once
 #include <windows.h>
 #include <wininet.h>
 
@@ -9,6 +10,8 @@ extern int g_pinresult;                                 // after the install: 0 
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
+enum { DRV_MODE_NONE, DRV_MODE_STANDALONE, DRV_MODE_CONTINUE };
+extern int g_drvmode;                                   // the wizard starts at the driver pages: /driver, /driver-continue
 
 /* setup.c */
 void zero(void *p, SIZE_T n);
@@ -23,6 +26,13 @@ BOOL locate_dynarun(void);                  // fills g_exe from the registry or 
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
 int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
+// shared with driver.c
+void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth);   // a link is removed itself, never followed; in-use files go at the next restart
+BOOL same_file(const WCHAR *a, const WCHAR *b);
+int run_elevated(const WCHAR *args, const WCHAR *exe_path);   // "<exe or this program> <args>" with one UAC prompt; its exit code, 2 = cancelled
+BOOL valid_user_sid(const WCHAR *sid);      // a SID of a real account with a profile here
+BOOL path_user_writable(const WCHAR *path, const WCHAR *sid);   // could ordinary users (or the user sid) change what is at path (or is that unknown)
+BOOL enable_privilege(const WCHAR *name);
 #define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed
 enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4, RUN_CANCLOSE = 8, RUN_NOCLOSE = 16 };
 int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces. RUN_CANCLOSE: one of them can be closed
@@ -35,6 +45,7 @@ int update_run(const WCHAR *args);          // /update <launcher args>: asks, in
 
 /* wizard.c */
 int wizard(void);
+
 
 /* package.c */
 #define DYNAPRO_PAGE L"https://dynapro.co.uk/Software_Release.htm"
@@ -59,6 +70,16 @@ HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, 
 BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch);   // where a redirect from cur to loc goes, if allowed
 int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const WCHAR *host, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
+// Every entry of the central directory, in order: fn(name as stored (not 0-terminated), its length, entry, ctx). fn returns FALSE to stop.
+// PK_OK: all visited; PK_CANCEL: fn stopped it; PK_FORMAT: not a (supported, no Zip64) zip; PK_IO. e->data is valid (local header read).
+typedef BOOL (*zip_visit_fn)(const char *name, DWORD nlen, const zipent *e, void *ctx);
+int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx);
+// An entry name that may be created below a folder: relative, '/' separators, no "..", ".", empty, "x:" / backslash / control or
+// reserved characters, no device names, no trailing dot or space. *isdir: the name ends in '/'.
+BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir);
+// Extracts every entry (stored or deflate, not encrypted) below dest (which must exist); an unsafe name, a damaged entry or a zip
+// larger than the limits fails the whole call (PK_FORMAT). *nfiles: files written.
+int zip_extract_all(const WCHAR *zip, const WCHAR *dest, volatile LONG *cancel, int *nfiles);
 BOOL zip_password_plausible(const zipent *e, const char *pw);
 int zip_extract(const zipent *e, const char *pw, const WCHAR *out, progress_fn cb, volatile LONG *cancel);
 BOOL pkg_sha256(const WCHAR *path, WCHAR *hex, ULONGLONG *size);   // lower-case hex (65 WCHARs) and size of a file, read-only
@@ -72,3 +93,28 @@ BOOL dynarun_product(WCHAR *out);           // product code of the installed Dyn
 int remove_dynarun(void);                   // Dyna Pro's uninstall of DynaRun V3; msiexec exit code, -1 none
 void pkg_temp_dir(WCHAR *out);              // %TEMP%\DynaRunFix (created)
 int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only" copies the setup overwrites
+
+/* driver.c: the Dyna Pro USB driver (FTDI 2.08.24 with the Dyna Pro device id; its INF was edited after Microsoft signed it, so
+   Windows installs it only with driver signature enforcement off for one start: see docs/DRIVER.md) */
+#define DYNAPRO_USB_ZIP  L"https://dynapro.co.uk/Site/graphics/Technical_Info/Software/Dyna%20Pro%20USB.zip"
+#define DRIVER_DOC_URL   L"https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md"
+enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, DRV_E_BCD, DRV_E_TASK, DRV_E_PNP, DRV_E_DIR, DRV_E_SID, DRV_NOVERB = -1000 };
+enum { DRV_CI_ENFORCED, DRV_CI_OFF, DRV_CI_UNKNOWN };   // driver signature enforcement now
+BOOL driver_supported(void);                // Windows 10 (build 10240) or later: older systems install the driver by hand
+BOOL driver_installed(void);                // a Dyna Pro ftdibus package is in the driver store (%windir%\INF\oem*.inf)
+int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err);   // download + SHA-256 check: PK_* or DRV_E_HASH
+int driver_prep(const WCHAR *zip);          // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
+int driver_install(void);                   // elevated: pnputil, then clean up. 0 or DRV_E_*, 2 = UAC cancelled
+int driver_cancel(void);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
+BOOL driver_reboot(void);                   // restarts Windows (not elevated)
+int driver_ci_state(void);                  // DRV_CI_*
+int driver_verb(int argc, WCHAR **argv);    // command line verbs; DRV_NOVERB when argv[1] is none of ours, else the exit code
+void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: the Start menu shortcut "Install Dyna Pro USB driver"
+BOOL drv_inf_matches(const BYTE *data, DWORD n);          // pure helpers, unit-tested (tests\test_driver.c)
+BOOL drv_ci_enforced(DWORD code_integrity_options);
+BOOL drv_bde_suspend(int protection_status);   // BDE_PS_* (driver.c): suspend BitLocker for this status?
+int drv_task_xml(WCHAR *out, int cch, const WCHAR *sid, const WCHAR *exe);
+BOOL drv_sys_tool(const WCHAR *windir, BOOL wow64, const WCHAR *tool, WCHAR *out, int cch);
+BOOL drv_pnputil_ok(DWORD code);
+BOOL drv_pnputil_args(WCHAR *out, int cch, const WCHAR *inf);
+void driver_machine_uninstall(void);        // elevated uninstall: the shortcut, a waiting task, the staged files (an installed driver is left)

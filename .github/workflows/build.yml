@@ -46,6 +46,11 @@ jobs:
         shell: cmd
         run: call tests\build-hardening-tests.cmd || exit /b 1
 
+      # Driver tests (src\driver.c, the zip extraction of src\package.c); they use only %TEMP%\drf-drv-<pid>, no system tool is started.
+      - name: Driver tests
+        shell: cmd
+        run: call tests\build-driver-tests.cmd || exit /b 1
+
       - name: Package
         shell: pwsh
         run: |
