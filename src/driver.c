@@ -8,11 +8,11 @@
 //   download   driver_fetch: the zip from dynapro.co.uk (https, that host only), checked against the pinned SHA-256 below.
 //   prep       (elevated, "/driver-prep <user SID> <zip | ->") stages the driver in %ProgramData%\DynaRunFix\driver (a folder that
 //              only SYSTEM and the Administrators can change; an existing one is replaced, it may have been planted by an ordinary
-//              user), copies this setup to %ProgramData%\DynaRunFix, suspends BitLocker for one restart, asks Windows for its
+//              user), copies this setup to %ProgramData%\DynaRunFix, suspends BitLocker (until the driver is installed; at most 3 restarts as a safety net), asks Windows for its
 //              advanced start-up menu at the next start (bcdedit onetimeadvancedoptions) and registers the task
 //              "DynaRunFix-DriverContinue" that starts "<setup> /driver-continue" when the user signs in. The wizard then restarts Windows.
 //   continue   "/driver-continue": the wizard looks at the code integrity state: still enforced -> the user missed the menu, offer a
-//              retry; off -> "/driver-install" (elevated): pnputil /add-driver <inf> /install, then the task and the menu flag go.
+//              retry; off -> "/driver-install" (elevated): pnputil /add-driver <inf> /install, then the task and the menu flag go and BitLocker is resumed.
 //   cancel     "/driver-cancel": the task, the menu flag and the BitLocker suspension are taken back.
 //
 // Nothing here bypasses a security feature on its own: the user chooses the restart option and the "install anyway" answer.
@@ -33,7 +33,7 @@
 #define DRIVER_ZIP_SHA256 L"c3ae487018956767d65a08e3d5cd8434da42cdce81988753515ee0f72c49e943"
 #define DRIVER_ZIP_NAME   L"Dyna Pro USB.zip"
 #define TASK_NAME         L"DynaRunFix-DriverContinue"
-#define BDE_VALUE         L"DriverBitLockerSuspended"       // HKLM\SOFTWARE\DynaRunFix: 1 while we have BitLocker suspended for the restart
+#define BDE_VALUE         L"DriverBitLockerSuspended"       // HKLM\SOFTWARE\DynaRunFix: 1 while we have BitLocker suspended until the driver is installed
 #define DRV_APPKEY        L"SOFTWARE\\DynaRunFix"
 #define SETUP_NAME        L"DynaRunFix-Setup.exe"
 #define BUS_INF_REL       L"\\driver\\Dyna Pro USB\\ftdibus.inf"
@@ -403,15 +403,16 @@ static void set_bde_flag(BOOL on)
 
 static void bde_resume(void)                    // BitLocker protection on again, if we are the ones who suspended it
 {
-    WCHAR a[80], dr[4];
+    WCHAR a[80], dr[4]; DWORD rc;
     if (!bde_flag()) return;
     sys_drive(dr);
     lstrcpyW(a, L"-protectors -enable "); lstrcatW(a, dr);
-    run_tool(L"manage-bde.exe", a);                 // the restart count resumes it by itself; "already on" is not an error that matters
+    rc = run_tool(L"manage-bde.exe", a);            // failure is ignored ("already on" is not an error that matters); the log has the code
+    if (rc) drv_log2(L"bitlocker resume failed", NULL, rc);
     set_bde_flag(FALSE);
 }
 
-// Undoes prep (and ends the installation): the task, the restart menu flag, the BitLocker suspension.
+// Undoes prep (and ends the installation): the task, the restart menu flag, the BitLocker suspension (protection back on).
 static void cancel_locked(void)
 {
     run_tool(L"schtasks.exe", L"/delete /tn " TASK_NAME L" /f");
@@ -448,9 +449,11 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip)
         if (!staged_inf_ok(base)) return DRV_E_INF;
     }
     if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) return DRV_E_COPY;     // the task starts this copy
-    // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection for one restart. "Not encrypted" is not an error.
+    // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
+    // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry runs prep again and resets the count.
+    // "Not encrypted" is not an error.
     sys_drive(dr);
-    lstrcpyW(args, L"-protectors -disable "); lstrcatW(args, dr); lstrcatW(args, L" -RebootCount 1");
+    lstrcpyW(args, L"-protectors -disable "); lstrcatW(args, dr); lstrcatW(args, L" -RebootCount 3");
     if (run_tool(L"manage-bde.exe", args) == 0) set_bde_flag(TRUE);
     if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { bde_resume(); return DRV_E_BCD; }
     n = drv_task_xml(xml, 3000, sid, p);

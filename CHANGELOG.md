@@ -12,8 +12,8 @@
   `setup.log` of the install folder, or in `%TEMP%\DynaRunFix-setup.log` before that folder exists or without administrator rights. Nothing is shown with `/quiet`.
 - **Setup wizard installs the Dyna Pro USB driver.** The main installer has a new option (on by default, hidden when the driver is
   already installed or Windows is older than 10): it downloads Dyna Pro's official `Dyna Pro USB.zip` from dynapro.co.uk (not
-  bundled; its SHA-256 is checked and a changed file is refused), asks for administrator permission once, suspends BitLocker for
-  exactly one restart, requests the advanced start-up menu for the next start and registers a task that continues the wizard after
+  bundled; its SHA-256 is checked and a changed file is refused), asks for administrator permission once, suspends BitLocker
+  until the driver is installed (at most 3 restarts as a safety net, then it is resumed automatically), requests the advanced start-up menu for the next start and registers a task that continues the wizard after
   you sign in. You press 7 in the menu; if you miss it the wizard says so and offers to try again. Then Windows' red warning appears:
   choose "Install this driver software anyway". Driver signature enforcement comes back at the next normal restart. It can also be
   started later from the Start menu ("Install Dyna Pro USB driver") or with `DynaRunFix-Setup.exe /driver`. Files go to
@@ -391,7 +391,7 @@ A fix release after a review of v1.4.0.
   該資料夾尚未建立或沒有系統管理員權限時寫在 `%TEMP%\DynaRunFix-setup.log`。`/quiet` 不會顯示任何視窗。
 - **安裝精靈可安裝 Dyna Pro USB 驅動程式。** 主安裝程式新增一個選項(預設勾選;驅動程式已安裝或 Windows 低於 10 時隱藏):
   從 dynapro.co.uk 下載 Dyna Pro 官方的 `Dyna Pro USB.zip`(不內附;會檢查 SHA-256,檔案有變就拒絕安裝),只要求一次系統管理員權限,
-  只暫停一次重新啟動的 BitLocker,要求下次開機顯示進階啟動選單,並登錄一個工作,讓精靈在你登入後繼續。選單出現時按 7;
+  暫停 BitLocker 直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復),要求下次開機顯示進階啟動選單,並登錄一個工作,讓精靈在你登入後繼續。選單出現時按 7;
   沒按到的話精靈會告知並提供「再試一次」。接著 Windows 會跳出紅色警告,請選「仍然安裝此驅動程式軟體」。
   驅動程式強制簽章在下次正常重新啟動後恢復。之後也可以從開始功能表(「安裝 Dyna Pro USB 驅動程式」)或用
   `DynaRunFix-Setup.exe /driver` 啟動。檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`;

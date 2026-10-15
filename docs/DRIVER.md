@@ -16,7 +16,7 @@ available.
   or run `DynaRunFix-Setup.exe /driver`.
 * The wizard downloads the official "Dyna Pro USB.zip" from dynapro.co.uk (it is not bundled) and checks its SHA-256. If the
   file on the site has changed, it refuses to install it; use the manual method then.
-* Windows asks for administrator permission once (UAC). The wizard suspends BitLocker for exactly one restart, sets the one-time
+* Windows asks for administrator permission once (UAC). The wizard suspends BitLocker until the driver is installed (at most 3 restarts as a safety net, then it is resumed automatically), sets the one-time
   advanced boot options and registers a task that continues the wizard when you sign in.
 * After the restart, press **7** in the start-up menu (*Disable driver signature enforcement*). The wizard shows the page below;
   photographing it with your phone first is a good idea.
@@ -58,16 +58,16 @@ driver signature enforcement has to be turned off for one start of Windows.
 Download the zip above and unzip it (right-click, *Extract All...*), for example to
 `C:\Users\<you>\Downloads\Dyna Pro USB`. Remember the folder; you pick it in step 4.
 
-### 2. Only if the PC uses BitLocker or device encryption: suspend it for one restart
+### 2. Only if the PC uses BitLocker or device encryption: suspend it until the driver is installed
 
 The start-up menu in step 3 asks for the BitLocker recovery key on encrypted PCs. Avoid that by suspending BitLocker
-for one restart first. Open **PowerShell as administrator** (right-click Start, *Terminal (Admin)*) and run:
+first. Open **PowerShell as administrator** (right-click Start, *Terminal (Admin)*) and run:
 
 ```powershell
-Suspend-BitLocker -MountPoint "C:" -RebootCount 1
+Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 ```
 
-Protection resumes by itself after that restart. If the recovery key is asked anyway, you can find it at
+Protection resumes by itself after at most 3 restarts; once the driver is installed you can resume it right away with `Resume-BitLocker -MountPoint "C:"`. If the recovery key is asked anyway, you can find it at
 <https://aka.ms/myrecoverykey> (sign in with the Microsoft account the PC is linked to).
 
 If you are not sure whether the PC is encrypted, running the command does no harm.
@@ -152,7 +152,7 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 * 在主安裝程式中,保持勾選 **安裝 Dyna Pro USB 驅動程式**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏)。
   之後隨時也可以用開始功能表捷徑 **安裝 Dyna Pro USB 驅動程式**,或執行 `DynaRunFix-Setup.exe /driver`。
 * 精靈會從 dynapro.co.uk 下載官方的「Dyna Pro USB.zip」(不內附)並檢查 SHA-256。網站上的檔案若有變動就拒絕安裝,這時請改用手動方式。
-* Windows 只會要求一次系統管理員權限(UAC)。精靈只暫停一次重新啟動的 BitLocker,設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
+* Windows 只會要求一次系統管理員權限(UAC)。精靈會暫停 BitLocker 直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。
 * 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。
 
   | 按 7 |
@@ -188,16 +188,16 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 下載上面的 zip 並解壓縮(右鍵 →「全部解壓縮…」),例如解壓到 `C:\Users\<你>\Downloads\Dyna Pro USB`。
 記住這個資料夾,步驟 4 要選它。
 
-#### 2. 只有電腦使用 BitLocker 或裝置加密時:先暫停一次
+#### 2. 只有電腦使用 BitLocker 或裝置加密時:先暫停到驅動程式安裝完成
 
-加密的電腦在步驟 3 的啟動選單會要求輸入 BitLocker 復原金鑰。先暫停 BitLocker 一次重新啟動就能避免。
+加密的電腦在步驟 3 的啟動選單會要求輸入 BitLocker 復原金鑰。先暫停 BitLocker 就能避免。
 以**系統管理員身分開啟 PowerShell**(對開始按鈕按右鍵 →「終端機 (系統管理員)」),執行:
 
 ```powershell
-Suspend-BitLocker -MountPoint "C:" -RebootCount 1
+Suspend-BitLocker -MountPoint "C:" -RebootCount 3
 ```
 
-那次重新啟動之後保護會自動恢復。如果還是被要求輸入復原金鑰,可以到 <https://aka.ms/myrecoverykey> 查詢(登入與這台電腦綁定的 Microsoft 帳號)。
+最多 3 次重新啟動之後保護會自動恢復;驅動程式安裝完成後也可以用 `Resume-BitLocker -MountPoint "C:"` 立刻恢復。如果還是被要求輸入復原金鑰,可以到 <https://aka.ms/myrecoverykey> 查詢(登入與這台電腦綁定的 Microsoft 帳號)。
 
 不確定有沒有加密的話,直接執行這行指令也無妨。
 
