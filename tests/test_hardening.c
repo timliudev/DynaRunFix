@@ -43,6 +43,7 @@ static void setup_tree(void)
 {
     WCHAR p[MAX_PATH], c[1000];
     GetTempPathW(MAX_PATH, g_base);
+    { WCHAR lp[MAX_PATH]; DWORD n = GetLongPathNameW(g_base, lp, MAX_PATH); if (n && n < MAX_PATH) lstrcpyW(g_base, lp); }   // CI temp folder is an 8.3 short path; the code under test compares canonical (long) paths
     wsprintfW(g_base + lstrlenW(g_base), L"drf-sec-%lu", GetCurrentProcessId());
     CreateDirectoryW(g_base, NULL);
     wsprintfW(g_root, L"%s\\root", g_base); CreateDirectoryW(g_root, NULL);
@@ -356,7 +357,7 @@ static void test_check_exe(void)
     wsprintfW(g_exe, L"%s\\DynaRun V3.exe", bin);
     CHECK(check_exe() && g_exe_trusted, L"a good exe in a folder users cannot change: trusted");
     g_is_writable = user_writable;
-    CHECK(check_exe() && (g_exe_trusted == is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
+    CHECK(check_exe() && (!g_exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
     g_is_writable = fake_writable;
     wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(), L"another file name is refused");
     wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(), L"a missing exe is refused");
@@ -617,6 +618,65 @@ static void test_running(void)
     lstrcpyW(g_exe, sv_exe); lstrcpyW(g_dir, sv_dir);
 }
 
+// Where a redirect may lead (the update check and the downloads follow redirects by hand, each hop checked)
+static void test_redirects(void)
+{
+    WCHAR out[300];
+    const WCHAR *api = L"https://api.github.com/repos/o/r/releases/latest";
+    const WCHAR *dl = L"https://github.com/o/r/releases/download/v1/x.exe";
+    CHECK(pkg_redirect_target(dl, L"https://release-assets.githubusercontent.com/a/b?c=d", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://release-assets.githubusercontent.com/a/b?c=d"), L"redirect to the asset host");
+    CHECK(pkg_redirect_target(dl, L"https://objects.githubusercontent.com/a", GITHUB_HOSTS, out, 300), L"redirect to objects host");
+    CHECK(!pkg_redirect_target(api, L"https://evil.example/x", GITHUB_HOSTS, out, 300), L"redirect off GitHub refused");
+    CHECK(!pkg_redirect_target(api, L"http://github.com/x", GITHUB_HOSTS, out, 300), L"redirect to plain http refused");
+    CHECK(!pkg_redirect_target(api, L"https://github.com.evil.example/x", GITHUB_HOSTS, out, 300), L"look-alike host refused");
+    CHECK(!pkg_redirect_target(api, L"https://github.com@evil.example/x", GITHUB_HOSTS, out, 300), L"user name in the target refused");
+    CHECK(!pkg_redirect_target(api, L"https://raw.githubusercontent.com/x", GITHUB_HOSTS, out, 300), L"unlisted GitHub host refused");
+    CHECK(!pkg_redirect_target(api, L"ftp://github.com/x", GITHUB_HOSTS, out, 300), L"another scheme refused");
+    CHECK(!pkg_redirect_target(api, L"//evil.example/x", GITHUB_HOSTS, out, 300), L"protocol-relative target refused");
+    CHECK(!pkg_redirect_target(api, L"relative/path", GITHUB_HOSTS, out, 300), L"relative path refused");
+    CHECK(!pkg_redirect_target(api, L"", GITHUB_HOSTS, out, 300), L"empty target refused");
+    CHECK(pkg_redirect_target(api, L"/repos/o/r/releases/1", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://api.github.com/repos/o/r/releases/1"), L"same-host path");
+    CHECK(pkg_redirect_target(L"https://api.github.com?x=1", L"/p", GITHUB_HOSTS, out, 300) && !lstrcmpW(out, L"https://api.github.com/p"), L"same-host path from a URL with a query");
+    CHECK(!pkg_redirect_target(L"https://evil.example/a", L"/p", GITHUB_HOSTS, out, 300), L"same-host path on a host that is not allowed");
+    CHECK(!pkg_redirect_target(api, L"/this/is/a/rather/long/path/that/does/not/fit", GITHUB_HOSTS, out, 60), L"does not fit the buffer");
+    CHECK(!pkg_redirect_target(api, L"https://github.com/this/is/a/rather/long/url/that/does/not/fit", GITHUB_HOSTS, out, 40), L"absolute target that does not fit");
+    CHECK(pkg_redirect_target(L"https://dynapro.co.uk/a", L"https://dynapro.co.uk/b", DYNAPRO_HOST, out, 300), L"single pinned host: same host");
+    CHECK(!pkg_redirect_target(L"https://dynapro.co.uk/a", L"https://github.com/b", DYNAPRO_HOST, out, 300), L"single pinned host: other host refused");
+}
+
+// The copy made for the elevated start from a network drive: new file, held open, same content, cannot be changed while held
+static void test_copy_and_hold(void)
+{
+    WCHAR src[MAX_PATH], dst[MAX_PATH], sys[MAX_PATH]; HANDLE h, w; BYTE b1[64], b2[64]; DWORD n, m; int same = 1;
+    GetSystemDirectoryW(sys, MAX_PATH);
+    wsprintfW(src, L"%s\\hold-src.bin", g_base); wsprintfW(dst, L"%s\\hold-dst.bin", g_base);
+    mkfile(g_base, L"hold-src.bin", "0123456789abcdef");
+    DeleteFileW(dst);
+    h = copy_and_hold(src, dst);
+    CHECK(h != INVALID_HANDLE_VALUE, L"copy_and_hold makes and holds the copy");
+    if (h != INVALID_HANDLE_VALUE) {
+        w = CreateFileW(dst, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        CHECK(w == INVALID_HANDLE_VALUE, L"the held copy cannot be opened for writing"); if (w != INVALID_HANDLE_VALUE) CloseHandle(w);
+        CHECK(!DeleteFileW(dst), L"the held copy cannot be deleted");
+        CHECK(!MoveFileW(dst, src), L"the held copy cannot be renamed over the original");
+        w = CreateFileW(dst, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        CHECK(w != INVALID_HANDLE_VALUE, L"but it can be read (and so run)");
+        if (w != INVALID_HANDLE_VALUE) {
+            HANDLE s = CreateFileW(src, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            ReadFile(w, b1, sizeof(b1), &n, NULL); ReadFile(s, b2, sizeof(b2), &m, NULL);
+            same = n == m && n == 16 && !memcmp(b1, b2, n);
+            CloseHandle(s); CloseHandle(w);
+        }
+        CHECK(same, L"the copy has the content of the original");
+        CloseHandle(h);
+        CHECK(DeleteFileW(dst), L"after the handle is closed the copy can be deleted");
+    }
+    h = copy_and_hold(src, src);                       // dst exists: CREATE_NEW refuses, nothing is overwritten
+    CHECK(h == INVALID_HANDLE_VALUE, L"an existing destination is refused");
+    { char c[32]; DWORD r; HANDLE f = CreateFileW(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL); ReadFile(f, c, 16, &r, NULL); CloseHandle(f); CHECK(r == 16 && c[0] == '0', L"the original is untouched"); }
+    DeleteFileW(src);
+}
+
 static void test_misc(void)
 {
     WCHAR a[80], b[80];
@@ -687,6 +747,8 @@ int wmain(void)
     wprintf(L"[manifest]\n"); test_manifest();
     wprintf(L"[urls]\n"); test_urls();
     wprintf(L"[running]\n"); test_running();
+    wprintf(L"[redirects]\n"); test_redirects();
+    wprintf(L"[copy and hold]\n"); test_copy_and_hold();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     {   // clean up

@@ -11,6 +11,45 @@
 - **Exit code 6 is explained in a log:** one line per program in the way (name, process id, session, whether it could be closed, path), in
   `setup.log` of the install folder, or in `%TEMP%\DynaRunFix-setup.log` before that folder exists or without administrator rights. Nothing is shown with `/quiet`.
 
+## v1.4.1 — 2026-10-14
+
+A fix release after a review of v1.4.0.
+
+- **Fix: a DynaRun in a non-default folder.** The launcher asked the registry for the DynaRun path the setup recorded with the size of
+  its own path, so a longer recorded path (a custom install folder) made the read fail and the launcher fell back to the default
+  location, ending in "Cannot start DynaRun". The path is now read in full; a value that is not text, is empty or does not fit is not used.
+- **Update check:** it follows redirects itself, as the downloads do: every hop (https, and one of GitHub's hosts) is checked before a
+  request is sent to it. In v1.4.0 WinINet followed the redirects of the check by itself and only the address it ended up at was checked
+  (no data was read from a host outside GitHub's); the duplicated host list is gone too.
+- **Launcher:** only a DynaRun of the same sign-in session counts as running (with fast user switching another user's DynaRun gave a wrong
+  "administrator rights" message); when the elevation state of the desktop shell's token cannot be told it no longer carries on as if it
+  were a normal start but stops with the message that no usable token was found.
+- **First-time setup:** the optional-feature values are not written when Dyna Pro's helper ends with a non-zero exit code (when the exit
+  code cannot be read, it is as before). The README now says exactly when they are written: whenever DynaRun starts that helper
+  (normally only on the first start), not "on the very first start only".
+- **Opt-in `DYNAFIX_USBFIX`:** the last error code of the abandoned or finished call is handed on (abandoned: `ERROR_TIMEOUT`); a wait on a
+  handle whose kind cannot be told is no longer cut short (only events are); `dynapro.dll` is recognised by its file name, not by the end
+  of the path (`xdynapro.dll` is not it), and a cut-off module path is not matched.
+- **`DYNAFIX_*` switches:** a value must be exactly the expected one (`1`, `0`, a number, `clip`): `10`, `1x` or a long value no longer
+  switch something on, and an over-long value is no longer read from an unset buffer.
+- **System libraries:** `version.dll`, `rstrtmgr.dll` and `psapi.dll` are loaded from the system folder only.
+- **Installer:** the copy of the setup made in `%TEMP%` for the elevated start from a network drive gets a unique name, is created new,
+  and is held open (nobody can change it) and compared with the original until the elevated process has ended; uninstall does not
+  delete the manifest next to `DynaRun V3.exe`, nor schedule it for deletion at the next restart, when DynaRun's folder or exe can be
+  changed by ordinary users.
+- **CI:** the release build accepts only tags of the form `vN.N.N`, and the version is passed to the build quoted.
+- **README / documentation:** the MSVBVM60 screen-size scan is disclosed (it finds the values by an instruction-byte pattern in
+  Microsoft's code, in memory only, changes them only if they equal the real screen size, and leaves them alone when the pattern is not
+  found); "modifies no Dyna Pro or THB file" now says "no file's content" and names the manifest and the briefly changed modification
+  time; the log does not contain module or import addresses (it can show window and GDI handle values); the graph resource load uses
+  `LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE` and a request that would load code is not redirected; the compatibility
+  setting *Run as administrator* is described as observed (a test on Windows 11: through the launcher the program ran non-elevated, without a
+  prompt; started directly it asked for elevation); uninstall's taskbar policy scope (the user who uninstalls, the recorded account, every
+  other account whose layout file is ours) and the full list of what DynaRunFix keeps in the registry and the install folder; the
+  hardening tests are run, not only built.
+- **Tests:** new unit tests for the redirect target rules, the `DYNAFIX_*` parsing and the `dynapro.dll` name match, and the launcher's
+  registry path read.
+
 ## v1.4.0 — 2026-10-14
 
 - **Uninstall:** it runs from the installed program and no longer leaves `DynaRunFix-uninstall-<n>.exe` in `%TEMP%` (also not after a
@@ -341,6 +380,32 @@
   不提供關閉按鈕,對方關閉後頁面會自動更新。`/quiet /close` 不會嘗試關閉關不掉的程式,直接以結束代碼 6 結束。
 - **結束代碼 6 會留下原因記錄:** 每個擋住的程式一行(名稱、處理序編號、工作階段、能否關閉、路徑),寫在安裝資料夾的 `setup.log`,
   該資料夾尚未建立或沒有系統管理員權限時寫在 `%TEMP%\DynaRunFix-setup.log`。`/quiet` 不會顯示任何視窗。
+
+### v1.4.1 — 2026-10-14
+
+v1.4.0 審查後的修正版本。
+
+- **修正:DynaRun 在非預設資料夾。** 啟動器以自己路徑的長度去讀安裝程式記錄的 DynaRun 路徑,所以較長的記錄路徑(自訂安裝資料夾)會讀取失敗,
+  啟動器改用預設位置,最後出現「無法啟動 DynaRun」。現在會完整讀取路徑;不是文字、是空的或放不下的值不會被使用。
+- **更新檢查:** 和下載一樣自己處理重新導向:每一跳(https,且是 GitHub 的主機之一)都在送出要求之前先檢查。v1.4.0 的檢查是由 WinINet 自己跟隨重新導向,
+  只檢查最後到達的網址(沒有從 GitHub 以外的主機讀取任何資料);重複的主機清單也移除了。
+- **啟動器:** 只有同一個登入工作階段的 DynaRun 才算執行中(快速切換使用者時,別人的 DynaRun 會造成錯誤的「系統管理員權限」訊息);
+  無法判斷桌面殼層 token 是否已提升時,不再當成一般啟動繼續,而是顯示找不到可用 token 的訊息並停止。
+- **首次設定:** Dyna Pro 的設定程式以非零結束碼結束時,不寫入選購功能值(讀不到結束碼時維持原樣)。README 現在精確說明何時寫入:每當 DynaRun 啟動該設定程式時
+  (通常只有第一次啟動),而不是「只在第一次啟動」。
+- **選用的 `DYNAFIX_USBFIX`:** 放棄或完成的呼叫的最後錯誤碼會傳給呼叫端(放棄時為 `ERROR_TIMEOUT`);種類不明的 handle 的等待不再被縮短(只有 event 會);
+  `dynapro.dll` 以檔名辨識,而不是路徑結尾(`xdynapro.dll` 不是它),被截斷的模組路徑不會比對成功。
+- **`DYNAFIX_*` 開關:** 值必須剛好是預期的(`1`、`0`、數字、`clip`):`10`、`1x` 或以 1 開頭的長字串不再開啟任何功能,過長的值也不會再從未初始化的緩衝區讀取。
+- **系統程式庫:** `version.dll`、`rstrtmgr.dll`、`psapi.dll` 只從系統資料夾載入。
+- **安裝程式:** 從網路磁碟以提升權限啟動時在 `%TEMP%` 做的安裝程式副本使用唯一名稱、以新建方式建立,並一直保持開啟(沒有人能更改)、與原檔比對,直到提升的行程結束;
+  DynaRun 的資料夾或 exe 一般使用者可以更改時,解除安裝不會刪除 `DynaRun V3.exe` 旁的 manifest,也不會排程在下次重新開機時刪除。
+- **CI:** Release 只接受 `vN.N.N` 形式的標籤,版本號傳給建置時有加上引號。
+- **README／文件:** 揭露 MSVBVM60 螢幕大小的特徵掃描(以 Microsoft 程式碼中的一段指令位元組特徵找出這些值,只在記憶體中,只有等於真實螢幕大小時才修改,找不到特徵就不動);
+  「不修改任何 Dyna Pro 或 THB 檔案」改為「不修改任何檔案的內容」,並寫明 manifest 與短暫改變的修改時間;log 不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值);
+  圖表資源載入使用 `LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE`,會載入程式碼的要求不會被導向;相容性設定「以系統管理員身分執行」改為觀察結果
+  (Windows 11 上的測試:經由啟動器時程式以未提升的權限執行、沒有提示;直接啟動則會要求提升);解除安裝的工作列原則範圍(執行解除安裝的使用者、記錄的帳號、
+  其他配置檔仍是我們的帳號)以及 DynaRunFix 在登錄與安裝資料夾留下什麼的完整清單;強化測試是建置並執行,不只是建置。
+- **測試:** 新增重新導向目標規則、`DYNAFIX_*` 解析與 `dynapro.dll` 檔名比對、啟動器讀取登錄路徑的單元測試。
 
 ### v1.4.0 — 2026-10-14
 
