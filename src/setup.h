@@ -94,7 +94,7 @@ int remove_dynarun(void);                   // Dyna Pro's uninstall of DynaRun V
 void pkg_temp_dir(WCHAR *out);              // %TEMP%\DynaRunFix (created)
 int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only" copies the setup overwrites
 
-/* driver.c: the Dyna Pro USB driver (FTDI 2.08.24 with the Dyna Pro device id; its INF was edited after Microsoft signed it, so
+/* driver.c: the Dyna Pro USB driver (FTDI 2.08.24 with the Dyna Pro device id; its INF files are not in the signed catalogs that ship with them, so
    Windows installs it only with driver signature enforcement off for one start: see docs/DRIVER.md) */
 #define DYNAPRO_USB_ZIP  L"https://dynapro.co.uk/Site/graphics/Technical_Info/Software/Dyna%20Pro%20USB.zip"
 #define DRIVER_DOC_URL   L"https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md"
@@ -113,8 +113,9 @@ void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: 
 BOOL drv_inf_matches(const BYTE *data, DWORD n);          // pure helpers, unit-tested (tests\test_driver.c)
 BOOL drv_ci_enforced(DWORD code_integrity_options);
 BOOL drv_bde_suspend(int protection_status);   // BDE_PS_* (driver.c): suspend BitLocker for this status?
+BOOL drv_bde_suspend_now(int protection_status, BOOL suspended_by_us);   // ... at prep time: also when our own flag says we suspended it earlier (a retry)
 int drv_task_xml(WCHAR *out, int cch, const WCHAR *sid, const WCHAR *exe);
 BOOL drv_sys_tool(const WCHAR *windir, BOOL wow64, const WCHAR *tool, WCHAR *out, int cch);
 BOOL drv_pnputil_ok(DWORD code);
 BOOL drv_pnputil_args(WCHAR *out, int cch, const WCHAR *inf);
-void driver_machine_uninstall(void);        // elevated uninstall: the shortcut, a waiting task, the staged files (an installed driver is left)
+void driver_machine_uninstall(void);        // elevated uninstall: the shortcut, a waiting task, BitLocker resumed if we suspended it, the staged files (an installed driver is left); call before the DynaRunFix key is deleted

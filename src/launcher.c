@@ -54,14 +54,21 @@ static BOOL CALLBACK findwin(HWND h, LPARAM l)
     return TRUE;
 }
 
+// Does a process belong to our session? have/mine: our own session id and whether it could be read; got/sid: the same for the process.
+// A process whose session cannot be told does not count.
+static BOOL in_session(BOOL have, DWORD mine, BOOL got, DWORD sid) { return !have || (got && sid == mine); }
+
 // The DynaRun of this sign-in session (another user's DynaRun, e.g. after fast user switching, is not ours to attach to and does not count).
 static DWORD running(void)
 {
     PROCESSENTRY32 pe; HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); DWORD pid = 0, mine = 0, sid = 0;
-    BOOL have = ProcessIdToSessionId(GetCurrentProcessId(), &mine);
+    BOOL have = ProcessIdToSessionId(GetCurrentProcessId(), &mine), got;
     pe.dwSize = sizeof(pe);
     if (Process32First(s, &pe)) do {
-        if (!lstrcmpiA(pe.szExeFile, "DynaRun V3.exe") && (!have || (ProcessIdToSessionId(pe.th32ProcessID, &sid) && sid == mine))) pid = pe.th32ProcessID;
+        if (!lstrcmpiA(pe.szExeFile, "DynaRun V3.exe")) {
+            got = ProcessIdToSessionId(pe.th32ProcessID, &sid);
+            if (in_session(have, mine, got, sid)) pid = pe.th32ProcessID;
+        }
     } while (Process32Next(s, &pe));
     CloseHandle(s);
     return pid;

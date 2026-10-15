@@ -681,6 +681,46 @@ static void test_copy_and_hold(void)
     DeleteFileW(src);
 }
 
+// the log line writer: appends, and never through a link (the elevated stage writes to %TEMP%, which the user controls)
+static DWORD file_size_of(const WCHAR *p)
+{
+    DWORD n = 0; BYTE *d = read_file(p, &n); BOOL ok = d != NULL;
+    release(d);
+    return ok ? n : (DWORD)-1;
+}
+
+static void test_append_line(void)
+{
+    WCHAR f[MAX_PATH], h[MAX_PATH], s[MAX_PATH], t[MAX_PATH]; DWORD n;
+    wsprintfW(f, L"%s\\append.log", g_base);
+    append_line(f, L"one"); append_line(f, L"two");
+    { BYTE *d = read_file(f, &n); CHECK(d && n == 10 && !memcmp(d, "one\r\ntwo\r\n", 10), L"lines are appended, CRLF-terminated"); release(d); }
+
+    // a second name for the same file (hard link): refused, the file stays as it is
+    wsprintfW(h, L"%s\\append-link.log", g_base);
+    if (CreateHardLinkW(h, f, NULL)) {
+        append_line(h, L"via hard link");
+        CHECK(file_size_of(f) == 10, L"a file with several hard links is not written to");
+        DeleteFileW(h);
+        append_line(f, L"three");
+        CHECK(file_size_of(f) == 17, L"... and again after the link is gone");
+    } else wprintf(L"info: hard links not available here, skipped\n");
+
+    // a symbolic link to a file (needs a privilege or developer mode; skipped without)
+    wsprintfW(s, L"%s\\append-sym.log", g_base); wsprintfW(t, L"%s\\append-target.log", g_base);
+    mkfile(g_base, L"append-target.log", "x");
+    if (CreateSymbolicLinkW(s, t, 0x2 /* SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE */)) {
+        append_line(s, L"via symlink");
+        CHECK(file_size_of(t) == 1, L"a symbolic link is not followed");
+        DeleteFileW(s);
+    } else wprintf(L"info: symbolic links not available here, skipped\n");
+
+    // a folder instead of a file: nothing happens
+    append_line(g_base, L"into a folder");
+    { DWORD a = GetFileAttributesW(g_base); CHECK(a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY), L"a folder as the log path is left alone (still a folder)"); }
+    DeleteFileW(f); DeleteFileW(t);
+}
+
 static void test_misc(void)
 {
     WCHAR a[80], b[80];
@@ -753,6 +793,7 @@ int wmain(void)
     wprintf(L"[running]\n"); test_running();
     wprintf(L"[redirects]\n"); test_redirects();
     wprintf(L"[copy and hold]\n"); test_copy_and_hold();
+    wprintf(L"[append line]\n"); test_append_line();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     {   // clean up

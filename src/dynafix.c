@@ -1417,7 +1417,7 @@ static void patch_dynapro(void)
 // ---- DPSetData watchdog (DYNAFIX_USBFIX=1) ----
 // EXPERIMENTAL, off by default, not verified with real hardware under all conditions.
 // DynaRun calls dynapro.dll's DPSetData on its GUI thread. Observed: when the USB device stops answering, the call does not
-// return and DynaRun freezes (the API log showed a WaitForSingleObject on the helper thread that never returned). With
+// return and DynaRun freezes. With
 // DYNAFIX_USBFIX=1, DPSetData (mode 3) runs on a helper thread of this dll while the GUI thread waits for it in 100 ms steps and
 // watches the connection through the exported DPConnStatus: when the call has run 2 s or more and DPConnStatus reports the
 // connection down, the GUI thread stops waiting and DPSetData returns 0; DynaRun's own reconnect logic (DPConnect) then takes over.
@@ -1440,7 +1440,7 @@ static void patch_dynapro(void)
 //    3 LONGs (that is what was observed in DynaRun's calls). p is copied for the helper, exactly 3 LONGs, into a padded buffer; on normal completion the helper's copy is
 //    written back to p before DPSetData returns, so a caller reading p afterwards sees the same data as without the fix. After an
 //    abandon, p is not touched again (it may be gone).
-// If no WaitForSingleObject import of dynapro.dll can be redirected, the watchdog is not enabled (an abandoned call could never end).
+// If the hook cannot be set, the watchdog is not enabled (an abandoned call could never end).
 // No file of Dyna Pro is modified. The exported DPSetData / DPConnStatus of dynapro.dll are called, and while DynaRun runs,
 // dynapro.dll's WaitForSingleObject import-table entry is redirected in memory (by name, like the other imports here; it acts for
 // the helper thread only). The DPSetData that DynaRun looks up through GetProcAddress is replaced by the wrapper. Only DPSetData
@@ -1627,11 +1627,11 @@ static FARPROC setdata_attach(HMODULE m, FARPROC f)
     n = patch_imports("dynapro.dll", "setdata", tbl);
     if (n <= 0) {
         // Without the redirect an abandoned call could never end: every later DPSetData would be dropped for good. Better not to start.
-        logf("DPSetData watchdog off: no WaitForSingleObject import of dynapro.dll could be redirected %u %u %u\r\n", 0, 0, 0);
+        logf("DPSetData watchdog off: the hook could not be set %u %u %u\r\n", 0, 0, 0);
         InterlockedExchange(&g_sd_once, 3);
         return f;
     }
-    logf("DPSetData watchdog on (usbfix), %u WaitForSingleObject import(s) patched\r\n", (DWORD)n, 0, 0);
+    logf("DPSetData watchdog on (usbfix), %u hook(s) set\r\n", (DWORD)n, 0, 0);
     InterlockedExchange(&g_sd_once, 2);
     return (FARPROC)H_DPSetData;
 }

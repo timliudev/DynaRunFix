@@ -54,6 +54,21 @@ int main(void)
       read_dynarun_exe(HKEY_CURRENT_USER, g_sub, exe, sizeof(exe));
       CHECK(!lstrcmpA(exe, "D:\\x.exe"), "stored without NUL: terminated"); }
 
+    { const char *p = "%ProgramFiles%\\Dyna Pro\\DynaRun V3.exe";           // REG_EXPAND_SZ is not accepted (the setup writes REG_SZ): default, not an unexpanded path
+      setval("DynaRunExe", REG_EXPAND_SZ, p, lstrlenA(p) + 1);
+      read_dynarun_exe(HKEY_CURRENT_USER, g_sub, exe, sizeof(exe));
+      CHECK(!lstrcmpA(exe, DEFAULT_EXE), "REG_EXPAND_SZ: default"); }
+
+    // a value that fills the buffer (size 8 here): it fits only with its terminator inside
+    { char b[8] = { 'D', ':', '\\', 'x', 'y', '.', 'e', 'x' };
+      setval("DynaRunExe", REG_SZ, b, sizeof(b));
+      read_dynarun_exe(HKEY_CURRENT_USER, g_sub, exe, 8);
+      CHECK(!lstrcmpA(exe, DEFAULT_EXE), "fills the buffer without NUL: default, not a cut-off path");
+      b[7] = 0;
+      setval("DynaRunExe", REG_SZ, b, sizeof(b));
+      read_dynarun_exe(HKEY_CURRENT_USER, g_sub, exe, 8);
+      CHECK(!lstrcmpA(exe, "D:\\xy.e"), "fills the buffer with its NUL: read"); }
+
     setval("DynaRunExe", REG_SZ, "", 1);
     read_dynarun_exe(HKEY_CURRENT_USER, g_sub, exe, sizeof(exe));
     CHECK(!lstrcmpA(exe, DEFAULT_EXE), "empty: default");
@@ -63,6 +78,21 @@ int main(void)
 
     // token_state: this process's own token is classified (0 or 1), never -1
     { HANDLE t; if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t)) { int s = token_state(t); CHECK(s == 0 || s == 1, "own token classified"); CloseHandle(t); } }
+
+    // an unknown state (-1: the query failed, here for an invalid handle) is never taken for "not elevated": token_elevated fails closed,
+    // and relaunch_non_elevated (which stops on a negative state before it starts anything) is not reached with a usable answer
+#pragma warning(suppress: 4996)
+    if ((BYTE)GetVersion() >= 6) {
+        CHECK(token_state(NULL) == -1, "invalid token handle: state unknown (-1)");
+        CHECK(token_elevated(NULL), "unknown state counts as elevated (fail closed)");
+    }
+
+    // which processes count as ours: the same session; a session that cannot be told does not count (unless ours cannot be read either)
+    CHECK(in_session(TRUE, 1, TRUE, 1), "same session counts");
+    CHECK(!in_session(TRUE, 1, TRUE, 2), "another session (fast user switching) does not count");
+    CHECK(!in_session(TRUE, 1, TRUE, 0), "session 0 (services) is not session 1");
+    CHECK(!in_session(TRUE, 1, FALSE, 1), "process whose session cannot be looked up does not count");
+    CHECK(in_session(FALSE, 0, TRUE, 5), "own session unknown: every DynaRun counts");
 
     RegDeleteKeyA(HKEY_CURRENT_USER, g_sub);
     printf("%d passed, %d failed\n", g_pass, g_fail);

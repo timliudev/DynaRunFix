@@ -23,28 +23,30 @@ static WCHAR g_base[MAX_PATH];
 
 /* ---------- 1. INF matcher ---------- */
 
-// The parts of Dyna Pro's ftdibus.inf (FTDI 2.08.24, edited by Dyna Pro) that matter, as they are in the zip: ANSI, CRLF.
+// A hand-written bus INF with the same structure as the one the matcher looks for (names and strings are invented; the section name
+// [FtdiBus.NT], the hardware id USB\VID_0403&PID_FDBC and the DriverVer version 2.08.24 are what drv_inf_matches checks): ANSI, CRLF,
+// mixed case, comments, an entry that does not match.
 static const char DYNA_INF[] =
-    "; FTDIBUS.INF\r\n; \r\n; Copyright \xA9 2000-2012 Future Technology Devices International Limited\r\n;\r\n\r\n"
+    "; Example bus driver INF (synthetic test fixture)\r\n; Copyright \xA9 Example Maker\r\n;\r\n\r\n"
     "[Version]\r\nSignature=\"$Windows NT$\"\r\nDriverPackageType=PlugAndPlay\r\nDriverPackageDisplayName=%DESC%\r\nClass=USB\r\n"
-    "ClassGUID={36fc9e60-c465-11cf-8056-444553540000}\r\nProvider=%FTDI%\r\nCatalogFile=ftdibus.cat\r\nDriverVer=04/10/2012,2.08.24\r\n\r\n"
-    "[Manufacturer]\r\n%Ftdi%=FtdiHw,NTamd64\r\n\r\n"
-    "[FtdiHw]\r\n%USB\\VID_0403&PID_FFA8.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_FFA8\r\n%USB\\VID_0403&PID_FDB9.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_FDB9\r\n"
+    "ClassGUID={36fc9e60-c465-11cf-8056-444553540000}\r\nProvider=%Maker%\r\nCatalogFile=example.cat\r\nDriverVer=01/02/2011,2.08.24\r\n\r\n"
+    "[Manufacturer]\r\n%Maker%=ExampleHw,NTamd64\r\n\r\n"
+    "[ExampleHw]\r\n%USB\\VID_0403&PID_FFA1.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_FFA1\r\n"
     "%USB\\VID_0403&PID_FDBC.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_FDBC\r\n\r\n"
-    "[FtdiHw.NTamd64]\r\n%USB\\VID_0403&PID_FDBC.DeviceDesc%=FtdiBus.NTamd64,USB\\VID_0403&PID_FDBC\r\n\r\n"
-    "[FtdiBus.NT]\r\nCopyFiles=FtdiBus.NT.Copy,FtdiBus.NT.Copy2\r\nAddReg=FtdiBus.NT.AddReg\r\n\r\n"
-    "[Strings]\r\nFtdi=\"BitBox\"\r\nUSB\\VID_0403&PID_FDBC.DeviceDesc=\"DynaPro Dynamometer\"\r\n";
+    "[ExampleHw.NTamd64]\r\n%USB\\VID_0403&PID_FDBC.DeviceDesc%=FtdiBus.NTamd64,USB\\VID_0403&PID_FDBC\r\n\r\n"
+    "[FtdiBus.NT]\r\nCopyFiles=FtdiBus.NT.Copy\r\nAddReg=FtdiBus.NT.AddReg\r\n\r\n"
+    "[Strings]\r\nMaker=\"Example Maker\"\r\nUSB\\VID_0403&PID_FDBC.DeviceDesc=\"Example Dyno USB\"\r\n";
 
-// FTDI's own CDM 2.12.36.4 bus INF: newer version, no Dyna Pro id
+// a newer version of a similar INF without that hardware id
 static const char STOCK_INF[] =
-    "[Version]\r\nSignature=\"$Windows NT$\"\r\nClass=USB\r\nProvider=%FTDI%\r\nCatalogFile=ftdibus.cat\r\nDriverVer=03/05/2021,2.12.36.4\r\n\r\n"
-    "[FtdiHw]\r\n%USB\\VID_0403&PID_6001.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_6001\r\n%USB\\VID_0403&PID_6010&MI_00.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_6010&MI_00\r\n\r\n"
+    "[Version]\r\nSignature=\"$Windows NT$\"\r\nClass=USB\r\nProvider=%Maker%\r\nCatalogFile=example.cat\r\nDriverVer=03/04/2020,2.12.0.1\r\n\r\n"
+    "[ExampleHw]\r\n%USB\\VID_0403&PID_7001.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_7001\r\n%USB\\VID_0403&PID_7002&MI_00.DeviceDesc%=FtdiBus.NT,USB\\VID_0403&PID_7002&MI_00\r\n\r\n"
     "[FtdiBus.NT]\r\nCopyFiles=FtdiBus.NT.Copy\r\n";
 
-// the FTDIPORT INF of the same package: the Dyna Pro id appears only as FTDIBUS\COMPORT&..., and it is a different driver
+// the companion port INF: the hardware id appears only as a child id of the bus, and it is a different driver
 static const char PORT_INF[] =
-    "[Version]\r\nSignature=\"$Windows NT$\"\r\nClass=Ports\r\nCatalogFile=ftdiport.cat\r\nDriverVer=04/10/2012,2.08.24\r\n\r\n"
-    "[FtdiHw]\r\n%VID_0403&PID_FDB9.DeviceDesc%=FtdiPort232.NT,FTDIBUS\\COMPORT&VID_0403&PID_FDBC\r\n\r\n[FtdiPort232.NT]\r\nCopyFiles=FtdiPort232.NT.Copy\r\n";
+    "[Version]\r\nSignature=\"$Windows NT$\"\r\nClass=Ports\r\nCatalogFile=exampleport.cat\r\nDriverVer=01/02/2011,2.08.24\r\n\r\n"
+    "[ExampleHw]\r\n%PORT.DeviceDesc%=ExamplePort.NT,FTDIBUS\\COMPORT&VID_0403&PID_FDBC\r\n\r\n[ExamplePort.NT]\r\nCopyFiles=ExamplePort.NT.Copy\r\n";
 
 static BYTE *to_utf16(const char *s, BOOL bom, BOOL be, DWORD *n)     // ASCII text as UTF-16 (the 0xA9 of the copyright sign stays a character)
 {
@@ -81,7 +83,7 @@ static char *replace_all(const char *s, const char *a, const char *b)
 static void test_inf(void)
 {
     DWORD n; BYTE *u; char *t;
-    CHECK(drv_inf_matches((const BYTE *)DYNA_INF, (DWORD)strlen(DYNA_INF)), L"Dyna Pro bus INF (ANSI)");
+    CHECK(drv_inf_matches((const BYTE *)DYNA_INF, (DWORD)strlen(DYNA_INF)), L"synthetic bus INF (ANSI)");
     CHECK(drv_inf_matches((const BYTE *)DYNA_INF, (DWORD)strlen(DYNA_INF) + 1), L"... with the terminating NUL counted");
     u = to_utf16(DYNA_INF, TRUE, FALSE, &n);   CHECK(drv_inf_matches(u, n), L"UTF-16LE with a byte order mark"); free(u);
     u = to_utf16(DYNA_INF, FALSE, FALSE, &n);  CHECK(drv_inf_matches(u, n), L"UTF-16LE without a byte order mark"); free(u);
@@ -94,10 +96,10 @@ static void test_inf(void)
     // as Windows keeps it in the driver store: oemNN.inf is a copy
     CHECK(drv_inf_matches((const BYTE *)DYNA_INF, sizeof(DYNA_INF) - 1), L"the copy in the driver store");
 
-    CHECK(!drv_inf_matches((const BYTE *)STOCK_INF, (DWORD)strlen(STOCK_INF)), L"stock FTDI bus INF (no Dyna Pro id, newer version)");
-    CHECK(!drv_inf_matches((const BYTE *)PORT_INF, (DWORD)strlen(PORT_INF)), L"the FTDIPORT INF is not the bus INF");
+    CHECK(!drv_inf_matches((const BYTE *)STOCK_INF, (DWORD)strlen(STOCK_INF)), L"newer bus INF without the hardware id");
+    CHECK(!drv_inf_matches((const BYTE *)PORT_INF, (DWORD)strlen(PORT_INF)), L"the port INF is not the bus INF");
     t = replace_first(DYNA_INF, "2.08.24", "2.12.28");
-    CHECK(!drv_inf_matches((const BYTE *)t, (DWORD)strlen(t)), L"Dyna Pro id but another driver version"); free(t);
+    CHECK(!drv_inf_matches((const BYTE *)t, (DWORD)strlen(t)), L"the hardware id but another driver version"); free(t);
     t = replace_first(DYNA_INF, "DriverVer=", ";DriverVer=");
     CHECK(!drv_inf_matches((const BYTE *)t, (DWORD)strlen(t)), L"the version only in a comment"); free(t);
     t = replace_first(DYNA_INF, "2.08.24", "2.08.240");
@@ -110,7 +112,7 @@ static void test_inf(void)
     CHECK(!drv_inf_matches((const BYTE *)"\xFF\xFE", 2), L"only a byte order mark");
     CHECK(!drv_inf_matches((const BYTE *)"\0\0\0\0\0\0\0\0", 8), L"zero bytes");
     CHECK(!drv_inf_matches((const BYTE *)"MZ\x90\x00\x03\x00\x00\x00", 8), L"an exe");
-    u = to_utf16(STOCK_INF, TRUE, FALSE, &n); CHECK(!drv_inf_matches(u, n), L"stock INF, UTF-16"); free(u);
+    u = to_utf16(STOCK_INF, TRUE, FALSE, &n); CHECK(!drv_inf_matches(u, n), L"newer INF, UTF-16"); free(u);
 }
 
 /* ---------- 2. code integrity ---------- */
@@ -138,6 +140,14 @@ static void test_bde(void)
     CHECK(drv_bde_suspend(BDE_PS_UNKNOWN), L"status unknown: old behaviour, try");
     CHECK(drv_bde_suspend(BDE_PS_ERROR), L"WMI not readable: old behaviour, try");
     CHECK(drv_bde_suspend(7), L"an unexpected value is not 'off'");
+    // at prep time (also a retry): a volume we suspended earlier reports protection off, our own flag then still starts the count over
+    CHECK(drv_bde_suspend_now(BDE_PS_ON, FALSE), L"prep, protection on: suspend");
+    CHECK(drv_bde_suspend_now(BDE_PS_ON, TRUE), L"prep, protection on, flag set: suspend");
+    CHECK(drv_bde_suspend_now(BDE_PS_OFF, TRUE), L"retry: off because we suspended it (flag set): suspend again");
+    CHECK(drv_bde_suspend_now(BDE_PS_NONE, TRUE), L"retry, flag set, no status: suspend again");
+    CHECK(!drv_bde_suspend_now(BDE_PS_OFF, FALSE), L"off and not ours: leave alone");
+    CHECK(!drv_bde_suspend_now(BDE_PS_NONE, FALSE), L"no BitLocker and not ours: nothing to do");
+    CHECK(drv_bde_suspend_now(BDE_PS_UNKNOWN, FALSE), L"status unknown: try, as before");
 }
 
 /* ---------- 3. task XML ---------- */
@@ -289,8 +299,8 @@ static BOOL file_is(const WCHAR *dir, const WCHAR *rel, const BYTE *d, DWORD n)
     return ok;
 }
 
-static const BYTE TEXT66[] = "; FTDIBUS.INF line one\r\n; line two, line two, line two, line two\r\n";     // 66 bytes
-static const BYTE TEXT66_DEFLATE[] = { 0xb3,0x56,0x70,0x0b,0x71,0xf1,0x74,0x0a,0x0d,0xd6,0xf3,0xf4,0x73,0x53,0xc8,0xc9,0xcc,0x4b,0x55,0xc8,0xcf,0x4b,0xe5,0xe5,0xb2,0x86,0xb0,0x4b,0xca,0xf3,0x75,0xf0,0xb2,0x78,0xb9,0x00 };
+static const BYTE TEXT66[] = "; sample file line one\r\n; line two, line two, line two, line two\r\n";     // 66 bytes
+static const BYTE TEXT66_DEFLATE[] = { 0xb3,0x56,0x28,0x4e,0xcc,0x2d,0xc8,0x49,0x55,0x48,0xcb,0x04,0x12,0x39,0x99,0x79,0xa9,0x0a,0xf9,0x79,0xa9,0xbc,0x5c,0xd6,0x10,0x76,0x49,0x79,0xbe,0x0e,0x5e,0x16,0x2f,0x17,0x00 };   // raw deflate of TEXT66
 static const BYTE BIN[] = { 1, 2, 3, 0, 255, 254, 0, 7 };
 // a deflate "stored" block: header 01, LEN, NLEN, data
 static const BYTE STORED_BLOCK[] = { 0x01, 0x08, 0x00, 0xF7, 0xFF, 1, 2, 3, 0, 255, 254, 0, 7 };
@@ -462,6 +472,74 @@ static void test_misc(void)
     } else wprintf(L"info: could not create the protected folder here (%lu): ACL checks skipped\n", GetLastError());
 }
 
+static BOOL fake_ok(const WCHAR *p) { (void)p; return FALSE; }      // "not user-writable"
+static BOOL fake_bad(const WCHAR *p) { (void)p; return TRUE; }
+static BOOL fake_bad_exe(const WCHAR *p) { int n = lstrlenW(p); return n > 4 && !lstrcmpiW(p + n - 4, L".exe"); }   // only a file ending in .exe
+
+static void mb_file(const WCHAR *dir, const WCHAR *name)
+{
+    WCHAR f[MAX_PATH]; HANDLE h;
+    wsprintfW(f, L"%s\\%s", dir, name);
+    h = CreateFileW(f, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+// make_base never adopts an old folder it cannot remove, and checks the result
+static void test_make_base(void)
+{
+    static const WCHAR SID[] = L"S-1-5-21-1-2-3-1001";
+    WCHAR b[MAX_PATH], f[MAX_PATH], g[MAX_PATH]; HANDLE h;
+    BOOL (*saved)(const WCHAR *) = g_is_writable;
+    g_is_writable = fake_ok;
+    wsprintfW(b, L"%s\\mb_new", g_base);
+    CHECK(make_base(b, FALSE, SID) && exists(b), L"no folder yet: created");
+    delete_tree(b, NULL, 0);
+    wsprintfW(b, L"%s\\mb_old", g_base); CreateDirectoryW(b, NULL); mb_file(b, L"stale.txt");
+    wsprintfW(f, L"%s\\stale.txt", b);
+    CHECK(make_base(b, FALSE, SID) && exists(b) && !exists(f), L"an old folder is replaced by an empty one");
+    delete_tree(b, NULL, 0);
+    wsprintfW(b, L"%s\\mb_file", g_base); mb_file(g_base, L"mb_file");
+    CHECK(make_base(b, FALSE, SID) && (GetFileAttributesW(b) & FILE_ATTRIBUTE_DIRECTORY), L"a file with that name is replaced by the folder");
+    delete_tree(b, NULL, 0);
+    // something in the old folder is held open (no sharing): the folder cannot go, so it is not adopted
+    wsprintfW(b, L"%s\\mb_held", g_base); CreateDirectoryW(b, NULL);
+    wsprintfW(f, L"%s\\held.txt", b);
+    h = CreateFileW(f, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    CHECK(h != INVALID_HANDLE_VALUE, L"a file is held open");
+    CHECK(!make_base(b, FALSE, SID), L"a folder with an open file in it: make_base fails");
+    CHECK(!make_base(b, TRUE, SID), L"... also when our own copy may stay (another file is in the way)");
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    delete_tree(b, NULL, 0);
+    // our own running copy stays, nothing else
+    wsprintfW(b, L"%s\\mb_keep", g_base); CreateDirectoryW(b, NULL); mb_file(b, L"DynaRunFix-Setup.exe"); mb_file(b, L"other.bin");
+    wsprintfW(f, L"%s\\DynaRunFix-Setup.exe", b);
+    CHECK(make_base(b, TRUE, SID) && exists(f), L"keep_exe: the setup copy stays, the folder is accepted");
+    wsprintfW(f, L"%s\\other.bin", b);
+    CHECK(!exists(f), L"... and the other file is gone");
+    delete_tree(b, NULL, 0);
+    // the kept copy must be a single plain file: one with a second hard link is refused (its security would be shared)
+    wsprintfW(b, L"%s\\mb_link", g_base); CreateDirectoryW(b, NULL); mb_file(b, L"DynaRunFix-Setup.exe");
+    wsprintfW(f, L"%s\\DynaRunFix-Setup.exe", b);
+    wsprintfW(g, L"%s\\mb_link_other.bin", g_base);
+    if (CreateHardLinkW(g, f, NULL)) {
+        CHECK(!make_base(b, TRUE, SID), L"keep_exe: a kept setup copy with a second hard link is refused");
+        DeleteFileW(g);
+    } else wprintf(L"info: hard links not available here: that case is not checked\n");
+    delete_tree(b, NULL, 0);
+    // the kept copy, when users could change it, is refused (the folder itself is fine)
+    wsprintfW(b, L"%s\\mb_keepbad", g_base); CreateDirectoryW(b, NULL); mb_file(b, L"DynaRunFix-Setup.exe");
+    g_is_writable = fake_bad_exe;
+    CHECK(!make_base(b, TRUE, SID), L"keep_exe: a setup copy that users can change is refused");
+    g_is_writable = fake_ok;
+    delete_tree(b, NULL, 0);
+    // the result is checked: a folder that users could change is refused
+    g_is_writable = fake_bad;
+    wsprintfW(b, L"%s\\mb_bad", g_base);
+    CHECK(!make_base(b, FALSE, SID), L"a staging folder that users can change is refused");
+    delete_tree(b, NULL, 0);
+    g_is_writable = saved;
+}
+
 static void test_real_zip(void)
 {
     WCHAR zip[MAX_PATH], out[MAX_PATH], p[MAX_PATH], hex[65]; ULONGLONG size; int files = 0, rc; volatile LONG nocancel = 0; DWORD n; BYTE *f;
@@ -497,6 +575,7 @@ int wmain(void)
     wprintf(L"[zip extraction]\n"); test_zip_extract();
     wprintf(L"[zip walk]\n"); test_zip_walk();
     wprintf(L"[misc]\n"); test_misc();
+    wprintf(L"[staging folder]\n"); test_make_base();
     wprintf(L"[real zip]\n"); test_real_zip();
     delete_tree(g_base, NULL, 0);
     wprintf(L"\n%d passed, %d failed\n", g_pass, g_fail);
