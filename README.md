@@ -164,6 +164,8 @@ All versions: [CHANGELOG.md](CHANGELOG.md).
 3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
    once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
 
+   First time on this PC? Install the Dyna Pro USB driver first: see [docs/DRIVER.md](docs/DRIVER.md).
+
 | | | |
 |---|---|---|
 | ![1. Start](docs/img/setup-start.png) | ![2. Download from Dyna Pro](docs/img/setup-download.png) | ![3. Setup password](docs/img/setup-password.png) |
@@ -757,6 +759,8 @@ v1.2.2:
    Windows 會詢問一次是否允許變更，請按 **是**。
 3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
    請按 **是**，DynaRun 會自己重新啟動。
+
+   這台電腦第一次連接 Dyna Pro?請先安裝 Dyna Pro USB 驅動程式,見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
 
 | | | |
 |---|---|---|
