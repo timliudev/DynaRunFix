@@ -547,6 +547,39 @@ static void test_redirects(void)
     CHECK(!pkg_redirect_target(L"https://dynapro.co.uk/a", L"https://github.com/b", DYNAPRO_HOST, out, 300), L"single pinned host: other host refused");
 }
 
+// The copy made for the elevated start from a network drive: new file, held open, same content, cannot be changed while held
+static void test_copy_and_hold(void)
+{
+    WCHAR src[MAX_PATH], dst[MAX_PATH], sys[MAX_PATH]; HANDLE h, w; BYTE b1[64], b2[64]; DWORD n, m; int same = 1;
+    GetSystemDirectoryW(sys, MAX_PATH);
+    wsprintfW(src, L"%s\\hold-src.bin", g_base); wsprintfW(dst, L"%s\\hold-dst.bin", g_base);
+    mkfile(g_base, L"hold-src.bin", "0123456789abcdef");
+    DeleteFileW(dst);
+    h = copy_and_hold(src, dst);
+    CHECK(h != INVALID_HANDLE_VALUE, L"copy_and_hold makes and holds the copy");
+    if (h != INVALID_HANDLE_VALUE) {
+        w = CreateFileW(dst, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        CHECK(w == INVALID_HANDLE_VALUE, L"the held copy cannot be opened for writing"); if (w != INVALID_HANDLE_VALUE) CloseHandle(w);
+        CHECK(!DeleteFileW(dst), L"the held copy cannot be deleted");
+        CHECK(!MoveFileW(dst, src), L"the held copy cannot be renamed over the original");
+        w = CreateFileW(dst, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        CHECK(w != INVALID_HANDLE_VALUE, L"but it can be read (and so run)");
+        if (w != INVALID_HANDLE_VALUE) {
+            HANDLE s = CreateFileW(src, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            ReadFile(w, b1, sizeof(b1), &n, NULL); ReadFile(s, b2, sizeof(b2), &m, NULL);
+            same = n == m && n == 16 && !memcmp(b1, b2, n);
+            CloseHandle(s); CloseHandle(w);
+        }
+        CHECK(same, L"the copy has the content of the original");
+        CloseHandle(h);
+        CHECK(DeleteFileW(dst), L"after the handle is closed the copy can be deleted");
+    }
+    h = copy_and_hold(src, src);                       // dst exists: CREATE_NEW refuses, nothing is overwritten
+    CHECK(h == INVALID_HANDLE_VALUE, L"an existing destination is refused");
+    { char c[32]; DWORD r; HANDLE f = CreateFileW(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL); ReadFile(f, c, 16, &r, NULL); CloseHandle(f); CHECK(r == 16 && c[0] == '0', L"the original is untouched"); }
+    DeleteFileW(src);
+}
+
 static void test_misc(void)
 {
     WCHAR a[80], b[80];
@@ -616,6 +649,7 @@ int wmain(void)
     wprintf(L"[manifest]\n"); test_manifest();
     wprintf(L"[urls]\n"); test_urls();
     wprintf(L"[redirects]\n"); test_redirects();
+    wprintf(L"[copy and hold]\n"); test_copy_and_hold();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     {   // clean up

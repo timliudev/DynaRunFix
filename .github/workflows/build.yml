@@ -3,7 +3,7 @@ name: build
 on:
   push:
     branches: [main, develop]
-    tags: ['v[0-9]*']
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
 
@@ -23,11 +23,20 @@ jobs:
         with:
           persist-credentials: false
 
+      # A tag build only for a name of the form vN.N.N (the name goes into the build; nothing else is let through).
+      - name: Check the tag name
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "tag name '$env:TAG' is not of the form vN.N.N" }
+
       # Every cmd step stops at the first failing command.
       - name: Build
         shell: cmd
         run: |
-          if "%GITHUB_REF_TYPE%"=="tag" set DRF_VERSION=%GITHUB_REF_NAME:~1%
+          if "%GITHUB_REF_TYPE%"=="tag" set "DRF_VERSION=%GITHUB_REF_NAME:~1%"
           call build.cmd || exit /b 1
           call tests\build-tests.cmd || exit /b 1
           call tests\build-shexec-tests.cmd || exit /b 1
@@ -71,6 +80,13 @@ jobs:
       id-token: write        # sign the build provenance (Sigstore, OIDC)
       attestations: write    # store the build provenance attestation
     steps:
+      - name: Check the tag name
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "tag name '$env:TAG' is not of the form vN.N.N" }
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
