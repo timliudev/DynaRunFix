@@ -74,6 +74,7 @@ static const WCHAR UNINSTKEY[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\
 static const WCHAR DYNARUN_REL[] = L"\\Dyna Pro Dynamometers\\DynaRun V3.exe";
 
 BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE, g_keep;
+int g_drvmode;                    // DRV_MODE_*: the wizard starts at the driver pages (driver.c, wizard.c)
 int g_pinresult;
 HWND g_hwnd;
 WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
@@ -191,7 +192,7 @@ static BOOL same_bytes(const WCHAR *p, const void *d, DWORD n)   // the file on 
     return r;
 }
 
-static BOOL same_file(const WCHAR *a, const WCHAR *b)
+BOOL same_file(const WCHAR *a, const WCHAR *b)
 {
     DWORD n; void *d = read_file(a, &n); BOOL r = d && same_bytes(b, d, n);
     release(d);
@@ -214,7 +215,7 @@ static BOOL name_in(const WCHAR *list, const WCHAR *n)
 
 // Deletes dir and everything in it, except the top-level names in keep (a multi-string; dir then stays). A link (junction,
 // symbolic link) is removed itself and never followed. What is in use is renamed aside and goes at the next restart.
-static void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth)
+void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth)
 {
     WCHAR *p; WIN32_FIND_DATAW fd; HANDLE f; DWORD a = GetFileAttributesW(dir); BOOL kept = FALSE;
     if (a == INVALID_FILE_ATTRIBUTES) return;
@@ -338,6 +339,13 @@ static BOOL user_writable(const WCHAR *path)
 }
 
 static BOOL (*g_is_writable)(const WCHAR *path) = user_writable;     // the tests replace this
+
+// driver.c: may ordinary users (and the user who started the setup, sid) change what is at path?
+BOOL path_user_writable(const WCHAR *path, const WCHAR *sid)
+{
+    if (sid && sid[0]) lstrcpynW(g_user_sid, sid, 200);
+    return g_is_writable(path);
+}
 
 static BOOL is_dynarun_name(const WCHAR *p)
 {
@@ -1433,7 +1441,7 @@ void start_dynarun(void)
     ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, dir[0] ? dir : NULL, SW_SHOWNORMAL);
 }
 
-static BOOL enable_privilege(const WCHAR *name)
+BOOL enable_privilege(const WCHAR *name)
 {
     HANDLE t; TOKEN_PRIVILEGES tp; BOOL r = FALSE;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &t)) return FALSE;
@@ -1527,7 +1535,7 @@ static void unretarget_all_users(const WCHAR *skip)
 /* ---------- stages ---------- */
 
 // the command line of the elevated stage is not trusted: a user SID is a SID of a real account with a profile on this machine
-static BOOL valid_user_sid(const WCHAR *sid)
+BOOL valid_user_sid(const WCHAR *sid)
 {
     static WCHAR key[300]; PSID s; BOOL ok = FALSE;
     if (lstrlenW(sid) < 8 || lstrlenW(sid) > 120 || (lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-5-21") && lstrcmpiW(lstrcpynW(key, sid, 9), L"S-1-12-1"))) return FALSE;
@@ -1569,6 +1577,7 @@ static int machine_install_locked(const WCHAR *sid)
         error2(T(L"Cannot copy the uninstaller.", L"無法複製解除安裝程式。"), p);
         return 1;
     }
+    driver_machine_stage(p);                            // the Start menu shortcut to the driver installation (p: the installed setup)
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return 1;
     set_str(k, L"InstallDir", g_dir);
     if (g_exe_trusted) set_str(k, L"DynaRunExe", g_exe);     // a path that ordinary users can change is not recorded for the elevated stages (uninstall) to use
@@ -1718,13 +1727,14 @@ static int machine_uninstall(const WCHAR *skip_sid)
         RegDeleteValueW(k, L"InstallDir"); RegDeleteValueW(k, L"TaskbarPolicy"); RegDeleteValueW(k, L"TaskbarPolicySid"); RegCloseKey(k);
     }
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, UNINSTKEY);
+    driver_machine_uninstall();                      // the driver shortcut and, if one is waiting, the task of the driver installation (an installed driver stays)
     delete_tree(g_dir, KEEP, 0);
     stage_unlock();
     return 0;
 }
 
 // Runs "<exe> <args>" elevated (one UAC prompt) and returns its exit code; 2 = cancelled. exe: the program to run, NULL = this one.
-static int run_elevated(const WCHAR *args, const WCHAR *exe_path)
+int run_elevated(const WCHAR *args, const WCHAR *exe_path)
 {
     SHELLEXECUTEINFOW se; DWORD rc = 1, err, tn; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = exe_path ? exe_path : g_self;
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
@@ -2073,6 +2083,8 @@ void WinMainCRTStartup(void)
         reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
         CoInitialize(NULL);
         rc = machine_uninstall(argc >= 3 && argv[2][0] == 'S' && argv[2][1] == '-' ? argv[2] : NULL);
+    } else if (argc >= 2 && (rc = driver_verb(argc, argv)) != DRV_NOVERB) {
+        // /driver, /driver-continue (the wizard at the driver pages), /driver-prep, /driver-install, /driver-cancel (driver.c)
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall();
     else if (argc >= 2 && !lstrcmpiW(argv[1], L"/checkupdate")) rc = update_check();
     else if (argc >= 2 && !lstrcmpiW(argv[1], L"/update")) rc = update_run(after_args(2));
