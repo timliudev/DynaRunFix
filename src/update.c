@@ -117,38 +117,13 @@ static void set_time(HKEY k, const WCHAR *name, ULONGLONG t) { RegSetValueExW(k,
 
 /* ---------- the release, from GitHub's API ---------- */
 
-static WCHAR lw(WCHAR c) { return c >= 'A' && c <= 'Z' ? (WCHAR)(c + 'a' - 'A') : c; }
-
-// Host of an https URL, lower-case, into out. FALSE for anything but "https://host[/?#...]": a user name ("host@evil"), a port
-// or an empty or over-long host are not accepted.
-static BOOL https_host(const WCHAR *u, WCHAR *out, int cch)
-{
-    static const WCHAR scheme[] = L"https://"; int i, n = 0;
-    for (i = 0; scheme[i]; i++) if (lw(u[i]) != scheme[i]) return FALSE;     // stops at the terminator: never reads past it
-    for (u += i; *u && *u != '/' && *u != '?' && *u != '#'; u++) {
-        if (*u == '@' || *u == ':' || n >= cch - 1) return FALSE;
-        out[n++] = lw(*u);
-    }
-    out[n] = 0;
-    return n > 0;
-}
-
-// Hosts GitHub answers from: the API, the web site, and the release-asset CDN (github.com redirects the download of
-// releases/download/<tag>/<asset> to release-assets.githubusercontent.com today; objects.githubusercontent.com before 2025).
-static BOOL github_host(const WCHAR *h)
-{
-    static const WCHAR *const ok[] = { L"api.github.com", L"github.com", L"objects.githubusercontent.com", L"release-assets.githubusercontent.com" };
-    int i;
-    for (i = 0; i < (int)(sizeof(ok) / sizeof(ok[0])); i++) if (!lstrcmpW(h, ok[i])) return TRUE;
-    return FALSE;
-}
-
 // GET url over https (INTERNET_FLAG_SECURE; certificate errors are never ignored) and the answer's body; *status = the HTTP status,
-// or a WinINet error number when there was none. The URL the request ended up at (after redirects) must still be on a GitHub
-// host. NULL unless the status is 200 and the whole body (at most 512 KB) was read.
+// or a WinINet error number when there was none. WinINet is not left to follow redirects: every hop (the URL and each redirect
+// target) is checked against GITHUB_HOSTS before a request is sent to it (pkg_open_following, package.c). NULL unless the
+// status is 200 and the whole body (at most 512 KB) was read.
 static char *http_get(const WCHAR *url, DWORD *status)
 {
-    HINTERNET in, h; DWORD timeout = 15000, proto, n = sizeof(*status), size = 0, cap = 512 * 1024; char *buf = NULL; static WCHAR fin[2100]; WCHAR host[100]; BOOL done = FALSE;
+    HINTERNET in, h; DWORD timeout = 15000, proto, n, size = 0, cap = 512 * 1024, err; char *buf = NULL; BOOL done = FALSE, refused;
     in = InternetOpenW(L"DynaRunFix/" WIDEN(DRF_VERSION), INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     *status = 0;
     if (!in) { *status = GetLastError(); return NULL; }
@@ -158,15 +133,10 @@ static char *http_get(const WCHAR *url, DWORD *status)
     // supported (XP, Vista) the system default stays and the connection to GitHub simply fails.
     proto = 0x2800;
     if (!InternetSetOptionW(in, 184 /* INTERNET_OPTION_SECURE_PROTOCOLS */, &proto, sizeof(proto))) { proto = 0x800; InternetSetOptionW(in, 184, &proto, sizeof(proto)); }
-    h = InternetOpenUrlW(in, url, L"Accept: application/vnd.github+json\r\n", (DWORD)-1,
-                         INTERNET_FLAG_SECURE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_COOKIES, 0);
-    if (!h) *status = GetLastError();         // WinINet error (12xxx), e.g. 12007 no name resolution, 12157 TLS
+    h = pkg_open_following(in, url, GITHUB_HOSTS, L"Accept: application/vnd.github+json\r\n", status, &err, &refused);
+    if (!h) *status = refused ? ERROR_INTERNET_INVALID_URL : err;     // WinINet error (12xxx), e.g. 12007 no name resolution, 12157 TLS; refused: off GitHub or off https
     else {
-        n = sizeof(fin);
-        if (!InternetQueryOptionW(h, INTERNET_OPTION_URL, fin, &n) || !https_host(fin, host, 100) || !github_host(host))
-            *status = ERROR_INTERNET_INVALID_URL;                     // redirected away from GitHub (or off https)
-        else if (n = sizeof(*status), HttpQueryInfoW(h, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, status, &n, NULL) && *status == 200 &&
-                 (buf = alloc(cap + 1))) {
+        if (*status == 200 && (buf = alloc(cap + 1))) {
             for (;;) {
                 if (!InternetReadFile(h, buf + size, cap - size, &n)) break;      // a broken connection is not a complete answer
                 if (!n) { done = TRUE; break; }
@@ -174,8 +144,8 @@ static char *http_get(const WCHAR *url, DWORD *status)
             }
             if (!done || size == 0) { release(buf); buf = NULL; }        // incomplete, nothing, or larger than any release we expect
         }
+        InternetCloseHandle(h);
     }
-    if (h) InternetCloseHandle(h);
     InternetCloseHandle(in);
     return buf;                         // zero-terminated by alloc
 }

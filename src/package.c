@@ -179,12 +179,33 @@ static DWORD parse_len(const WCHAR *s)           // decimal number, saturating
 
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts) { return url_ok(u, hosts); }   // for the tests
 
+// The URL a redirect from `cur` to `loc` leads to, into out (cch chars): an absolute https target, or a new path on the same host.
+// FALSE when it cannot be followed (http://, another scheme, a protocol-relative or relative path, too long) or is not on `host`
+// (NULL = any host, https still required).
+BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch)
+{
+    int a, n;
+    if (url_ok(loc, NULL)) {                                                               // absolute https target
+        if (lstrlenW(loc) >= cch) return FALSE;
+        lstrcpyW(out, loc);
+    }
+    else if (loc[0] == '/' && loc[1] != '/') {                                             // same host, new path
+        if (!url_ok(cur, NULL) || lstrlenW(cur) >= cch) return FALSE;
+        for (a = 8; cur[a] && cur[a] != '/' && cur[a] != '?' && cur[a] != '#'; a++);
+        n = lstrlenW(loc);
+        if (a + n >= cch) return FALSE;
+        lstrcpynW(out, cur, a + 1); lstrcatW(out, loc);
+    }
+    else return FALSE;                                                                     // http://, another scheme, a relative path
+    return url_ok(out, host);
+}
+
 // Opens url without letting WinINet follow redirects: each hop is checked (https, and the pinned host) before a request is sent to it.
 // Returns the open request (status = its HTTP status, a 3xx without a Location included), or NULL: *refused when a URL was refused,
-// else *err is the Win32 error.
-static HINTERNET open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
+// else *err is the Win32 error. Also used by the update check (update.c).
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
 {
-    static WCHAR cur[URLCCH], loc[URLCCH]; HINTERNET h; DWORD n, hop; int a;
+    static WCHAR cur[URLCCH], loc[URLCCH], nxt[URLCCH]; HINTERNET h; DWORD n, hop;
     *status = 0; *err = 0; *refused = FALSE;
     lstrcpynW(cur, url, URLCCH);
     for (hop = 0; hop <= MAX_HOPS; hop++) {
@@ -203,14 +224,8 @@ static HINTERNET open_following(HINTERNET in, const WCHAR *url, const WCHAR *hos
         if (!HttpQueryInfoW(h, HTTP_QUERY_LOCATION, loc, &n, NULL) || !loc[0]) return h;   // no target: the caller reports the status
         InternetCloseHandle(h);
         if (hop == MAX_HOPS) break;
-        if (url_ok(loc, NULL)) lstrcpynW(cur, loc, URLCCH);                                // absolute https target
-        else if (loc[0] == '/' && loc[1] != '/') {                                         // same host, new path
-            for (a = 8; cur[a] && cur[a] != '/' && cur[a] != '?' && cur[a] != '#'; a++);
-            if (a + lstrlenW(loc) >= URLCCH) break;
-            cur[a] = 0; lstrcatW(cur, loc);
-        }
-        else break;                                                                        // http://, another scheme, a relative path
-        if (!url_ok(cur, host)) break;
+        if (!pkg_redirect_target(cur, loc, host, nxt, URLCCH)) break;
+        lstrcpyW(cur, nxt);
     }
     *refused = TRUE;
     return NULL;
@@ -260,7 +275,7 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
         have = sz.LowPart;
         hdr[0] = 0;
         if (have && oldtag[0]) wsprintfW(hdr, L"Range: bytes=%lu-\r\nIf-Range: %s\r\n", have, oldtag);   // resume only the same file
-        h = open_following(in, url, host, hdr[0] ? hdr : NULL, &status, err, &refused);
+        h = pkg_open_following(in, url, host, hdr[0] ? hdr : NULL, &status, err, &refused);
         if (!h) {
             CloseHandle(f);
             if (refused) { *err = 0; rc = PK_URL; break; }                  // redirected off https or off the host

@@ -12,6 +12,7 @@ void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 int msg(const WCHAR *t, UINT f) { (void)t; (void)f; return IDOK; }
 int running_programs(void) { return 0; }
 int pkg_fetch(const WCHAR *u, const WCHAR *n, const WCHAR *e, const WCHAR *h, WCHAR *o, progress_fn cb, volatile LONG *c, DWORD *err) { (void)u; (void)n; (void)e; (void)h; (void)o; (void)cb; (void)c; *err = 0; return PK_NET; }
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused) { (void)in; (void)url; (void)host; (void)hdr; *status = 0; *err = ERROR_INTERNET_CANNOT_CONNECT; *refused = FALSE; return NULL; }
 
 static int g_fail, g_pass;
 #define CHECK(c, what) do { if (c) { g_pass++; } else { g_fail++; wprintf(L"FAIL line %d: %s\n", __LINE__, what); } } while (0)

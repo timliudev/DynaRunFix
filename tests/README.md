@@ -22,7 +22,7 @@ To run the tests against another revision of the sources: `tests\build-tests.cmd
 
 # First-run helper path tests
 
-`tests\build-shexec-tests.cmd` builds and runs `tests\test_shexec_match.c` (the path matching in `src\setup_match.h`); exit code 0 = all passed. The log tests above only check that an over-long Setup_ path is passed through and nothing is logged for it.
+`tests\build-shexec-tests.cmd` builds and runs `tests\test_shexec_match.c` (the path matching in `src\setup_match.h`), `tests\test_dfutil.c` (the `DYNAFIX_*` switch parsing and the `dynapro.dll` file name match in `src\dfutil.h`) and `tests\test_launcher.c` (the launcher's registry path read with long, mistyped and unterminated values, the same-session DynaRun lookup, the token elevation query; it writes only `HKCU\Software\DynaRunFixTest-<pid>`); exit code 0 = all passed. The log tests above only check that an over-long Setup_ path is passed through and nothing is logged for it.
 
 # Installer hardening tests
 
@@ -30,7 +30,7 @@ To run the tests against another revision of the sources: `tests\build-tests.cmd
 `test_hardening.c` (`src\setup.c`, `src\package.c`) and `test_update.c` (`src\update.c`, with its own `version.h` in `tests\fakever`).
 They create only `%TEMP%\drf-sec-<pid>`, `%TEMP%\drf-upd-<pid>` and `HKCU\Software\DynaRunFixTest-<pid>` and delete them again; HKLM and the real
 DynaRun and DynaRunFix installs are not touched (the only look at the machine is read-only: the ACL of an installed DynaRun folder is printed).
-They cover the exe modification time that is briefly changed (restore, crash recovery, 2 s rule, one stage at a time), `delete_tree`
+They also cover the rules for where a redirect may lead (`pkg_redirect_target`, used by the update check and the downloads). They cover the exe modification time that is briefly changed (restore, crash recovery, 2 s rule, one stage at a time), `delete_tree`
 with junctions, the administrators-only staging folder, the SID check, the re-check of the noted release, the log lock, that a file held open for
 hashing cannot be changed, renamed or deleted but still starts, and the COM registration path rules and copy logic between two temporary keys
 (junctions, relative/UNC paths, dot-dot, writable folders, `.ocx` only in system folders, AppID/TreatAs/ProgID verbs): the installer no longer

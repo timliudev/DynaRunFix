@@ -290,12 +290,21 @@ static void set_page(int p)
         WCHAR names[200];
         running_names(g_lastrun = running_programs(), names);
         text(ID_TITLE, T(L"DynaRun is running", L"DynaRun 正在執行"));
-        wsprintfW(b, T(L"DynaRun must be closed to install:\n%s\n"
-                       L"\"Close DynaRun and install\" closes it now.\nA test run in progress stops, unsaved data is lost.",
-                       L"安裝前必須關閉 DynaRun：\n%s\n"
-                       L"按「關閉 DynaRun 並安裝」會立即關閉它。\n正在進行的測試會中斷，沒存檔的資料會遺失。"), names);
-        text(ID_BODY, b);
-        buttons(T(L"Close DynaRun and install", L"關閉 DynaRun 並安裝"), T(L"Cancel", L"取消"), NULL);
+        if (g_lastrun & RUN_NOCLOSE) {               // another user's, or one that cannot be identified: closing from here would not help
+            wsprintfW(b, T(L"DynaRun is running for another user, or as a program that cannot be identified, so it cannot be closed from here:\n%s\n"
+                           L"Ask that user to close DynaRun; this page then offers \"Install\".",
+                           L"另一位使用者（或無法辨識的程式）正在執行 DynaRun，無法從這裡關閉：\n%s\n"
+                           L"請該使用者先關閉 DynaRun，關閉後這個頁面會出現「安裝」按鈕。"), names);
+            text(ID_BODY, b);
+            buttons(NULL, T(L"Cancel", L"取消"), NULL);
+        } else {
+            wsprintfW(b, T(L"DynaRun must be closed to install:\n%s\n"
+                           L"\"Close DynaRun and install\" closes it now.\nA test run in progress stops, unsaved data is lost.",
+                           L"安裝前必須關閉 DynaRun：\n%s\n"
+                           L"按「關閉 DynaRun 並安裝」會立即關閉它。\n正在進行的測試會中斷，沒存檔的資料會遺失。"), names);
+            text(ID_BODY, b);
+            buttons(T(L"Close DynaRun and install", L"關閉 DynaRun 並安裝"), T(L"Cancel", L"取消"), NULL);
+        }
         if (g_note[0]) status(g_note, TRUE);
         SetTimer(g_hwnd, TIMER_RUNNING, 1000, NULL);
         break;

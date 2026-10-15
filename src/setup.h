@@ -1,6 +1,7 @@
 // Shared declarations of DynaRunFix-Setup.exe (setup.c, wizard.c, package.c).
 #pragma once
 #include <windows.h>
+#include <wininet.h>
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
@@ -33,8 +34,9 @@ BOOL valid_user_sid(const WCHAR *sid);      // a SID of a real account with a pr
 BOOL path_user_writable(const WCHAR *path, const WCHAR *sid);   // could ordinary users (or the user sid) change what is at path (or is that unknown)
 BOOL enable_privilege(const WCHAR *name);
 #define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed
-enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4 };
-int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces
+enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4, RUN_CANCLOSE = 8, RUN_NOCLOSE = 16 };
+int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces. RUN_CANCLOSE: one of them can be closed
+                                            // by the setup; RUN_NOCLOSE: one cannot (another session, or its exe path cannot be told)
 
 /* update.c */
 int update_check(void);                     // /checkupdate: notes a newer release in HKCU\Software\DynaRunFix; no UI
@@ -64,6 +66,8 @@ BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .
 void pkg_reject(const WCHAR *path);         // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts);   // https and on one of the ';'-separated hosts (NULL = any)
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused);   // redirects followed by hand, each hop checked
+BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch);   // where a redirect from cur to loc goes, if allowed
 int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const WCHAR *host, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 // Every entry of the central directory, in order: fn(name as stored (not 0-terminated), its length, entry, ctx). fn returns FALSE to stop.
