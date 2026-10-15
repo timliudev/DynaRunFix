@@ -13,6 +13,10 @@ int wizard(void) { return 0; }
 int update_check(void) { return 0; }
 int update_offer(void) { return 0; }
 int update_run(const WCHAR *a) { (void)a; return 0; }
+// driver.c is not part of this test (it would touch ProgramData and the Start menu): tests\test_driver.c covers it
+int driver_verb(int argc, WCHAR **argv) { (void)argc; (void)argv; return DRV_NOVERB; }
+void driver_machine_stage(const WCHAR *p) { (void)p; }
+void driver_machine_uninstall(void) { }
 
 static int g_fail, g_pass;
 #define CHECK(c, what) do { if (c) { g_pass++; } else { g_fail++; wprintf(L"FAIL line %d: %s\n", __LINE__, what); } } while (0)

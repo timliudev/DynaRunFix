@@ -36,4 +36,8 @@ hashing cannot be changed, renamed or deleted but still starts, and the COM regi
 (junctions, relative/UNC paths, dot-dot, writable folders, `.ocx` only in system folders, AppID/TreatAs/ProgID verbs): the installer no longer
 copies COM registrations, that code is only kept under test. Exit code 0 = all passed.
 
-The CI workflow (`.github/workflows/build.yml`) runs `build-tests.cmd`, `build-shexec-tests.cmd` and `build-hardening-tests.cmd` in the `build` job (read-only token); the release is made by a separate job. The scripts use a release Visual Studio; set `DRF_ALLOW_PRERELEASE=1` locally to allow a pre-release one.
+# Driver tests
+
+`tests\build-driver-tests.cmd` (after `build.cmd`) builds and runs `test_driver.c`, which compiles `src\setup.c` and `src\driver.c` into itself and links `build\package.obj`: the INF matcher (ANSI, UTF-16, other versions and the stock FTDI INF), the code integrity classifier, the scheduled task XML (escaping, size limits, well-formed UTF-16), the tool paths (`Sysnative`), the `pnputil` exit codes, the zip entry name rules and the multi-entry zip extraction (zips made in the test: zip-slip, absolute and drive paths, device names, encrypted/unsupported/damaged entries, a real deflate stream). It creates only `%TEMP%\drf-drv-<pid>` and starts no system tool except `powershell` to parse the task XML. Set `DRF_DRIVER_ZIP` to the real `Dyna Pro USB.zip` to check the pinned SHA-256 and the extraction against it. Exit code 0 = all passed.
+
+The CI workflow (`.github/workflows/build.yml`) runs `build-tests.cmd`, `build-shexec-tests.cmd`, `build-hardening-tests.cmd` and `build-driver-tests.cmd` in the `build` job (read-only token); the release is made by a separate job. The scripts use a release Visual Studio; set `DRF_ALLOW_PRERELEASE=1` locally to allow a pre-release one.
