@@ -2,7 +2,8 @@
 // not part of the shipped binaries (see tests\build-driver-tests.cmd). setup.c and driver.c are compiled into this program, so the shipped
 // code is what runs. Nothing outside %TEMP%\drf-drv-<pid> (deleted at the end) is touched: no system tool is started, no HKLM write.
 //
-// (The pinned-file tests also use %TEMP%\DynaRunFix\drvcheck, the scratch folder of the zip scan; it is deleted again.)
+// (The pinned-file tests also use %TEMP%\DynaRunFix\drvcheck, the scratch folder of the zip scan; it is deleted again. driver_check on a folder
+// writes and deletes %TEMP%\DynaRunFix\drvdigest.tmp.)
 //
 // Optional: set DRF_DRIVER_ZIP to the real "Dyna Pro USB.zip" to check the pinned SHA-256, the extraction and the INF matcher against it.
 #define _CRT_SECURE_NO_WARNINGS
@@ -656,6 +657,101 @@ static void test_files(void)
     delete_tree(dir, NULL, 0);
 }
 
+/* ---------- the folder walk, the layout test and driver_check (synthetic packages only) ---------- */
+
+static BOOL has_marker(const WCHAR *dir) { WCHAR p[MAX_PATH]; wsprintfW(p, L"%s\\marker.txt", dir); return exists(p); }
+
+static void touch_file(const WCHAR *path)
+{
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); DWORD w;
+    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, "x", 1, &w, NULL); CloseHandle(h); }
+}
+
+static void test_check(void)
+{
+    WCHAR root[MAX_PATH], a[MAX_PATH], b[MAX_PATH], c[MAX_PATH], o[MAX_PATH], p[MAX_PATH], q[MAX_PATH], hex[65], rep[1500], zip[MAX_PATH];
+    int how = -1, rc, miss = -1; ULONGLONG size = 1; volatile LONG nocancel = 0; HANDLE h;
+    // pkg_find_dir_in: accept() for the root, then for the folders below it, down to `depth` levels
+    wsprintfW(root, L"%s\\walk", g_base); CreateDirectoryW(root, NULL);
+    wsprintfW(a, L"%s\\a", root); CreateDirectoryW(a, NULL);
+    wsprintfW(b, L"%s\\b", a);    CreateDirectoryW(b, NULL);
+    wsprintfW(c, L"%s\\c", b);    CreateDirectoryW(c, NULL);
+    wsprintfW(p, L"%s\\marker.txt", c); touch_file(p);
+    CHECK(!pkg_find_dir_in(root, 0, has_marker, o) && !o[0], L"walk: depth 0 looks at the root only");
+    CHECK(!pkg_find_dir_in(root, 2, has_marker, o) && !o[0], L"walk: a folder three levels down is out of reach for depth 2");
+    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, c), L"walk: depth 3 finds it and returns its path");
+    wsprintfW(p, L"%s\\marker.txt", b); touch_file(p);
+    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, b), L"walk: the nearest approved folder wins");
+    wsprintfW(p, L"%s\\marker.txt", root); touch_file(p);
+    CHECK(pkg_find_dir_in(root, 0, has_marker, o) && !lstrcmpiW(o, root), L"walk: the root itself can be approved");
+    wsprintfW(p, L"%s\\nothing", root);
+    CHECK(!pkg_find_dir_in(p, 2, has_marker, o) && !o[0], L"walk: a folder that does not exist finds nothing");
+    {   // a name that leaves no room for the walk is refused, not overrun
+        WCHAR longp[MAX_PATH + 40]; int i;
+        lstrcpyW(longp, root); for (i = lstrlenW(longp); i < MAX_PATH; i++) longp[i] = 'x'; longp[MAX_PATH] = 0;
+        CHECK(!pkg_find_dir_in(longp, 2, has_marker, o), L"walk: a path that is too long is refused");
+    }
+
+    // driver_layout_ok: ftdibus.inf (a file) with i386 and amd64 folders beside it
+    wsprintfW(root, L"%s\\lay", g_base); CreateDirectoryW(root, NULL);
+    CHECK(!driver_layout_ok(root), L"layout: an empty folder is not a driver folder");
+    wsprintfW(p, L"%s\\ftdibus.inf", root); touch_file(p);
+    CHECK(!driver_layout_ok(root), L"layout: ftdibus.inf alone is not enough");
+    wsprintfW(p, L"%s\\i386", root); CreateDirectoryW(p, NULL);
+    CHECK(!driver_layout_ok(root), L"layout: without amd64 it is not a driver folder");
+    wsprintfW(p, L"%s\\amd64", root); CreateDirectoryW(p, NULL);
+    CHECK(driver_layout_ok(root), L"layout: ftdibus.inf, i386 and amd64: a driver folder");
+    wsprintfW(p, L"%s\\nothing", g_base); CHECK(!driver_layout_ok(p), L"layout: a folder that does not exist");
+    wsprintfW(p, L"%s\\ftdibus.inf", root); CHECK(!driver_layout_ok(p), L"layout: a file is not a folder");
+    wsprintfW(root, L"%s\\lay2", g_base); CreateDirectoryW(root, NULL);
+    wsprintfW(p, L"%s\\ftdibus.inf", root); CreateDirectoryW(p, NULL);                  // a folder with that name, not a file
+    wsprintfW(p, L"%s\\i386", root); CreateDirectoryW(p, NULL); wsprintfW(p, L"%s\\amd64", root); CreateDirectoryW(p, NULL);
+    CHECK(!driver_layout_ok(root), L"layout: ftdibus.inf must be a file");
+    wsprintfW(root, L"%s\\lay3", g_base); CreateDirectoryW(root, NULL);
+    wsprintfW(p, L"%s\\ftdibus.inf", root); touch_file(p);
+    wsprintfW(p, L"%s\\i386", root); touch_file(p);                                          // a file called i386, not a folder
+    wsprintfW(p, L"%s\\amd64", root); CreateDirectoryW(p, NULL);
+    CHECK(!driver_layout_ok(root), L"layout: i386 must be a folder");
+
+    // driver_check on a folder: the synthetic 18-file package (the INF fixture + short texts: none of them is a pinned file)
+    wsprintfW(zip, L"%s\\drv_all.zip", g_base);
+    wsprintfW(root, L"%s\\chk", g_base); CreateDirectoryW(root, NULL);
+    CHECK(stage_files(zip, root, &nocancel, &miss) == PK_OK && miss == 0, L"check: the fixture folder is staged");
+    wsprintfW(a, L"%s\\Dyna Pro USB", root);
+    lstrcpyW(p, a); how = -1; hex[0] = 0; size = 1; rep[0] = 0;
+    rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_W_HASH, L"check: a folder with all 18 files that differ, the bus INF names the device id: the user is asked");
+    CHECK(how == (DRV_SRC_LOCAL | DRV_SRC_DIR) && size == 0 && lstrlenW(hex) == 64 && !lstrcmpiW(p, a), L"check: a folder is a local source, size 0, a 64-digit digest, the path stays the folder");
+    CHECK(rep[0] != 0, L"check: the report names the files that differ");
+    { WCHAR hex2[65]; int how2; ULONGLONG s2; lstrcpyW(q, a); rc = driver_check(q, &how2, hex2, &s2, NULL, 0);
+      CHECK(rc == DRV_W_HASH && !lstrcmpiW(hex, hex2), L"check: the digest of the same folder is the same (and rep may be NULL)"); }
+    lstrcpyW(p, root); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_W_HASH && !lstrcmpiW(p, a), L"check: the parent folder is enough: the driver folder below it is found and the path becomes that folder");
+    wsprintfW(q, L"%s\\amd64\\ftser2k.sys", a); DeleteFileW(q);
+    lstrcpyW(p, a); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH && !hex[0], L"check: a folder with a file missing is not a usable package");
+    wsprintfW(root, L"%s\\chk2", g_base); CreateDirectoryW(root, NULL);
+    CHECK(stage_files(zip, root, &nocancel, &miss) == PK_OK, L"check: a second fixture folder");
+    wsprintfW(a, L"%s\\Dyna Pro USB\\ftdibus.inf", root);
+    h = CreateFileW(a, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL); if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, STOCK_INF, (DWORD)strlen(STOCK_INF), &w, NULL); CloseHandle(h); }
+    wsprintfW(p, L"%s\\Dyna Pro USB", root); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH, L"check: all files there but the bus INF does not name the Dyna Pro device id: not offered");
+    wsprintfW(p, L"%s\\empty", g_base); CreateDirectoryW(p, NULL); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH && how == (DRV_SRC_LOCAL | DRV_SRC_DIR), L"check: a folder without the driver layout");
+    wsprintfW(p, L"%s\\nothing", g_base); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH && how == DRV_SRC_LOCAL && !hex[0], L"check: a path that does not exist");
+
+    // driver_check on a zip
+    wsprintfW(p, L"%s\\drv_all.zip", g_base); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_W_HASH && how == DRV_SRC_LOCAL && size > 0 && lstrlenW(hex) == 64 && rep[0], L"check: a zip with all 18 files that differ: the user is asked (zip hash and size given)");
+    wsprintfW(p, L"%s\\drv_part.zip", g_base); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH, L"check: a zip with files missing is not a usable package");
+    wsprintfW(p, L"%s\\drv_enc.zip", g_base); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH, L"check: a zip whose entries are encrypted is not a usable package");
+    wsprintfW(p, L"%s\\drv_bad.zip", g_base); rc = driver_check(p, &how, hex, &size, rep, 1500);
+    CHECK(rc == DRV_E_HASH, L"check: a file that is not a zip");
+}
+
 /* ---------- a regression guard on the wizard's job table ---------- */
 
 // Once a comment after the call in `case JOB_DRV_PREP: rc = driver_prep(...);  // ... break;` swallowed the break, and the install ran right after
@@ -686,7 +782,7 @@ static void test_job_table(void)
 
 static void test_shared(void)
 {
-    WCHAR zip[MAX_PATH], dir[MAX_PATH], p[MAX_PATH], hex[65]; ULONGLONG sz; volatile LONG nocancel = 0; int miss = -1, n;
+    WCHAR zip[MAX_PATH], dir[MAX_PATH], p[MAX_PATH]; ULONGLONG sz; volatile LONG nocancel = 0; int miss = -1;
     static pkg_file tab[2]; static WCHAR h0[65];
     zent e[] = {
         { "Pack/", NULL, 0, 0, NULL, 0, 0, 0 },
@@ -724,7 +820,6 @@ static void test_shared(void)
     wsprintfW(p, L"%s\\sh1", g_base); CHECK(!pkg_prepare_target(p) && exists(p), L"shared: a folder is refused and left alone");
     { zipent big; zero(&big, sizeof(big)); big.usize = 500; wsprintfW(p, L"%s\\x.msi", g_base);
       CHECK(pkg_extract_checked(&big, "", p, 100, NULL, &nocancel) == PK_FORMAT, L"shared: an entry that claims to be bigger than the cap is refused"); }
-    (void)hex; (void)n;
 }
 
 static void test_hint(void)
@@ -803,6 +898,7 @@ int wmain(void)
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[staging folder]\n"); test_make_base();
     wprintf(L"[pinned files]\n"); test_files();
+    wprintf(L"[folder walk, layout, driver_check]\n"); test_check();
     wprintf(L"[job table]\n"); test_job_table();
     wprintf(L"[shared package machinery]\n"); test_shared();
     wprintf(L"[update hint]\n"); test_hint();
