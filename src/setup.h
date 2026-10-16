@@ -5,6 +5,7 @@
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
+extern BOOL g_autostart_later;                          // the driver follows: the sign-in start is registered once the driver steps are over (autostart_flush)
 extern BOOL g_keep;                                     // /keep: leave the pin, the sign-in start and the desktop shortcut as they are
 extern int g_pinresult;                                 // after the install: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
@@ -20,6 +21,7 @@ void release(void *p);
 BOOL exists(const WCHAR *p);
 int msg(const WCHAR *text, UINT flags);
 BOOL is_admin(void);
+void user_log(const WCHAR *line);           // one line in setup.log (administrator, install folder there) or %TEMP%\DynaRunFix-setup.log
 DWORD os_build(void);                       // Windows build number (real, not the compatibility-shimmed one)
 BOOL user_sid(WCHAR *out, int cch);
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
@@ -43,6 +45,8 @@ int update_check(void);                     // /checkupdate: notes a newer relea
 int update_offer(void);                       // /offer: the launcher started DynaRun; asks beside it, installs once it is closed
 int update_run(const WCHAR *args);          // /update <launcher args>: asks, installs a noted release, starts the launcher
 
+void autostart_flush(void);                 // registers the sign-in start that user_stage deferred (HKCU AutostartPending); no-op otherwise
+
 /* wizard.c */
 int wizard(void);
 
@@ -63,11 +67,17 @@ typedef struct {
 } zipent;
 
 BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .msi inside, in Downloads/Desktop/Documents or next to us
-void pkg_reject(const WCHAR *path);         // not the DynaRun setup after all: pkg_find_local skips it
+BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out);   // the first zip (at most maxsize bytes) in the same places that accept() approves
+extern void (*g_pkg_log)(const WCHAR *line);   // set to log the folders the zip searches look in (NULL: silent)
+BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // the first folder accept() approves, in the same places (two levels down in Downloads)
+BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out);   // the newest zip whose name starts with prefix in the same places
+void pkg_reject(const WCHAR *path);       // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts);   // https and on one of the ';'-separated hosts (NULL = any)
 HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused);   // redirects followed by hand, each hop checked
 BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch);   // where a redirect from cur to loc goes, if allowed
+BOOL pkg_partial(const WCHAR *name, const WCHAR *etagval, DWORD *have);   // a partial download pkg_fetch can continue (.part and its ETag are there); *have: bytes so far
+BOOL pkg_download_partial(DWORD *have);     // ... of the DynaRun zip
 int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const WCHAR *host, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 // Every entry of the central directory, in order: fn(name as stored (not 0-terminated), its length, entry, ctx). fn returns FALSE to stop.
@@ -98,22 +108,37 @@ int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only
    Windows installs it only with driver signature enforcement off for one start: see docs/DRIVER.md) */
 #define DYNAPRO_USB_ZIP  L"https://dynapro.co.uk/Site/graphics/Technical_Info/Software/Dyna%20Pro%20USB.zip"
 #define DRIVER_DOC_URL   L"https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md"
-enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, DRV_E_BCD, DRV_E_TASK, DRV_E_PNP, DRV_E_DIR, DRV_E_SID, DRV_NOVERB = -1000 };
+enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, DRV_E_BCD, DRV_E_TASK, DRV_E_PNP, DRV_E_DIR, DRV_E_SID, DRV_E_ENFORCED, DRV_W_BDE = 30, DRV_W_HASH = 31, DRV_NOVERB = -1000 };
 enum { DRV_CI_ENFORCED, DRV_CI_OFF, DRV_CI_UNKNOWN };   // driver signature enforcement now
 BOOL driver_supported(void);                // Windows 10 (build 10240) or later: older systems install the driver by hand
 BOOL driver_installed(void);                // a Dyna Pro ftdibus package is in the driver store (%windir%\INF\oem*.inf)
-int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err);   // download + SHA-256 check: PK_* or DRV_E_HASH
-int driver_prep(const WCHAR *zip);          // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
+enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR = 4 };   // *how of driver_fetch: where the zip came from, and (flag) the zip as a whole is not the official one
+// The zip: found on this computer (DRV_SRC_LOCAL; DRV_SRC_DIR: an already unpacked folder, `zip` is its path and hex a digest of the files' hashes) or downloaded. The check is of its CONTENT: the files Windows installs (driver.c, DRV_FILES).
+// PK_OK: those files are the pinned ones (DRV_ZIPDIFF: although the zip as a whole differs, e.g. re-packed). DRV_W_HASH: some differ or are missing but
+// the package passed the sanity checks - the user is asked ("install anyway"); hex / size: the SHA-256 and size of the zip, rep: the files that differ.
+// DRV_E_HASH: not a usable driver package. Other PK_*: the download failed. cb((DWORD)-1, 1) tells the "checking" phase (after the download, not pausable).
+int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch);
+void driver_skip_local_other(void);          // the user declined a local copy that differs: the next driver_fetch skips such copies and downloads
+const WCHAR *driver_pinned_sha256(void);    // the SHA-256 of the zip this program knows
+void driver_forget(const WCHAR *zip);       // deletes the zip when it is our own cache file in %TEMP%\DynaRunFix (a refused download), never a file of the user's
+BOOL driver_partial(DWORD *have);           // a partial driver download that driver_fetch can continue; *have: bytes so far
+int driver_prep(const WCHAR *zip, const WCHAR *accept);         // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
+int driver_bitlocker(void);                // BitLocker protection of the system drive, not elevated: 1 on, 0 off / none, -1 cannot be told (needs administrator rights)
 int driver_install(void);                   // elevated: pnputil, then clean up. 0 or DRV_E_*, 2 = UAC cancelled
 int driver_cancel(void);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
 BOOL driver_reboot(void);                   // restarts Windows (not elevated)
 int driver_ci_state(void);                  // DRV_CI_*
 int driver_verb(int argc, WCHAR **argv);    // command line verbs; DRV_NOVERB when argv[1] is none of ours, else the exit code
 void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: the Start menu shortcut "Install Dyna Pro USB driver"
+int drv_file_count(void);                   // the files that get installed (pinned: name below "Dyna Pro USB\", size, SHA-256)
+int drv_file_find(const WCHAR *rel);        // index of that name (any case, / or \), or -1
+BOOL drv_file_info(int i, const WCHAR **rel, DWORD *size, const WCHAR **sha);
+BOOL drv_file_match(int i, DWORD size, const WCHAR *sha);   // is a file of this size and SHA-256 the pinned file i?
+int drv_check_dir(const WCHAR *dir, int *differ, int *missing);   // how many pinned files below dir\Dyna Pro USB\ are right; the others differ / are missing
 BOOL drv_inf_matches(const BYTE *data, DWORD n);          // pure helpers, unit-tested (tests\test_driver.c)
 BOOL drv_ci_enforced(DWORD code_integrity_options);
-BOOL drv_bde_suspend(int protection_status);   // BDE_PS_* (driver.c): suspend BitLocker for this status?
-BOOL drv_bde_suspend_now(int protection_status, BOOL suspended_by_us);   // ... at prep time: also when our own flag says we suspended it earlier (a retry)
+BOOL drv_bde_suspend(int protection_status, int conversion_status, int key_protectors);   // BDE_PS_* (driver.c), conversion status and protector count (-1 unknown): suspend BitLocker? A volume mid-conversion with protectors is suspended although it reads "off"
+BOOL drv_bde_suspend_now(int protection_status, int conversion_status, int key_protectors, BOOL suspended_by_us);   // ... at prep time: also when our own flag says we suspended it earlier (a retry)
 int drv_task_xml(WCHAR *out, int cch, const WCHAR *sid, const WCHAR *exe);
 BOOL drv_sys_tool(const WCHAR *windir, BOOL wow64, const WCHAR *tool, WCHAR *out, int cch);
 BOOL drv_pnputil_ok(DWORD code);

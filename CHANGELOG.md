@@ -2,6 +2,50 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.6.0 — 2026-10-17
+
+Added (setup wizard, driver step):
+
+- **The license page is two pages.** A new *Check the installer* page comes first and shows everything the wizard knows about the setup file (where it
+  came from, full path, size, SHA-256 of the zip and of the `Setup.msi` inside, MSI ProductVersion and Manufacturer) in a read-only box you can copy
+  from; then the license page has only the title, one line, the license text and the accept box.
+- **Downloads (DynaRun and driver).** Automatic retries with back-off (1, 2, 4, 8, 15 s, six attempts; the count starts over when data arrived), the
+  error page shows the FIRST error of the failed attempts, *Pause* / *Resume*, *Continue download* (from the `.part`, by ETag and Range) with the
+  amount already downloaded, *Download manually* on the driver download too, progress text for the driver, a moving bar while the
+  size is unknown, and a non-pausable "Checking the driver" phase.
+- **Driver: what is used.** The wizard looks for a copy first: its own cache, the setup's folder, Downloads (one folder down, two for an unpacked
+  folder), Desktop, Documents; a zip of any name or packing whose driver files match, or an already unpacked folder, is used without downloading.
+  The check is of the content: the 18 files Windows installs (pinned table of SHA-256 values); the zip's own SHA-256 is compared too and only noted.
+- **Driver: different files.** When they differ a warning page ("The driver differs from the known version") lists the files and the zip hash
+  and, if the package still looks like Dyna Pro's, offers *Install anyway* (not the default). That choice binds exactly that zip (or folder) and is
+  written as `accepted.txt` (the SHA-256 of the staged files) until the driver step ends; nothing else is accepted later.
+- **Starting DynaRun.** The driver's last page has *Start DynaRun*. DynaRun is started as the normal (not elevated) user through the desktop shell,
+  also from an elevated wizard; if that is impossible it is not started and the desktop icon is suggested.
+- Time-stamped lines of the driver search and your choices go to `%TEMP%\DynaRunFix-setup.log`.
+
+Changed (setup wizard, driver step):
+
+- **Layout.** Text heights are measured (a cut-off buffer made the license page overlap), the window grows when a page needs more room, children are
+  clipped against each other, and a status line (also the red "nothing was installed: click Yes") always gets its room: the license text, the picture
+  and the info box give way, and setting a status line lays the page out again.
+- **The restart-menu picture marks the line to press**: an orange outline around "7) Disable driver signature enforcement" and a red *Press 7* label,
+  drawn on the scaled bitmap at run time.
+- **Driver: safe unpacking.** Only the 18 pinned files are taken out, to paths built from the program's table (never from entry names), into a new
+  folder only administrators can change; links are refused; size limits; hashed after they are copied there and installed from exactly those copies.
+- **Driver: BitLocker.** Also suspended when its status cannot be read, and while the drive is still being encrypted or decrypted and has a key protector; the suspension is verified;
+  when it fails a warning page explains the recovery key (aka.ms/myrecoverykey) and offers *Restart anyway* / *Later*. `bitlocker-before.txt` and
+  `driver.log` record what was seen; recovery passwords are masked before they are written.
+- **Auto-start waits for the driver.** With the driver option the sign-in start is registered only when the driver step has ended, so DynaRun does not
+  start at the sign-in that continues the installation.
+
+Fixed:
+
+- The driver could be installed right after the preparation step, before the restart (a test now guards the step order). The
+  install step also refuses to run while this start still checks signatures and leaves the armed restart in place (the wizard offers *Try again*).
+- Cancelling the warning for a mismatched copy found on this computer no longer shows the same warning again; later attempts in that run download from the Dyna Pro website.
+- The warning page for a driver that differs always shows the advice to click *Cancel* if in doubt, first, and then the list of differing files (the whole list, or its start with the number of files left out) - before, a long list cut the page off, advice included.
+- The progress of a driver download is shown again when the download is started a second time in the same run (after the checking phase had been shown once, the bar and the MB counter stayed still).
+
 ## v1.5.0 — 2026-10-16
 
 Added:
@@ -395,6 +439,32 @@ Changed and fixed (after a review of v1.4.0):
 ---
 
 ## 更新紀錄
+
+### v1.6.0 — 2026-10-17
+
+新增(安裝精靈、驅動程式步驟):
+
+- **授權合約頁拆成兩頁。** 先出現新的「確認安裝檔」頁,完整顯示精靈所知道的安裝檔資訊(來源、完整路徑、大小、zip 與其中 `Setup.msi` 的 SHA-256、MSI 的 ProductVersion 與 Manufacturer),放在可以複製文字的唯讀框裡;接著授權合約頁只剩標題、一行說明、合約文字和接受核取方塊。
+- **下載(DynaRun 與驅動程式)。** 自動重試與退避(1、2、4、8、15 秒,共六次;有資料進來就重新計數)、錯誤頁顯示失敗過程中的第一個錯誤、「暫停」/「繼續」、「繼續下載」(依 ETag 與 Range 從 `.part` 接續,並顯示已下載量)、驅動程式下載也有「開啟官網手動下載」、驅動程式也有進度文字、大小未知時進度條會移動,以及不可暫停的「正在檢查驅動程式」階段。
+- **驅動程式:用哪一份。** 精靈先找現成的:它自己的暫存、安裝程式所在資料夾、下載(往下一層,已解開的資料夾往下兩層)、桌面、文件;任何檔名或打包方式、只要驅動程式檔案相符的 zip,或已經解開的資料夾,都會直接使用、不用下載。檢查的是內容:Windows 會安裝的 18 個檔案(內建的 SHA-256 表);zip 本身的 SHA-256 也會比對,但只做記錄。
+- **驅動程式:檔案不同時。** 會顯示警告頁(「驅動程式和已知版本不同」),列出不同的檔案與 zip 的雜湊,而且在套件看起來仍是 Dyna Pro 的時候提供「仍要安裝」(不是預設)。這個選擇只綁定那一個 zip(或資料夾),並以 `accepted.txt`(暫存檔案的 SHA-256)存在到驅動程式步驟結束;之後不接受其他任何東西。
+- **啟動 DynaRun。** 驅動程式的最後一頁有「開始使用 DynaRun」。DynaRun 以一般(未提升)使用者身分透過桌面 shell 啟動,即使精靈是提升權限的也一樣;做不到時就不啟動,並建議使用桌面圖示。
+- 驅動程式搜尋與你的選擇會以帶時間的行寫入 `%TEMP%\DynaRunFix-setup.log`。
+
+變更(安裝精靈、驅動程式步驟):
+
+- **版面。** 文字高度改為實際量測(原本的緩衝區過小造成授權頁重疊)、頁面需要更多空間時視窗會變高、子控制項彼此裁切、狀態列(包括紅字「沒有安裝:需要按『是』」)一定保留空間:授權文字、圖片和資訊框會讓出位置,設定狀態列時會重新排版。
+- **重新開機選單的圖片標出要按的那一行**:在「7) 停用驅動程式強制簽章」外畫橘色框,旁邊有紅色的「按 7」標籤,在縮放後的點陣圖上即時繪製。
+- **驅動程式:安全解開。** 只取出 18 個固定的檔案,目的路徑由程式自己的表格決定(絕不用項目名稱),放進只有系統管理員能更改的新資料夾;拒絕連結;有大小上限;複製到那裡之後才計算雜湊,安裝的就是這些副本。
+- **驅動程式:BitLocker。** 無法讀取其狀態時,以及磁碟機仍在加密或解密中且有金鑰保護裝置時也會暫停;暫停之後會檢查;失敗時警告頁會說明修復金鑰(aka.ms/myrecoverykey)並提供「仍要重新開機」/「稍後」。`bitlocker-before.txt` 與 `driver.log` 記錄所見;修復密碼寫入前先遮蔽。
+- **開機自動啟動等驅動程式。** 使用驅動程式選項時,開機自動啟動要等驅動程式步驟結束才登錄,所以 DynaRun 不會在接續安裝的那次登入時啟動。
+
+修正:
+
+- 驅動程式可能在準備步驟之後馬上就安裝,沒有等重新開機(現在有測試把關步驟順序)。安裝步驟在這次啟動仍檢查簽章時也會拒絕執行,並保留已設定的重新開機(精靈會提供「再試一次」)。
+- 對這台電腦上找到、內容不符的檔案取消警告頁後,不會再出現同一個警告;這次執行中之後的嘗試都會從 Dyna Pro 官網下載。
+- 驅動程式不同的警告頁一定先顯示「不確定請按取消」的建議,再列出不同的檔案(完整列出,或只列開頭並註明還有幾個);之前清單太長時頁面會被截斷,連建議也看不到。
+- 同一次執行中第二次下載驅動程式時,會再顯示進度(之前檢查階段出現過一次之後,進度條與 MB 計數就不動了)。
 
 ### v1.5.0 — 2026-10-16
 

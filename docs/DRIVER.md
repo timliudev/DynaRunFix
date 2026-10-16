@@ -14,15 +14,35 @@ available.
 * In the main installer, leave **Also install the Dyna Pro USB driver (one restart needed)** ticked (it is ticked by default and
   hidden if the driver is already installed or Windows is older than 10; Windows 8, 7, Vista and XP use the manual steps, see [older Windows](#older-windows)). Or, any time later, use the Start menu shortcut
   **Install Dyna Pro USB driver** (**安裝 Dyna Pro USB 驅動程式** on a Traditional Chinese Windows) or run `DynaRunFix-Setup.exe /driver`.
-* The wizard downloads the official "Dyna Pro USB.zip" from dynapro.co.uk (it is not bundled) and checks its SHA-256. If the
-  file on the site has changed, it refuses to install it; use the manual method then.
+* The wizard first looks for a "Dyna Pro USB.zip" you already have (its own earlier download, the folder it runs from, Downloads and one folder
+  below it, Desktop, Documents; any file name, so "Dyna Pro USB (1).zip" counts, and so does a folder where it was already unpacked, e.g. Downloads\Dyna Pro USB) and uses it without downloading when it holds the right driver
+  files. Otherwise it downloads the official zip from dynapro.co.uk (it is not bundled). What is checked is the **content**: the 18 files Windows
+  installs (the two INFs, their two catalogs, and the i386 and amd64 `.sys` / `.dll` files they name) must each have the SHA-256 built into the
+  program; other files in the zip (readme, FT Clean, the duplicate "64-Bit Drivers" folder) are ignored, and only those 18 are unpacked. The
+  copies that were unpacked and checked are the ones Windows installs.
+* If the files differ (Dyna Pro may have updated the driver, or the file is damaged or was tampered with), the wizard shows a warning page with the
+  source, the zip's SHA-256 and the files that differ. It offers **Install anyway** (not the default button) only when the package still looks like
+  Dyna Pro's (all 18 files present, the bus INF names the Dyna Pro device id); otherwise the manual method below is the way. Choosing **Install anyway**
+  applies to exactly that zip (or folder) for this one installation and is logged in `driver.log`; while it is in force the staging folder holds
+  `accepted.txt` with the SHA-256 of exactly the files that were staged, and it is deleted when the driver step ends. If you cancel the warning for a
+  copy found on this computer, later attempts (including resume and retry) download the driver from the Dyna Pro website instead; copies that differ are not offered again until the wizard is started again.
+* The download page has *Pause* / *Resume*, retries by itself (after 1, 2, 4, 8 and 15 seconds) and, if it still fails, goes back with the first error,
+  **Continue download** (from the part that is already there) and **Download manually**.
 * Windows asks for administrator permission (UAC). On an administrator account that is once; a standard user may be asked for an
-  administrator's password again after the restart. If BitLocker protection is on, the wizard suspends it until the driver is installed
+  administrator's password again after the restart. If BitLocker protection is on (or its status cannot be read), the wizard suspends it until the driver is installed
   (at most 3 restarts as a safety net, then it is resumed automatically; it is also resumed when the installation finishes or you cancel),
   sets the one-time advanced boot options and registers a task that continues the wizard when you sign in. While it is suspended, the
   drive is not protected; if you decide not to go on, cancel in the wizard (or run `/driver-cancel`, see below) so that it is resumed.
+* BitLocker is suspended in one more case: the drive is still being encrypted or decrypted (also paused) and has a key protector (Windows reports
+  that as "off", yet the restart menu would ask for the recovery key). The suspension is checked afterwards. If it failed, the wizard shows a
+  warning page (Windows will probably ask for the recovery key; find it at https://aka.ms/myrecoverykey) and lets you choose **Restart anyway** or
+  **Later**, which takes everything back; **Find the recovery key** opens that page. `driver.log` and `bitlocker-before.txt` next to it (the output of `manage-bde -status` and `-protectors
+  -get`, recovery passwords masked before they are written) show what the wizard saw and did.
+* Other wizard pages: *Check the installer* (before the license page of the main installer) has an **Open Dyna Pro website** button. On Windows 8 and older
+  (Windows 8 / 8.1, Vista / 7, XP) `/driver` shows **The driver was not installed** with the manual steps for that Windows and an
+  **Open the manual steps** button (this document). If the driver is already installed, the wizard shows **The driver is already installed**.
 * After the restart, press **7** in the start-up menu (*Disable driver signature enforcement*). The wizard shows the page below;
-  photographing it with your phone first is a good idea.
+  photographing it with your phone first is a good idea. The picture marks the line *7) Disable driver signature enforcement* and says **Press 7**.
 
   | Press 7 |
   |---|
@@ -30,15 +50,16 @@ available.
 
 * If you miss 7, the wizard says so after you sign in and offers **Try again**.
 * Then Windows shows its red warning **twice** (once for each of the two driver files, ftdibus and ftdiport): choose
-  **Install this driver software anyway** each time. Driver signature enforcement comes back at the next normal restart.
+  **Install this driver software anyway** each time. Driver signature enforcement comes back at the next normal restart. The last wizard page offers
+  **Start DynaRun**, which starts it as your normal user (not elevated).
 
 Notes: the wizard needs Windows 10 or 11 (on older Windows use the [older Windows](#older-windows) steps below). The driver files go to `%ProgramData%\DynaRunFix\driver` and the log is
-`%ProgramData%\DynaRunFix\driver.log`. Uninstalling DynaRunFix does not remove the driver (it does resume BitLocker if DynaRunFix suspended it and it is still suspended). Not yet verified on a real PC; the BitLocker path has not been tried on real hardware.
+`%ProgramData%\DynaRunFix\driver.log`. The driver search and your choices are logged, with times, to `%TEMP%\DynaRunFix-setup.log`. Uninstalling DynaRunFix does not remove the driver (it does resume BitLocker if DynaRunFix suspended it and it is still suspended). Not yet verified on a real PC; the BitLocker path has not been tried on real hardware.
 If the wizard says the working folder could not be prepared (an old folder is still in use, or it can be changed by other users), restart Windows and try again.
 
 If something goes wrong: choosing **Cancel** on the wizard's retry or install page takes back the logon task, the boot option and
 the BitLocker suspension. If you closed the wizard some other way and want those undone, the manual steps below do not depend on
-it; you can also run `DynaRunFix-Setup.exe /driver-cancel` (asks for administrator permission; it only removes the task, the
+it; you can also run `DynaRunFix-Setup.exe /driver-cancel` from an administrator command prompt (otherwise it exits with code 1 and does nothing; it only removes the task, the
 one-time boot option and the BitLocker suspension, it does not install or remove a driver).
 
 ## What you need
@@ -178,23 +199,27 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 
 * 在主安裝程式中,保持勾選 **同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**(預設勾選;驅動程式已安裝或 Windows 低於 10 時會隱藏;Windows 8、7、Vista、XP 請用手動步驟,見[舊版 Windows](#舊版-windows))。
   之後隨時也可以用開始功能表捷徑 **安裝 Dyna Pro USB 驅動程式**,或執行 `DynaRunFix-Setup.exe /driver`。
-* 精靈會從 dynapro.co.uk 下載官方的「Dyna Pro USB.zip」(不內附)並檢查 SHA-256。網站上的檔案若有變動就拒絕安裝,這時請改用手動方式。
-* Windows 會要求系統管理員權限(UAC)。使用系統管理員帳戶時只會問一次;標準使用者在重新啟動後可能會再被要求輸入系統管理員密碼。若 BitLocker 保護為開啟,精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復;安裝完成或你按取消時也會恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。暫停期間磁碟機沒有受到保護;如果你決定不繼續,請在精靈中按取消(或執行 `/driver-cancel`,見下方),讓保護恢復。
-* 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。
+* 精靈會先找你已經有的「Dyna Pro USB.zip」(它自己先前下載的、精靈所在資料夾、下載資料夾與其下一層、桌面、文件;檔名不限,所以「Dyna Pro USB (1).zip」也算,已經解開的資料夾例如 Downloads\Dyna Pro USB 也算),內容正確就直接使用、不用下載;找不到才從 dynapro.co.uk 下載官方的 zip(不內附)。檢查的是**內容**:Windows 會安裝的 18 個檔案(兩個 INF、它們的兩個 catalog,以及它們所指定的 i386 與 amd64 的 `.sys` / `.dll`)必須各自符合程式內建的 SHA-256;zip 裡的其他檔案(readme、FT Clean、重複的「64-Bit Drivers」資料夾)不看,也只解開這 18 個。Windows 安裝的就是解開並檢查過的那份。
+* 如果檔案不同(可能是 Dyna Pro 更新了驅動程式,也可能是檔案損毀或被竄改),精靈會顯示警告頁,列出來源、zip 的 SHA-256 和不同的檔案。只有套件看起來仍是 Dyna Pro 的(18 個檔案都在、bus INF 含 Dyna Pro 的裝置 ID)才會提供「仍要安裝」(不是預設按鈕);否則請用下方的手動方式。選「仍要安裝」只對那一個 zip、這一次安裝有效,並記錄在 `driver.log`。「仍要安裝」生效期間,暫存資料夾裡有 `accepted.txt`(只含實際暫存的那些檔案的 SHA-256),驅動程式步驟結束時刪除。如果你對這台電腦上找到的檔案取消了警告頁,之後的嘗試(包括繼續與重試)都會改從 Dyna Pro 官網下載;在重新開啟精靈之前,不會再提供內容不同的檔案。
+* Windows 會要求系統管理員權限(UAC)。使用系統管理員帳戶時只會問一次;標準使用者在重新啟動後可能會再被要求輸入系統管理員密碼。若 BitLocker 保護為開啟(或無法讀取其狀態),精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復;安裝完成或你按取消時也會恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。暫停期間磁碟機沒有受到保護;如果你決定不繼續,請在精靈中按取消(或執行 `/driver-cancel`,見下方),讓保護恢復。
+* 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。圖上會標出「7) 停用驅動程式強制簽章」那一行並寫著 **按 7**。
 
   | 按 7 |
   |---|
   | ![啟動設定:按 7,停用驅動程式強制簽章](img/driver-press-7.png) |
 
 * 沒按到 7 的話,登入後精靈會告知,並提供 **再試一次**。
-* 接著 Windows 會跳出紅色警告,而且會出現兩次(兩個驅動程式檔 ftdibus 與 ftdiport 各一次),每次都請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。
+* 下載頁有「暫停」/「繼續」,中斷時會自動重試(依序等 1、2、4、8、15 秒);仍然失敗就回到上一頁並顯示第一個錯誤,提供 **繼續下載**(從已經下載的部分接續)與 **開啟官網手動下載**。
+* BitLocker 還有一種情況也會暫停:磁碟機仍在加密或解密中(含暫停)且有金鑰保護裝置(Windows 會報成「關閉」,但重新開機選單仍會要求修復金鑰)。暫停之後會檢查;失敗時精靈會顯示警告頁(Windows 很可能會要求修復金鑰;可到 https://aka.ms/myrecoverykey 查詢),讓你選 **仍要重新開機** 或 **稍後**(會撤回所有已設定的項目);**查詢修復金鑰** 會開啟那個頁面。`driver.log` 與旁邊的 `bitlocker-before.txt`(`manage-bde -status` 和 `-protectors -get` 的輸出,修復密碼寫入前先遮蔽)記錄精靈看到與做了什麼。
+* 其他精靈頁面:「確認安裝檔」頁(在主安裝程式的授權合約頁之前)有 **開啟 Dyna Pro 官網** 按鈕。在 Windows 8 與更舊的版本(Windows 8 / 8.1、Vista / 7、XP)上,`/driver` 會顯示 **驅動程式沒有安裝**,附上該版 Windows 的手動步驟與 **開啟手動安裝說明** 按鈕(就是這份文件)。驅動程式已經安裝時,精靈會顯示 **驅動程式已安裝**。
+* 接著 Windows 會跳出紅色警告,而且會出現兩次(兩個驅動程式檔 ftdibus 與 ftdiport 各一次),每次都請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。精靈最後一頁提供「開始使用 DynaRun」,以你的一般使用者身分啟動(不是提升權限)。
 
-附註:精靈需要 Windows 10 或 11(舊版 Windows 請看下面的[舊版 Windows](#舊版-windows))。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。
+附註:精靈需要 Windows 10 或 11(舊版 Windows 請看下面的[舊版 Windows](#舊版-windows))。驅動程式檔案放在 `%ProgramData%\DynaRunFix\driver`,記錄檔是 `%ProgramData%\DynaRunFix\driver.log`。驅動程式搜尋與你的選擇會帶著時間記錄在 `%TEMP%\DynaRunFix-setup.log`。
 解除安裝 DynaRunFix 不會移除驅動程式(但如果 BitLocker 是 DynaRunFix 暫停的、且仍在暫停,會把它恢復)。尚未在實體電腦上驗證;BitLocker 的路徑也還沒有在實體硬體上試過。
 如果精靈說工作資料夾無法準備好(舊資料夾仍在使用中,或其他使用者可以更改它),請重新啟動 Windows 再試一次。
 
 如果出了問題:在精靈的重試或安裝頁面按 **取消**,會撤回登入工作、開機選項與 BitLocker 暫停。若是用其他方式關掉精靈、想把這些還原,
-可以執行 `DynaRunFix-Setup.exe /driver-cancel`(會要求系統管理員權限;只移除工作、一次性開機選項與 BitLocker 暫停,不會安裝或移除驅動程式)。
+可以在以系統管理員身分開啟的命令提示字元執行 `DynaRunFix-Setup.exe /driver-cancel`(否則它以結束代碼 1 結束、什麼都不做;只移除工作、一次性開機選項與 BitLocker 暫停,不會安裝或移除驅動程式)。
 下面的手動步驟不依賴精靈。
 
 ### 需要準備

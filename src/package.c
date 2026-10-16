@@ -90,11 +90,10 @@ static void scan(const WCHAR *dir, BOOL subdirs, candidate *best)
     FindClose(f);
 }
 
-BOOL pkg_find_local(WCHAR *out)
+// The folders a package the user already has is looked for in: 0 where this setup is, 1 Downloads (also one level into it), 2 Desktop, 3 Documents.
+static void search_dirs(WCHAR dirs[4][MAX_PATH])
 {
-    WCHAR dirs[4][MAX_PATH], raw[MAX_PATH], *e; HKEY k; DWORD n = sizeof(raw), i; candidate *best = alloc(sizeof(candidate));
-    out[0] = 0;
-    if (!best) return FALSE;
+    WCHAR raw[MAX_PATH], *e; HKEY k; DWORD n = sizeof(raw);
     lstrcpyW(dirs[0], g_self); for (e = dirs[0] + lstrlenW(dirs[0]); e > dirs[0] && *e != '\\'; e--); *e = 0;
     dirs[1][0] = dirs[2][0] = dirs[3][0] = 0;
     // Downloads: the user's (possibly moved) folder, else %USERPROFILE%\Downloads
@@ -105,6 +104,112 @@ BOOL pkg_find_local(WCHAR *out)
     if (!dirs[1][0] && ExpandEnvironmentStringsW(L"%USERPROFILE%\\Downloads", dirs[1], MAX_PATH) == 0) dirs[1][0] = 0;
     SHGetSpecialFolderPathW(NULL, dirs[2], CSIDL_DESKTOPDIRECTORY, FALSE);
     SHGetSpecialFolderPathW(NULL, dirs[3], CSIDL_PERSONAL, FALSE);
+}
+
+typedef BOOL (*zip_accept_fn)(const WCHAR *path);
+
+// Where the search says what it looks at (the caller sets it; NULL = silent): one line per folder, and per zip that is skipped for its size.
+void (*g_pkg_log)(const WCHAR *line);
+static void plog(const WCHAR *a, const WCHAR *b)
+{
+    static WCHAR l[2 * MAX_PATH + 80];
+    if (!g_pkg_log || lstrlenW(a) + lstrlenW(b) + 1 >= (int)(sizeof(l) / sizeof(l[0]))) return;
+    lstrcpyW(l, a); lstrcatW(l, b);
+    g_pkg_log(l);
+}
+
+// Two modes. accept given: the first zip (at most maxsize bytes) that accept() approves - by its content, whatever it is called. prefix given
+// instead: the newest zip whose name starts with prefix, whatever it contains (*bt: its time, in/out).
+static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, zip_accept_fn accept, const WCHAR *prefix, FILETIME *bt, WCHAR *out)
+{
+    WCHAR p[MAX_PATH * 2]; WIN32_FIND_DATAW fd; HANDLE f; BOOL found = FALSE; int n, plen = prefix ? lstrlenW(prefix) : 0;
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) { plog(L"zip search: a folder with no usable path", L""); return FALSE; }
+    plog(prefix ? L"zip search by name in " : L"zip search by content in ", dir);
+    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
+    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) { plog(L"  the folder cannot be read or does not exist", L""); return FALSE; }
+    do {
+        if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
+        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (subdirs && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && find_zip_in(p, FALSE, maxsize, accept, prefix, bt, out)) found = TRUE;
+            continue;
+        }
+        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) continue;   // cloud-only: do not download it just to look
+        n = lstrlenW(fd.cFileName);
+        if (n < 4 || lstrcmpiW(fd.cFileName + n - 4, L".zip")) continue;
+        if (prefix) {
+            if (n < plen || CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd.cFileName, plen, prefix, plen) != CSTR_EQUAL) continue;
+            if (out[0] && CompareFileTime(&fd.ftLastWriteTime, bt) <= 0) continue;
+            lstrcpyW(out, p); *bt = fd.ftLastWriteTime; found = TRUE;
+            continue;
+        }
+        if (fd.nFileSizeHigh || fd.nFileSizeLow > maxsize) { plog(L"  skipped (too big for a driver package): ", p); continue; }   // the driver package is a few MB
+        if (accept(p)) { lstrcpyW(out, p); found = TRUE; }
+    } while ((prefix || !found) && FindNextFileW(f, &fd));
+    FindClose(f);
+    return found;
+}
+
+// The first zip (at most maxsize bytes) in the folders pkg_find_local looks in (and one level into Downloads) that accept() approves.
+BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out)
+{
+    static WCHAR dirs[4][MAX_PATH]; int i;
+    out[0] = 0;
+    search_dirs(dirs);
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, maxsize, accept, NULL, NULL, out)) return TRUE;
+    return FALSE;
+}
+
+// The newest zip whose name starts with prefix in those folders (the candidate when no zip has the right content).
+BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out)
+{
+    static WCHAR dirs[4][MAX_PATH]; FILETIME bt; int i; BOOL found = FALSE;
+    out[0] = 0; bt.dwLowDateTime = bt.dwHighDateTime = 0;
+    search_dirs(dirs);
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, 0, NULL, prefix, &bt, out)) found = TRUE;
+    return found;
+}
+
+// Depth-limited walk: accept(dir) for dir itself, then for its sub-folders down to `depth` levels (never into a link). *budget: the most folders
+// still to be looked at in all (so a big Documents folder cannot make it slow).
+static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+{
+    WCHAR p[MAX_PATH * 2]; WIN32_FIND_DATAW fd; HANDLE f; BOOL found = FALSE;
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH || --*budget < 0) return FALSE;
+    if (accept(dir)) { lstrcpyW(out, dir); return TRUE; }
+    if (depth <= 0) return FALSE;
+    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
+    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || fd.cFileName[0] == '.' ||
+            lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
+        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
+        found = find_dir_in(p, depth - 1, budget, accept, out);
+    } while (!found && *budget >= 0 && FindNextFileW(f, &fd));
+    FindClose(f);
+    return found;
+}
+
+// The first folder that accept() approves, in the folders pkg_find_local looks in: the setup's folder, Desktop and Documents one level down,
+// Downloads two levels down (Downloads\Dyna Pro USB\64-Bit Drivers), at most 600 folders in all.
+BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+{
+    static WCHAR dirs[4][MAX_PATH]; int i, budget = 600;
+    out[0] = 0;
+    search_dirs(dirs);
+    for (i = 0; i < 4; i++) {
+        plog(L"folder search in ", dirs[i]);
+        if (find_dir_in(dirs[i], i == 1 ? 2 : 1, &budget, accept, out)) return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL pkg_find_local(WCHAR *out)
+{
+    WCHAR dirs[4][MAX_PATH]; DWORD i; candidate *best = alloc(sizeof(candidate));
+    out[0] = 0;
+    if (!best) return FALSE;
+    search_dirs(dirs);
     zero(best, sizeof(*best));
     for (i = 0; i < 4; i++) scan(dirs[i], i == 1, best);   // also one level into Downloads (e.g. Downloads\Compressed)
     lstrcpyW(out, best->path);
@@ -245,7 +350,8 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
 {
     static WCHAR part[MAX_PATH], tag[200], oldtag[200], hdr[400], num[32];
     static BYTE buf[CHUNK];
-    HINTERNET in, h = NULL; HANDLE f; DWORD have, total, status, n, w, tries, timeout = 30000, proto; BOOL refused, nolen;
+    static const DWORD backoff[5] = { 1, 2, 4, 8, 15 };       // seconds to wait after the 1st .. 5th failed attempt in a row; the 6th gives up
+    HINTERNET in, h = NULL; HANDLE f; DWORD have, start, total, status, n, w, fails, first = 0, ms, timeout = 30000, proto; BOOL refused, nolen;
     LARGE_INTEGER sz; HKEY k; DWORD tn; int rc = PK_NET;
 
     *err = 0;
@@ -267,7 +373,9 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
     proto = 0x2800;
     if (!InternetSetOptionW(in, INTERNET_OPTION_SECURE_PROTOCOLS, &proto, sizeof(proto))) { proto = 0x800; InternetSetOptionW(in, INTERNET_OPTION_SECURE_PROTOCOLS, &proto, sizeof(proto)); }
 
-    for (tries = 0; tries < 5 && !*cancel; tries++) {
+    // Attempts follow each other with a growing pause (backoff); an attempt that received bytes starts the count over (the connection worked),
+    // and the error that began the current run of failures is the one reported (a later DNS error while reconnecting is not the cause).
+    for (fails = 0; !*cancel; ) {
         f = CreateFileW(part, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (f == INVALID_HANDLE_VALUE) { *err = GetLastError(); rc = PK_IO; break; }
         GetFileSizeEx(f, &sz);
@@ -281,12 +389,13 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
             if (refused) { *err = 0; rc = PK_URL; break; }                  // redirected off https or off the host
             if (is_cert_error(*err)) { rc = PK_CERT; break; }
             if (*err == ERROR_INTERNET_HTTPS_TO_HTTP_ON_REDIR) { rc = PK_URL; break; }
-            rc = PK_NET; Sleep(1000); continue;
+            if (!first) first = *err;
+            rc = PK_NET; goto again;
         }
         if (status == 416) {            // Range not satisfiable: the .part is already complete, or is not a part of this file; start over
             CloseHandle(f); InternetCloseHandle(h); h = NULL;
             DeleteFileW(part); oldtag[0] = 0; rc = PK_NET;
-            continue;
+            goto again;
         }
         if (status != 200 && status != 206) { *err = status; rc = PK_HTTP; CloseHandle(f); InternetCloseHandle(h); h = NULL; break; }
         if (status == 200) { have = 0; SetFilePointer(f, 0, NULL, FILE_BEGIN); SetEndOfFile(f); }
@@ -304,11 +413,11 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
             }
             total += have;
         }
-        rc = PK_NET;
+        rc = PK_NET; start = have;
         for (;;) {
             if (*cancel) { rc = PK_CANCEL; break; }
             if (!InternetReadFile(h, buf, sizeof(buf), &n)) { *err = GetLastError(); break; }
-            if (!n) { rc = (nolen || have == total) ? PK_OK : PK_NET; break; }
+            if (!n) { if (nolen || have == total) rc = PK_OK; else { rc = PK_NET; *err = ERROR_INTERNET_CONNECTION_ABORTED; } break; }   // the server ended the data early
             if (n > MAX_DOWNLOAD - have) { *err = 0; rc = PK_FORMAT; break; }   // more than the limit, whatever the server announced
             if (!WriteFile(f, buf, n, &w, NULL) || w != n) { *err = GetLastError(); rc = PK_IO; break; }
             have += n;
@@ -319,12 +428,39 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
         if (rc == PK_FORMAT) DeleteFileW(part);
         if (rc == PK_OK && nolen && is_zip_name(name) && zip_walk(part, zip_nothing, NULL) != PK_OK) rc = PK_NET;   // cut off: try to continue
         if (rc != PK_NET) break;
-        Sleep(1000);
+        if (have > start) { fails = 0; first = 0; }                         // progress: the connection worked, start the count over
+        if (!first) first = *err;
+again:
+        if (rc != PK_NET || *cancel || ++fails > 5) break;
+        for (ms = backoff[fails - 1] * 1000; ms && !*cancel; ms -= 100) Sleep(100);   // pause, but a cancel / pause is answered at once
     }
+    if (rc == PK_NET) { if (first) *err = first; if (*cancel) rc = PK_CANCEL; }   // the first error of the failed run, not the last one; stopped by the user between attempts
     InternetCloseHandle(in);
     if (rc == PK_OK && !MoveFileExW(part, out, MOVEFILE_REPLACE_EXISTING)) { *err = GetLastError(); rc = PK_IO; }
     return rc;
 }
+
+// A partial download that pkg_fetch can continue: <name>.part exists, is not empty, and the ETag of the file it belongs to is known
+// (without it the whole file would be fetched again). *have: its size in bytes.
+BOOL pkg_partial(const WCHAR *name, const WCHAR *etagval, DWORD *have)
+{
+    static WCHAR p[MAX_PATH], tag[200]; HKEY k; DWORD tn = sizeof(tag) - 2; HANDLE f; LARGE_INTEGER sz; BOOL ok = FALSE;
+    pkg_temp_dir(p); lstrcatW(p, L"\\"); lstrcatW(p, name); lstrcatW(p, L".part");
+    tag[0] = 0;
+    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) {
+        if (RegQueryValueExW(k, etagval, NULL, NULL, (BYTE *)tag, &tn)) tag[0] = 0;
+        RegCloseKey(k);
+    }
+    if (!tag[0]) return FALSE;
+    f = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE) {
+        if (GetFileSizeEx(f, &sz) && sz.QuadPart > 0 && sz.QuadPart <= (LONGLONG)MAX_DOWNLOAD) { *have = sz.LowPart; ok = TRUE; }
+        CloseHandle(f);
+    }
+    return ok;
+}
+
+BOOL pkg_download_partial(DWORD *have) { return pkg_partial(L"Dyna Pro Dynamometers.zip", L"DownloadETag", have); }
 
 /* ---------- zip: central directory, ZipCrypto, inflate ---------- */
 
