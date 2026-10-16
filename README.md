@@ -86,6 +86,12 @@ whenever DynaRun starts its first-time setup helper (normally only on the very f
 
 ## What's new
 
+v1.6.0 (released 2026-10-17):
+- New: the setup wizard checks the driver before using it. It looks for a copy on this computer first (its own cache, the setup's folder, Downloads, Desktop, Documents; a zip or an unpacked folder) and downloads only when none matches. The 18 driver files are compared with a table of SHA-256 values; when they differ, a warning page lists them and *Install anyway* is offered (not the default). See [docs/DRIVER.md](docs/DRIVER.md).
+- New: the license page is two pages (a *Check the installer* page with the details of the setup file, then the license). Downloads retry by themselves, can be paused and continued, and show their progress; the driver's last page has *Start DynaRun*.
+- Changed: the driver files are unpacked safely (only the 18 known files, into a folder only administrators can change), BitLocker is also suspended when its status cannot be read and the suspension is verified, the restart-menu picture marks the line to press, and auto-start waits until the driver step has ended.
+- Fix: the driver warning page always shows the advice to click *Cancel* if in doubt, and the list of differing files or its start; the progress of a second driver download is shown; cancelling the warning for a copy found on this computer does not bring the same warning back.
+
 v1.5.0 (released 2026-10-16):
 - New: the setup wizard can install the Dyna Pro USB driver (Windows 10/11 only): an option on its first page, or later with the Start menu shortcut or `DynaRunFix-Setup.exe /driver`. One restart: press 7 in the menu, then answer Windows' red warning (it appears twice). BitLocker is suspended only when its protection is on or its status cannot be read, and is turned on again when the installation ends or is cancelled (`/driver-cancel` takes back a started installation). Not yet verified on a real PC. See [Usage](#usage) and [docs/DRIVER.md](docs/DRIVER.md).
 - New: a `DynaRun V3.exe` of another folder no longer blocks the install; one that cannot be closed (another user's session, unreadable path) is explained, and `/quiet /close` then ends with exit code 6. The reason is written to `setup.log` (or `%TEMP%\DynaRunFix-setup.log`).
@@ -785,6 +791,12 @@ DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;�
 log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.6.0(2026-10-17 發行):
+- 新增:安裝精靈在使用驅動程式前會先檢查。先找電腦上現有的(它自己的暫存、安裝程式所在資料夾、下載、桌面、文件;zip 或已解開的資料夾),都不符才下載。18 個驅動程式檔案會和內建的 SHA-256 表比對;不同時警告頁會列出來,並提供「仍要安裝」(不是預設)。見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
+- 新增:授權合約頁拆成兩頁(先是列出安裝檔資訊的「確認安裝檔」頁,再是授權合約)。下載會自動重試、可暫停與繼續,並顯示進度;驅動程式的最後一頁有「開始使用 DynaRun」。
+- 變更:驅動程式安全解開(只取出 18 個已知檔案,放進只有系統管理員能更改的資料夾)、無法讀取 BitLocker 狀態時也會暫停並檢查暫停是否成功、重新開機選單的圖片標出要按的那一行、開機自動啟動等驅動程式步驟結束才登錄。
+- 修正:驅動程式警告頁一定先顯示「不確定請按取消」的建議,再列出不同的檔案(或其開頭);同一次執行中第二次下載驅動程式會顯示進度;對這台電腦上找到的檔案取消警告後,不會再出現同一個警告。
+
 v1.5.0(2026-10-16 發行):
 - 新增:安裝精靈可以安裝 Dyna Pro USB 驅動程式(僅限 Windows 10/11):第一頁有一個選項,之後也可以用開始功能表捷徑或 `DynaRunFix-Setup.exe /driver`。需重新開機一次:在選單按 7,再回應 Windows 的紅色警告(會出現兩次)。BitLocker 只有保護為開啟或無法讀取其狀態時才會暫停,安裝結束或取消時會恢復(`/driver-cancel` 可撤回已開始的安裝)。尚未在實體電腦上驗證。見[使用方式](#使用方式)與 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
 - 新增:別的資料夾的 `DynaRun V3.exe` 不再擋住安裝;關不掉的(別的使用者的工作階段、讀不到路徑)會明確說明,`/quiet /close` 此時以結束代碼 6 結束。原因寫在 `setup.log`(或 `%TEMP%\DynaRunFix-setup.log`)。

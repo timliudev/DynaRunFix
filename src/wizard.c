@@ -285,11 +285,19 @@ static int place_image(int x, int y, int w, int ah)
 // the wizard runs at start in every mode, so this also holds in the process the sign-in task starts after the restart; g_launcher from init_paths).
 static BOOL can_start_dynarun(void) { return g_installed && g_exe[0] && exists(g_launcher); }
 
+// Appends s to d (a buffer of cap characters), cutting it where it no longer fits; d always stays terminated.
+static void cat_to(WCHAR *d, int cap, const WCHAR *s)
+{
+    int n = lstrlenW(d);
+    if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
+}
+
 static void set_page(int p)
 {
     static WCHAR b[2600];
     g_page = p;
     g_paused = g_pause_req = FALSE;
+    g_checking = g_marquee = FALSE;                     // a page starts with a plain bar; a download started again (also after the checking phase) shows its progress
     g_building = TRUE;                                  // status() does not lay out while the page is being rebuilt; the layout at the end does
     KillTimer(g_hwnd, TIMER_RUNNING);
     vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_DRV, FALSE); vis(ID_IMG, FALSE); vis(ID_INFO, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
@@ -506,17 +514,51 @@ static void set_page(int p)
         if (g_drv_how & DRV_SRC_LOCAL) { lstrcpyW(src, (g_drv_how & DRV_SRC_DIR) ? T(L"found on this computer (unpacked folder): ", L"在這台電腦上找到（已解開的資料夾）：") : T(L"found on this computer: ", L"在這台電腦上找到：")); lstrcatW(src, g_drvzip); }
         else lstrcpyW(src, T(L"downloaded from the Dyna Pro website (dynapro.co.uk)", L"從 Dyna Pro 官網下載"));
         text(ID_TITLE, T(L"The driver differs from the known version", L"驅動程式和已知版本不同"));
-        if (g_drv_how & DRV_SRC_DIR)                    // an unpacked folder: there is no zip to show a size or hash of
-            wsprintfW(b, T(L"The driver files in this folder are not the version DynaRunFix knows. Dyna Pro may have updated them, or the files may be damaged or tampered with.\n\nSource: %s\n\nFiles that differ (actual / expected):\n%s\n"
-                           L"Install them only if you are sure that they come from Dyna Pro. If in doubt, click \"Cancel\".",
-                           L"這個資料夾裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n來源：%s\n\n不同的檔案（實際 / 已知）：\n%s\n"
-                           L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。"), src, g_drv_rep);
-        else
-        wsprintfW(b, T(L"The driver files in this package are not the version DynaRunFix knows. Dyna Pro may have updated them, or the file may be damaged or tampered with.\n\nSource: %s\nZip size: %lu bytes\nZip SHA-256: %s\nKnown zip SHA-256: %s\n\nFiles that differ (actual / expected):\n%s\n"
-                       L"Install it only if you are sure that it comes from Dyna Pro. If in doubt, click \"Cancel\".",
-                       L"這個驅動程式包裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n來源：%s\n壓縮檔大小：%lu 位元組\n壓縮檔 SHA-256：%s\n已知的壓縮檔 SHA-256：%s\n\n不同的檔案（實際 / 已知）：\n%s\n"
-                       L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。"),
-                   src, (DWORD)g_drv_size, g_drv_hex, driver_pinned_sha256(), g_drv_rep);
+        // wsprintfW cuts its output at 1024 characters, so the text is put together with bounded appends (b holds 2600): the advice to
+        // cancel comes before the details, and the list of files goes last so that only the end of the list can be lost
+        b[0] = 0;
+        if (g_drv_how & DRV_SRC_DIR) {                  // an unpacked folder: there is no zip to show a size or hash of
+            cat_to(b, 2600, T(L"The driver files in this folder are not the version DynaRunFix knows. Dyna Pro may have updated them, or the files may be damaged or tampered with.\n\n"
+                              L"Install them only if you are sure that they come from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
+                              L"這個資料夾裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
+                              L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。\n\n來源："));
+            cat_to(b, 2600, src);
+            cat_to(b, 2600, L"\n\n");
+        } else {
+            WCHAR sz[24];
+            wsprintfW(sz, L"%lu", (DWORD)g_drv_size);
+            cat_to(b, 2600, T(L"The driver files in this package are not the version DynaRunFix knows. Dyna Pro may have updated them, or the file may be damaged or tampered with.\n\n"
+                              L"Install it only if you are sure that it comes from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
+                              L"這個驅動程式包裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
+                              L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。\n\n來源："));
+            cat_to(b, 2600, src);
+            cat_to(b, 2600, T(L"\nZip size: ", L"\n壓縮檔大小："));
+            cat_to(b, 2600, sz);
+            cat_to(b, 2600, T(L" bytes\nZip SHA-256: ", L" 位元組\n壓縮檔 SHA-256："));
+            cat_to(b, 2600, g_drv_hex);
+            cat_to(b, 2600, T(L"\nKnown zip SHA-256: ", L"\n已知的壓縮檔 SHA-256："));
+            cat_to(b, 2600, driver_pinned_sha256());
+            cat_to(b, 2600, L"\n\n");
+        }
+        cat_to(b, 2600, T(L"Files that differ (actual / expected):\n", L"不同的檔案（實際 / 已知）：\n"));
+        {
+            int room = 2600 - lstrlenW(b) - 48;        // keep room for the "and N more" line
+            const WCHAR *p = g_drv_rep;
+            int used = 0, more = 0;
+            while (*p) {
+                const WCHAR *e = p; int n;
+                while (*e && *e != L'\n') e++;
+                n = (int)(e - p) + (*e ? 1 : 0);        // the line with its line feed
+                if (!more && used + n <= room) { lstrcpynW(b + lstrlenW(b), p, n + 1); used += n; }
+                else more++;
+                p += n;
+            }
+            if (more) {
+                WCHAR t[48];
+                wsprintfW(t, T(L"  (and %d more)", L"  （另外還有 %d 個）"), more);
+                cat_to(b, 2600, t);
+            }
+        }
         text(ID_BODY, b);
         // "Cancel" is the default button (the right-most one, Enter); "Install anyway" is the second; the website is bottom-left
         buttons(T(L"Cancel", L"取消"), T(L"Install anyway", L"仍要安裝"), T(L"Download manually", L"開啟官網手動下載"));

@@ -2,7 +2,7 @@
 
 [繁體中文在下方](#更新紀錄)
 
-## Unreleased
+## v1.6.0 — 2026-10-17
 
 Added (setup wizard, driver step):
 
@@ -43,6 +43,8 @@ Fixed:
 - The driver could be installed right after the preparation step, before the restart (a test now guards the step order). The
   install step also refuses to run while this start still checks signatures and leaves the armed restart in place (the wizard offers *Try again*).
 - Cancelling the warning for a mismatched copy found on this computer no longer shows the same warning again; later attempts in that run download from the Dyna Pro website.
+- The warning page for a driver that differs always shows the advice to click *Cancel* if in doubt, first, and then the list of differing files (the whole list, or its start with the number of files left out) - before, a long list cut the page off, advice included.
+- The progress of a driver download is shown again when the download is started a second time in the same run (after the checking phase had been shown once, the bar and the MB counter stayed still).
 
 ## v1.5.0 — 2026-10-16
 
@@ -438,7 +440,7 @@ Changed and fixed (after a review of v1.4.0):
 
 ## 更新紀錄
 
-### 尚未發布
+### v1.6.0 — 2026-10-17
 
 新增(安裝精靈、驅動程式步驟):
 
@@ -461,6 +463,8 @@ Changed and fixed (after a review of v1.4.0):
 
 - 驅動程式可能在準備步驟之後馬上就安裝,沒有等重新開機(現在有測試把關步驟順序)。安裝步驟在這次啟動仍檢查簽章時也會拒絕執行,並保留已設定的重新開機(精靈會提供「再試一次」)。
 - 對這台電腦上找到、內容不符的檔案取消警告頁後,不會再出現同一個警告;這次執行中之後的嘗試都會從 Dyna Pro 官網下載。
+- 驅動程式不同的警告頁一定先顯示「不確定請按取消」的建議,再列出不同的檔案(完整列出,或只列開頭並註明還有幾個);之前清單太長時頁面會被截斷,連建議也看不到。
+- 同一次執行中第二次下載驅動程式時,會再顯示進度(之前檢查階段出現過一次之後,進度條與 MB 計數就不動了)。
 
 ### v1.5.0 — 2026-10-16
 
