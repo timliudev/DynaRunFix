@@ -37,6 +37,9 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <exdisp.h>
+#include <shldisp.h>
+#include <servprov.h>
 #include <commdlg.h>
 #include <sddl.h>
 #include <aclapi.h>
@@ -73,7 +76,7 @@ typedef struct IPinnedList3 { const struct {
 static const WCHAR UNINSTKEY[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DynaRunFix";
 static const WCHAR DYNARUN_REL[] = L"\\Dyna Pro Dynamometers\\DynaRun V3.exe";
 
-BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE, g_keep;
+BOOL g_zh, g_quiet, g_close, g_pin = TRUE, g_autostart = TRUE, g_autostart_later, g_keep;
 int g_drvmode;                    // DRV_MODE_*: the wizard starts at the driver pages (driver.c, wizard.c)
 int g_pinresult;
 HWND g_hwnd;
@@ -608,6 +611,16 @@ static void run_log(const WCHAR *line)
     static WCHAR p[MAX_PATH];
     if (is_admin() && g_dir[0] && exists(g_dir)) { setup_log(line); return; }
     if (GetTempPathW(MAX_PATH - 24, p)) append_line(lstrcatW(p, L"DynaRunFix-setup.log"), line);
+}
+
+// For the other files (the wizard side of the driver step): the line with a time stamp, so that durations can be read from the log.
+void user_log(const WCHAR *line)
+{
+    static WCHAR l[2 * MAX_PATH + 400]; SYSTEMTIME t;
+    GetLocalTime(&t);
+    wsprintfW(l, L"[%02u:%02u:%02u.%03u] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    lstrcpynW(l + lstrlenW(l), line, (int)(sizeof(l) / sizeof(l[0])) - lstrlenW(l) - 1);
+    run_log(l);
 }
 
 static void log_running(const WCHAR *stage, const runproc *l, int n, int r)
@@ -1507,6 +1520,60 @@ static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to p
     return TRUE;
 }
 
+// Opens file the way a double click does, but as the signed-in user's normal (non-elevated) process: the desktop's shell (Explorer, which runs
+// with the normal token) is asked to do it - IShellWindows -> the desktop's shell view -> its Application (IShellDispatch2) -> ShellExecute.
+// FALSE when any step fails (no Explorer, no desktop: e.g. a session without one).
+static BOOL shell_execute_unelevated(const WCHAR *file, const WCHAR *dir)
+{
+    IShellWindows *sw = NULL; IDispatch *disp = NULL, *dv = NULL, *app = NULL; IServiceProvider *sp = NULL; IShellBrowser *sb = NULL; IShellView *view = NULL;
+    IShellFolderViewDual *fvd = NULL; IShellDispatch2 *sd = NULL; HRESULT hrc; VARIANT loc, root, a, d, o, s; LONG hwnd = 0; BSTR bf = NULL, bd = NULL; BOOL ok = FALSE;
+    hrc = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);                       // RPC_E_CHANGED_MODE: already initialised another way, usable
+    if (FAILED(hrc) && hrc != RPC_E_CHANGED_MODE) return FALSE;
+    VariantInit(&loc); VariantInit(&root); VariantInit(&a); VariantInit(&d); VariantInit(&o); VariantInit(&s);
+    loc.vt = VT_I4; loc.lVal = CSIDL_DESKTOP;
+    if (FAILED(CoCreateInstance(&CLSID_ShellWindows, NULL, CLSCTX_LOCAL_SERVER, &IID_IShellWindows, (void **)&sw))) goto done;
+    if (FAILED(IShellWindows_FindWindowSW(sw, &loc, &root, SWC_DESKTOP, &hwnd, SWFO_NEEDDISPATCH, &disp)) || !disp) goto done;
+    if (FAILED(IDispatch_QueryInterface(disp, &IID_IServiceProvider, (void **)&sp))) goto done;
+    if (FAILED(IServiceProvider_QueryService(sp, &SID_STopLevelBrowser, &IID_IShellBrowser, (void **)&sb))) goto done;
+    if (FAILED(IShellBrowser_QueryActiveShellView(sb, &view)) || !view) goto done;
+    if (FAILED(IShellView_GetItemObject(view, SVGIO_BACKGROUND, &IID_IDispatch, (void **)&dv)) || !dv) goto done;
+    if (FAILED(IDispatch_QueryInterface(dv, &IID_IShellFolderViewDual, (void **)&fvd))) goto done;
+    if (FAILED(IShellFolderViewDual_get_Application(fvd, &app)) || !app) goto done;
+    if (FAILED(IDispatch_QueryInterface(app, &IID_IShellDispatch2, (void **)&sd))) goto done;
+    if (!(bf = SysAllocString(file))) goto done;
+    if (dir && dir[0] && (bd = SysAllocString(dir))) { d.vt = VT_BSTR; d.bstrVal = bd; }
+    s.vt = VT_I4; s.lVal = SW_SHOWNORMAL;
+    ok = SUCCEEDED(IShellDispatch2_ShellExecute(sd, bf, a, d, o, s));
+done:
+    SysFreeString(bf); SysFreeString(bd);
+    if (sd) IShellDispatch2_Release(sd);
+    if (app) IDispatch_Release(app);
+    if (fvd) IShellFolderViewDual_Release(fvd);
+    if (dv) IDispatch_Release(dv);
+    if (view) IShellView_Release(view);
+    if (sb) IShellBrowser_Release(sb);
+    if (sp) IServiceProvider_Release(sp);
+    if (disp) IDispatch_Release(disp);
+    if (sw) IShellWindows_Release(sw);
+    if (SUCCEEDED(hrc)) CoUninitialize();
+    return ok;
+}
+
+// DynaRun is never started with more rights than a normal start from the desktop: an elevated wizard (setup run as administrator; the sign-in task
+// of the driver installation, which runs with the user's full token) asks the shell to start it as the normal user. If that is impossible it is not
+// started elevated: the user is told to use the desktop icon. Which way was used goes to the log.
+static void launch_normal(const WCHAR *file, const WCHAR *dir)
+{
+    if (!is_admin()) {                                                         // already a normal process: a plain ShellExecute is the normal start
+        ShellExecuteW(g_hwnd, NULL, file, NULL, dir, SW_SHOWNORMAL);
+        run_log(L"start DynaRun: ShellExecute (this process is not elevated)");
+        return;
+    }
+    if (shell_execute_unelevated(file, dir)) { run_log(L"start DynaRun: through the desktop shell, as the normal user (this process is elevated)"); return; }
+    run_log(L"start DynaRun: not started, this process is elevated and the desktop shell could not be asked");
+    msg(T(L"DynaRun was not started from here. Please start it with the \"DynaRun V3\" icon on the desktop.", L"這裡沒有啟動 DynaRun，請改用桌面上的「DynaRun V3」圖示開啟。"), MB_ICONINFORMATION);
+}
+
 // The wizard's "Start DynaRun": started the way a double click on the shortcut does it (the shortcut gives the
 // process the AppUserModelID that groups it with the pinned icon, its working folder and show command), not by
 // running the launcher directly. Falls back to the launcher with DynaRun's folder as working directory.
@@ -1518,9 +1585,9 @@ void start_dynarun(void)
     for (i = 0; i < 4 && !have; i++)
         have = SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, lnk);
     if (!have && exists(cat3(lnk, g_dir, L"\\DynaRun V3.lnk", NULL))) have = TRUE;
-    if (have) { ShellExecuteW(g_hwnd, NULL, lnk, NULL, NULL, SW_SHOWNORMAL); return; }
+    if (have) { launch_normal(lnk, NULL); return; }
     lstrcpyW(dir, g_exe); q = dir + lstrlenW(dir); while (q > dir && *q != '\\') q--; *q = 0;
-    ShellExecuteW(g_hwnd, NULL, g_launcher, NULL, dir[0] ? dir : NULL, SW_SHOWNORMAL);
+    launch_normal(g_launcher, dir[0] ? dir : NULL);
 }
 
 BOOL enable_privilege(const WCHAR *name)
@@ -1998,11 +2065,33 @@ static void user_stage(void)
     }
     RegCloseKey(b);
     if (!g_keep && !RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {   // start at sign-in
-        if (g_autostart) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
+        // with the driver step ahead the value is NOT written now: the sign-in after the driver restart would start DynaRun while the
+        // driver is being installed. It is only noted (AutostartPending) and registered by autostart_flush when the driver steps are over.
+        if (g_autostart && !g_autostart_later) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         else RegDeleteValueW(s, L"DynaRunFix");
         RegCloseKey(s);
+        if (!RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) {
+            if (g_autostart && g_autostart_later) set_dword(b, L"AutostartPending", 1);
+            else RegDeleteValueW(b, L"AutostartPending");
+            RegCloseKey(b);
+        }
     }
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
+}
+
+// The end of the driver steps (installed, failed, cancelled, skipped, wizard closed): the sign-in start the user asked for is registered now,
+// whatever the driver's outcome. Not called while a restart for the driver is pending (wizard.c). Uninstall removes the flag with HKCU\Software\DynaRunFix.
+void autostart_flush(void)
+{
+    static WCHAR p[MAX_PATH]; HKEY k, r; DWORD v = 0, n = 4, t = 0; BOOL pending;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, USERKEY, 0, KEY_ALL_ACCESS, &k)) return;
+    pending = RegQueryValueExW(k, L"AutostartPending", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS && t == REG_DWORD && v;
+    if (pending) RegDeleteValueW(k, L"AutostartPending");
+    RegCloseKey(k);
+    if (pending && exists(g_launcher) && !RegCreateKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &r, NULL)) {
+        set_str(r, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
+        RegCloseKey(r);
+    }
 }
 
 int install_fix(void)
