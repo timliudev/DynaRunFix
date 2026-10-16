@@ -24,6 +24,7 @@ BOOL is_admin(void);
 void user_log(const WCHAR *line);           // one line in setup.log (administrator, install folder there) or %TEMP%\DynaRunFix-setup.log
 DWORD os_build(void);                       // Windows build number (real, not the compatibility-shimmed one)
 BOOL user_sid(WCHAR *out, int cch);
+BOOL fix_current(void);                      // the fix is installed and is the version of this setup (uninstall entry, launcher and dll there)
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
@@ -70,6 +71,7 @@ BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .
 BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out);   // the first zip (at most maxsize bytes) in the same places that accept() approves
 extern void (*g_pkg_log)(const WCHAR *line);   // set to log the folders the zip searches look in (NULL: silent)
 BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // the first folder accept() approves, in the same places (two levels down in Downloads)
+BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // accept() for root and the folders up to `depth` levels below it
 BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out);   // the newest zip whose name starts with prefix in the same places
 void pkg_reject(const WCHAR *path);       // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
@@ -78,6 +80,13 @@ HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, 
 BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, WCHAR *out, int cch);   // where a redirect from cur to loc goes, if allowed
 BOOL pkg_partial(const WCHAR *name, const WCHAR *etagval, DWORD *have);   // a partial download pkg_fetch can continue (.part and its ETag are there); *have: bytes so far
 BOOL pkg_download_partial(DWORD *have);     // ... of the DynaRun zip
+enum { NET_UNKNOWN = 0, NET_NO = 1, NET_YES = 2 };
+HINTERNET pkg_net_open(DWORD connect_ms, DWORD receive_ms);   // a session with these timeouts, TLS 1.2+ (NULL: none)
+int ver_compare(const WCHAR *a, const WCHAR *b);              // <0 / 0 / >0: a older / the same / newer than b (not versions: 0)
+BOOL pkg_page_version(const char *html, DWORD n, WCHAR *out, int cch);   // the DynaRun V3 version the Dyna Pro software page names
+BOOL dynarun_version(WCHAR *out, int cch);                    // the installed DynaRun V3's version (Windows Installer record), FALSE when not installed that way
+int pkg_update_hint(WCHAR *installed, WCHAR *latest, int cch, void (*log)(const WCHAR *line));   // 0 nothing, 1 the site names a newer version, 2 the site's zip differs from the last download
+int pkg_net_state(void);                    // NET_NO: Windows says it is disconnected (the download is not even tried); NET_YES / NET_UNKNOWN: try
 int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const WCHAR *host, WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 int zip_open(const WCHAR *zip, zipent *e);  // first *.msi entry
 // Every entry of the central directory, in order: fn(name as stored (not 0-terminated), its length, entry, ctx). fn returns FALSE to stop.
@@ -90,6 +99,21 @@ BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir);
 // Extracts every entry (stored or deflate, not encrypted) below dest (which must exist); an unsafe name, a damaged entry or a zip
 // larger than the limits fails the whole call (PK_FORMAT). *nfiles: files written.
 int zip_extract_all(const WCHAR *zip, const WCHAR *dest, volatile LONG *cancel, int *nfiles);
+// The files of a package named in a pinned table (the driver's 18 files): safe unpacking / copying and checking (package.c). Used by the driver; the DynaRun setup
+// uses pkg_prepare_target / pkg_extract_checked. Nothing a zip says about a path is used, destinations are built from the table; links are refused; sizes capped.
+typedef struct { const WCHAR *rel; DWORD size; const WCHAR *sha; } pkg_file;   // name below the package folder ('/' separators), size, SHA-256 (lower case)
+#define PKG_MAXF 24
+typedef struct { int ok, differ, missing; BYTE st[PKG_MAXF]; WCHAR hex[PKG_MAXF][65]; } pkg_check;   // st: 0 ok, 1 differs, 2 missing; hex: what the file hashes to
+int pkg_entry_index(const pkg_file *t, int n, const char *name, DWORD nlen);   // the table file a zip entry name is (after a folder boundary, any case), or -1
+BOOL pkg_is_plain_dir(const WCHAR *p);
+BOOL pkg_file_path(WCHAR *out, const WCHAR *dir, const WCHAR *sub, const pkg_file *t, int i);
+BOOL pkg_dirs_plain(const WCHAR *dir, const WCHAR *top, const pkg_file *t, int n);
+int pkg_zip_has(const WCHAR *zip, const pkg_file *t, int n, DWORD maxfile);   // how many table files the zip has (central directory only), -1: not a zip
+int pkg_stage_files(const WCHAR *zip, const WCHAR *dir, const WCHAR *top, const pkg_file *t, int n, DWORD maxfile, DWORD maxtotal, volatile LONG *cancel, int *missing);
+int pkg_stage_from_dir(const WCHAR *src, const WCHAR *dir, const WCHAR *top, const pkg_file *t, int n, DWORD maxfile, DWORD maxtotal, int *missing);
+void pkg_check_files(const WCHAR *dir, const WCHAR *sub, const pkg_file *t, int n, WCHAR (*expect)[65], pkg_check *c);
+BOOL pkg_prepare_target(const WCHAR *path);   // free a path that is going to be written (a plain file is removed, a link removed itself, a folder refused)
+int pkg_extract_checked(const zipent *e, const char *pw, const WCHAR *out, DWORD maxsize, progress_fn cb, volatile LONG *cancel);   // zip_extract with a size cap and a free target
 BOOL zip_password_plausible(const zipent *e, const char *pw);
 int zip_extract(const zipent *e, const char *pw, const WCHAR *out, progress_fn cb, volatile LONG *cancel);
 BOOL pkg_sha256(const WCHAR *path, WCHAR *hex, ULONGLONG *size);   // lower-case hex (65 WCHARs) and size of a file, read-only
@@ -112,13 +136,15 @@ enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, D
 enum { DRV_CI_ENFORCED, DRV_CI_OFF, DRV_CI_UNKNOWN };   // driver signature enforcement now
 BOOL driver_supported(void);                // Windows 10 (build 10240) or later: older systems install the driver by hand
 BOOL driver_installed(void);                // a Dyna Pro ftdibus package is in the driver store (%windir%\INF\oem*.inf)
-enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR = 4 };   // *how of driver_fetch: where the zip came from, and (flag) the zip as a whole is not the official one
+enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR = 4, DRV_SRC_PICKED = 8 };   // *how of driver_fetch: where the zip came from, and (flag) the zip as a whole is not the official one
 // The zip: found on this computer (DRV_SRC_LOCAL; DRV_SRC_DIR: an already unpacked folder, `zip` is its path and hex a digest of the files' hashes) or downloaded. The check is of its CONTENT: the files Windows installs (driver.c, DRV_FILES).
 // PK_OK: those files are the pinned ones (DRV_ZIPDIFF: although the zip as a whole differs, e.g. re-packed). DRV_W_HASH: some differ or are missing but
 // the package passed the sanity checks - the user is asked ("install anyway"); hex / size: the SHA-256 and size of the zip, rep: the files that differ.
 // DRV_E_HASH: not a usable driver package. Other PK_*: the download failed. cb((DWORD)-1, 1) tells the "checking" phase (after the download, not pausable).
 int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch);
 void driver_skip_local_other(void);          // the user declined a local copy that differs: the next driver_fetch skips such copies and downloads
+BOOL driver_layout_ok(const WCHAR *dir);   // the folder holds ftdibus.inf with i386 and amd64 folders (an unpacked driver)
+int driver_check(WCHAR *path, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch);   // a zip or an unpacked folder the user chose: the same check as for a copy that was found (PK_OK / DRV_W_HASH / DRV_E_HASH); path becomes the folder
 const WCHAR *driver_pinned_sha256(void);    // the SHA-256 of the zip this program knows
 void driver_forget(const WCHAR *zip);       // deletes the zip when it is our own cache file in %TEMP%\DynaRunFix (a refused download), never a file of the user's
 BOOL driver_partial(DWORD *have);           // a partial driver download that driver_fetch can continue; *have: bytes so far
