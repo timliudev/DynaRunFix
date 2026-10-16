@@ -90,7 +90,7 @@ the redundant `0x591` messages are suppressed.
 A hook can only be installed into a process of the same or lower integrity level. DynaRun does not need
 administrator rights for any of its screens, so `DynaRunFix.exe` always starts it without them: the compatibility
 setting *Run as administrator* does not elevate it when it is started through the launcher (observed: the launcher starts it
-with `RunAsInvoker` in the compatibility layer, see the [README](../README.md#run-as-administrator-is-not-needed)), and a
+with `RunAsInvoker` in the compatibility layer, see the [manual](MANUAL.md#run-as-administrator-is-not-needed)), and a
 launcher that is itself elevated starts DynaRun with the desktop shell's non-elevated token. An already running DynaRun that was started as administrator cannot be attached to; the
 launcher asks for it to be closed and started again through DynaRunFix. Running `DynaRun V3.exe` itself elevated is
 not recommended: elevated processes ignore per-user COM registrations, which is where DynaRun's setup registers its

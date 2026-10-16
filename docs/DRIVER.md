@@ -4,7 +4,7 @@
 
 Do this once on a PC that has never been connected to a Dyna Pro dynamometer. Without the driver, Windows lists the
 device under *Other devices* and DynaRun cannot talk to it. DynaRunFix does not bundle the driver; it comes from
-Dyna Pro. The user-facing summary is in the [README](../README.md#usage).
+Dyna Pro. The user-facing summary is in the [manual](MANUAL.md#usage).
 
 ## Quick way: use the setup wizard
 
@@ -194,7 +194,7 @@ not been tried by DynaRunFix on those systems.
 [English above](#installing-the-dyna-pro-usb-driver)
 
 第一次把這台電腦接上 Dyna Pro 測功機時做一次。沒有驅動程式的話,Windows 會把裝置列在「其他裝置」,DynaRun 無法與它通訊。
-DynaRunFix 不附驅動程式,驅動程式由 Dyna Pro 提供。使用者版說明見 [README](../README.md#使用方式)。
+DynaRunFix 不附驅動程式,驅動程式由 Dyna Pro 提供。使用者版說明見 [使用手冊](MANUAL.md#使用方式)。
 
 ### 快速方式:使用安裝精靈
 

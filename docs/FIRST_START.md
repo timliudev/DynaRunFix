@@ -3,7 +3,7 @@
 [繁體中文在下方](#繁體中文)
 
 Developer notes on DynaRun V3 3.26.0's first-start sequence, what goes wrong in it and what DynaRunFix does
-about it. Findings from 2026-10-07. The user-facing summary is in the [README](../README.md#first-time-setup).
+about it. Findings from 2026-10-07. The user-facing summary is in the [manual](MANUAL.md#first-time-setup).
 
 ## Symptom
 
@@ -128,7 +128,7 @@ text in ANSI-charset fonts is drawn as Latin letters.
 ## 繁體中文
 
 DynaRun V3 3.26.0 首次啟動流程的開發紀錄:哪裡出錯、DynaRunFix 怎麼處理。2026-10-07 的調查結果。
-使用者版說明見 [README](../README.md#首次設定)。
+使用者版說明見 [使用手冊](MANUAL.md#首次設定)。
 
 ### 症狀
 
