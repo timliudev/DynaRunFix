@@ -1031,9 +1031,10 @@ static void hash_choice(BOOL install)
     lstrcatW(l, g_drvzip); user_log(l);
     if (install) { g_drv_allow = TRUE; set_page(P_DRV_PRESS7); return; }
     if (!(g_drv_how & DRV_SRC_LOCAL)) driver_forget(g_drvzip);             // our own refused download is not offered again; a file of the user's stays
-    if (g_drv_how & DRV_SRC_LOCAL) driver_skip_local_other();              // copies that differ are not offered again in this run: later tries download
+    if ((g_drv_how & DRV_SRC_LOCAL) && !(g_drv_how & DRV_SRC_PICKED)) { driver_skip_local_other(); user_log(L"the declined copy was found automatically: automatic searches skip such copies from now on"); }   // later tries download
+    else if (g_drv_how & DRV_SRC_PICKED) user_log(L"the declined file was chosen by the user: automatic searches are not changed");
     g_drvzip[0] = 0; g_drv_allow = FALSE;
-    lstrcpyW(g_note, (g_drv_how & DRV_SRC_LOCAL) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
+    lstrcpyW(g_note, ((g_drv_how & DRV_SRC_LOCAL) && !(g_drv_how & DRV_SRC_PICKED)) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
                                                  : T(L"Cancelled: the driver was not installed.", L"已取消，沒有安裝驅動程式。"));
     set_page(P_DRV_INTRO);
 }
@@ -1135,6 +1136,8 @@ static void choose_driver_source(void)
     g_acq = &ACQ_DRIVER; lstrcpyW(g_drvzip, p);
     old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
     rc = driver_check(g_drvzip, &g_drv_how, g_drv_hex, &g_drv_size, g_drv_rep, 1500);
+    g_drv_how |= DRV_SRC_PICKED;                                           // chosen by the user: always checked; declining its warning does not touch the memory of declined auto-found copies
+    user_log(L"driver: a file the user chose is checked as it is (the skip of declined auto-found copies does not apply to it)");
     g_drv_bl = driver_bitlocker();
     SetCursor(old);
     acq_driver_result(rc);

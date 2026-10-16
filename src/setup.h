@@ -136,7 +136,7 @@ enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, D
 enum { DRV_CI_ENFORCED, DRV_CI_OFF, DRV_CI_UNKNOWN };   // driver signature enforcement now
 BOOL driver_supported(void);                // Windows 10 (build 10240) or later: older systems install the driver by hand
 BOOL driver_installed(void);                // a Dyna Pro ftdibus package is in the driver store (%windir%\INF\oem*.inf)
-enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR = 4 };   // *how of driver_fetch: where the zip came from, and (flag) the zip as a whole is not the official one
+enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR = 4, DRV_SRC_PICKED = 8 };   // *how of driver_fetch: where the zip came from, and (flag) the zip as a whole is not the official one
 // The zip: found on this computer (DRV_SRC_LOCAL; DRV_SRC_DIR: an already unpacked folder, `zip` is its path and hex a digest of the files' hashes) or downloaded. The check is of its CONTENT: the files Windows installs (driver.c, DRV_FILES).
 // PK_OK: those files are the pinned ones (DRV_ZIPDIFF: although the zip as a whole differs, e.g. re-packed). DRV_W_HASH: some differ or are missing but
 // the package passed the sanity checks - the user is asked ("install anyway"); hex / size: the SHA-256 and size of the zip, rep: the files that differ.
