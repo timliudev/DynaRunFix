@@ -2,6 +2,50 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## Unreleased
+
+Added (setup wizard):
+
+- **Hint: a newer DynaRun V3.** With DynaRun installed and the computer online, the first page asks (in the background) whether Dyna Pro's software page names a newer
+  version than the installed one (the Windows Installer's record; the page's download table names 3.26.0 today, and the parser is tolerant: no version found means
+  no hint). If the page names none, the zip on the site is asked for its first byte and its ETag / length / date are compared with what the last completed download
+  recorded. A line and *Download new version* appear (the same acquire flow, then the normal install; a copy of an older package already on the computer is not
+  used for it). Nothing is automatic, nothing is blocked, each result is a log line.
+- **Choose a driver by its folder:** for the driver, *Choose file...* takes a zip, or ftdibus.inf of an unpacked folder; either goes through the same two-layer check and warning page.
+- **DynaRun and its fix installed, only the driver missing:** the first page offers just the driver (and *Reinstall the fix...*). "The fix is current" means the
+  uninstall entry names this version and the launcher and dll are in the install folder.
+
+Changed (setup wizard, DynaRun and driver):
+
+- **One acquire flow for the DynaRun setup and the driver** (same pages, same code): network check (Windows' network list; clearly disconnected goes to the error
+  page at once), look for a copy on the computer, download (connect timeout 10 s, receive 30 s, back-off unchanged) with progress, *Pause* / *Resume* and
+  *Continue download*, check, result. One error page for both (title "... could not be downloaded", the first real error, the manual steps, *Retry* /
+  *Continue download*, *Choose file...* and *Skip* only where the driver may be skipped). The duplicated error texts of the two flows are one function.
+- **Buttons are the same on every page:** the primary action right-most (the default button), the way out directly left of it (*Cancel*, or *Skip* / *Later* /
+  *Close* where that is what leaving means), another way on left of that (*Choose file...*, *Download new version*), and ONE link-style action at the bottom left
+  (*Open website*, *Installed elsewhere...*, ...). The title-bar X and Esc do what *Cancel* does. Wording unified: *Open website*, *Choose file...*, *Retry*,
+  *Next*. The hash-warning page keeps *Cancel* as its default button on purpose.
+- The safe unpacking, copying and checking of files named in a pinned table moved to `package.c` and is shared (the driver's 18 files; the DynaRun `Setup.msi`
+  goes through the shared size cap and free-target checks).
+- Button wording: the page shown when key 7 was missed now offers *Retry* instead of *Try again* (one wording on every page).
+- The driver documentation and the README now say that DynaRunFix does not check the digital signature of the driver files (it compares SHA-256 values and, for *Install anyway*, the Dyna Pro device ID in the INF).
+
+Fixed:
+
+- Cancelling the warning for a driver copy that was found automatically skips such copies from then on; a file or folder you chose with *Choose file...* is always checked as it is and does not affect that memory.
+- *Download new version* now really downloads: before, an older DynaRun package already on the computer could be picked up instead and the old version installed again.
+- A damaged DynaRun package found on the computer (not a usable zip file) is no longer offered again and again: the wizard says so and offers *Retry* (download) or *Choose file...*.
+- With no network at all, a file you had chosen earlier could be deleted when the wizard was closed after a rejected local copy; the download path now always names the wizard's own file.
+- The update hint and a download running at the same time could disturb each other (a wrong address or a spurious refusal); each request now has its own buffers.
+- A very long driver file or folder name could overflow a buffer on the page that announces the restart-menu step (English text).
+- If turning BitLocker protection back on failed, the wizard forgot that it had suspended it; it now keeps the note and tries again at the next cancel, continue or uninstall.
+- Long temporary-folder or install-folder paths no longer risk running past a buffer when the setup copies itself from a network drive or backs up registry keys.
+- The manual steps of the download error page come from what is being fetched (no driver wording on the DynaRun page); the outline on the restart-menu picture sits in
+  the gaps between the lines instead of over the text of lines 6 and 8; the last driver step says up front that Windows shows its red security window twice.
+- Logs: a folder is called a folder, the folders are walked once, a text of several lines is several UTF-8 lines (a long one used to be dropped by a fixed buffer), and
+  `bcdedit /deletevalue ... -> 1` after a successful install is logged as "not present: nothing to remove" instead of looking like an error.
+- Docs: the README's list of in-memory import redirections now also names `WaitForSingleObject` in `dynapro.dll` (opt-in USB switch only, for the `DPSetData` watchdog's helper thread).
+
 ## v1.6.0 — 2026-10-17
 
 Added (setup wizard, driver step):
@@ -439,6 +483,36 @@ Changed and fixed (after a review of v1.4.0):
 ---
 
 ## 更新紀錄
+
+### 未發布
+
+新增(安裝精靈):
+
+- **提示:有新版 DynaRun V3。** DynaRun 已安裝且電腦有網路時,第一頁會在背景詢問 Dyna Pro 的軟體頁面有沒有比已安裝版本(Windows Installer 的記錄)更新的版本(頁面的下載表目前寫 3.26.0;解析很寬容:找不到版本就沒有提示)。頁面沒寫版本時,會向網站上的 zip 要第一個位元組,把它的 ETag / 長度 / 日期和上次完成的下載所記錄的比對。有的話會出現一行說明與「下載新版」(同一個取得流程,再走一般安裝;電腦上現有的舊版安裝檔不會被拿來用)。完全不會自動執行、不會擋任何事,每個結果是一行 log。
+- **驅動程式可以選資料夾:** 驅動程式的「選擇檔案…」可以選 zip,或已解開資料夾裡的 ftdibus.inf,走同樣的兩層檢查與警告頁。
+- **已安裝 DynaRun 與修正、只缺驅動程式:** 第一頁只提供驅動程式(以及「重新安裝修正…」)。「修正是最新的」指的是:解除安裝項目的版本就是這個安裝程式的版本,而且安裝資料夾裡有啟動器與 dll。
+
+變更(安裝精靈,DynaRun 與驅動程式):
+
+- **DynaRun 安裝檔與驅動程式共用同一個取得流程**(同樣的頁面、同樣的程式):網路檢查(Windows 的網路清單;明確沒有連線就直接顯示錯誤頁)、找電腦上現有的、下載(連線逾時 10 秒、接收 30 秒,退避不變),附進度、「暫停」/「繼續」與「繼續下載」、檢查、結果。兩者共用一個錯誤頁(標題「無法自動下載…」、第一個真正的錯誤、手動步驟、「重試」/「繼續下載」、「選擇檔案…」,以及只有驅動程式可略過時才有的「略過」)。兩個流程重複的錯誤文字合併成一個函式。
+- **所有頁面的按鈕一致:** 主要動作在最右邊(預設按鈕),離開的方式緊鄰它的左邊(「取消」,離開的意義是略過/稍後/關閉時用該字),再往左是另一個前進的方式(「選擇檔案…」、「下載新版」),最左下角只有一個連結式動作(「開啟官網」、「已裝在其他位置…」…)。標題列的 X 與 Esc 的作用等同「取消」。用字統一:「開啟官網」、「選擇檔案…」、「重試」、「下一步」。雜湊警告頁刻意維持「取消」為預設按鈕。
+- 以固定表格指名的檔案之安全解壓、複製與檢查移到 `package.c` 共用(驅動程式的 18 個檔案;DynaRun 的 `Setup.msi` 走共用的大小上限與釋放目標檢查)。
+- 按鈕用字統一:沒按到 7 時的頁面提供「重試」,不再是「再試一次」。
+- 驅動程式說明與 README 現在寫明:DynaRunFix 不驗證驅動程式檔的數位簽章(只比對 SHA-256,「仍要安裝」時再看 INF 裡的 Dyna Pro 裝置 ID)。
+
+修正:
+
+- 取消「自動找到的驅動程式副本」的警告後,之後的自動搜尋才會跳過這類副本;用「選擇檔案…」自己選的檔案或資料夾一律照實檢查,也不影響這個記憶。
+- 「下載新版」現在真的會下載:以前電腦上已有較舊的 DynaRun 安裝檔時,可能被直接拿來用,結果又裝回舊版。
+- 電腦上找到的 DynaRun 安裝檔如果是損毀的檔案,不再一直重複提供:精靈會說明,並提供「重試」(下載)或「選擇檔案…」。
+- 完全沒有網路時,先前拒絕了電腦上的副本,關閉精靈後可能刪到你自己選的檔案;現在下載路徑一律是精靈自己的檔案。
+- 新版提示和下載同時進行時可能互相干擾(連到錯的位址或誤判被拒絕);現在每個請求各用自己的緩衝區。
+- 過長的驅動程式檔名或資料夾名稱,可能讓說明重新開機選單那一步的頁面緩衝區溢位(英文介面)。
+- 重新開啟 BitLocker 保護失敗時,精靈會忘記自己曾經暫停它;現在會保留記錄,下次取消、繼續或解除安裝時再試一次。
+- 安裝程式從網路磁碟機複製自己、或備份登錄機碼時,過長的暫存資料夾或安裝資料夾路徑不再有超出緩衝區的風險。
+- 下載錯誤頁的手動步驟改由要取得的東西決定(DynaRun 頁面不再出現驅動程式的字眼);重新開機選單圖片上的外框改放在各行之間的空隙,不再壓到第 6、8 行的文字;驅動程式的最後一步會事先說明 Windows 會跳出紅色安全性視窗兩次。
+- Log:資料夾就叫資料夾、資料夾只走一遍、多行文字會寫成多行 UTF-8(太長的原本會被固定緩衝區整行丟掉),安裝成功後的 `bcdedit /deletevalue ... -> 1` 改記為「不存在:沒有東西要移除」,不再像是錯誤。
+- 文件:README 的記憶體內匯入導向清單現在也列出 `dynapro.dll` 的 `WaitForSingleObject`(只有開啟選用的 USB 開關時,供 `DPSetData` 監看的輔助執行緒使用)。
 
 ### v1.6.0 — 2026-10-17
 

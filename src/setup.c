@@ -12,6 +12,10 @@
 //                                             desktop shortcut as they are (an update, see update.c)
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
 //   DynaRunFix-Setup.exe /checkupdate         /update <args>, /offer: the installed copy, run by the launcher (update.c)
+//   /pin                                      (elevated stage) also set up the Windows 11 taskbar pin
+//   DynaRunFix-Setup.exe /driver              the Dyna Pro USB driver step on its own (driver.c; the wizard's last page)
+//   DynaRunFix-Setup.exe /driver-cancel       undo the driver step's preparation (task, start-up menu option, BitLocker)
+//   /driver-prep, /driver-install, /driver-continue   the driver step's own stages (elevated, or started by its scheduled task)
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
 // administrator's credentials are typed into the UAC prompt:
@@ -181,7 +185,7 @@ static BOOL write_file(const WCHAR *p, const void *d, DWORD n)
 // is refused, so the elevated stage cannot be made to write somewhere else through a file planted in %TEMP%.
 static void append_line(const WCHAR *p, const WCHAR *line)
 {
-    static char u[2048]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof(u) - 2, NULL, NULL); DWORD w;
+    static char u[4096]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof(u) - 2, NULL, NULL); DWORD w;
     BY_HANDLE_FILE_INFORMATION bi;
     HANDLE h = CreateFileW(p, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -614,13 +618,32 @@ static void run_log(const WCHAR *line)
 }
 
 // For the other files (the wizard side of the driver step): the line with a time stamp, so that durations can be read from the log.
+// The wizard thread, its worker and the update-hint thread all log: one lock covers the formatting (static buffers) and the write.
+static CRITICAL_SECTION g_ulog_cs;
+static volatile LONG g_ulog_state;                     // 0 not set up, 1 being set up, 2 ready
+
 void user_log(const WCHAR *line)
 {
-    static WCHAR l[2 * MAX_PATH + 400]; SYSTEMTIME t;
+    static WCHAR l[2 * MAX_PATH + 400]; SYSTEMTIME t; const WCHAR *p, *q;
+    if (g_ulog_state != 2) {
+        if (InterlockedCompareExchange(&g_ulog_state, 1, 0) == 0) { InitializeCriticalSection(&g_ulog_cs); g_ulog_state = 2; }
+        else while (g_ulog_state != 2) Sleep(1);
+    }
+    EnterCriticalSection(&g_ulog_cs);
     GetLocalTime(&t);
-    wsprintfW(l, L"[%02u:%02u:%02u.%03u] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
-    lstrcpynW(l + lstrlenW(l), line, (int)(sizeof(l) / sizeof(l[0])) - lstrlenW(l) - 1);
-    run_log(l);
+    for (p = line; *p; p = *q ? q + 1 : q) {                            // a text of several lines is several lines, each with its time; the log is UTF-8 (append_line)
+        int n, pre, cnt;
+        for (q = p; *q && *q != '\n'; q++);
+        n = (int)(q - p);
+        while (n > 0 && p[n - 1] == '\r') n--;
+        if (n <= 0) continue;
+        wsprintfW(l, L"[%02u:%02u:%02u.%03u] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        pre = lstrlenW(l); cnt = n + 1;
+        if (cnt > (int)(sizeof(l) / sizeof(l[0])) - pre) cnt = (int)(sizeof(l) / sizeof(l[0])) - pre;
+        lstrcpynW(l + pre, p, cnt);
+        run_log(l);
+    }
+    LeaveCriticalSection(&g_ulog_cs);
 }
 
 static void log_running(const WCHAR *stage, const runproc *l, int n, int r)
@@ -961,7 +984,7 @@ static void skipped(const WCHAR *key, const WCHAR *why)
 static int promote_com_in(HKEY hu, HKEY hm, WCHAR roots[][MAX_PATH], int nr)
 {
     static const WCHAR *const views[] = { L"WOW6432Node\\CLSID", L"CLSID" };
-    static WCHAR path[600], rel[300], id[128], v[MAX_PATH], prog[300], log[MAX_PATH], bak[MAX_PATH], line[700], tl[128], tlkey[200];
+    static WCHAR path[600], rel[300], id[128], v[MAX_PATH], prog[300], log[MAX_PATH], bak[MAX_PATH], line[700], tl[128], tlkey[200], bn[48];
     const WCHAR *why; HKEY list, s, d; DWORD i, n; int vi, j, copied = 0; WCHAR *dot; BOOL had, ok;
 
     g_nkeys = 0;
@@ -992,8 +1015,8 @@ static int promote_com_in(HKEY hu, HKEY hm, WCHAR roots[][MAX_PATH], int nr)
         had = has_key(hm, g_keys[j]);
         if (had) {                              // keep what was there before
             cat3(bak, g_dir, L"\\com-backup", NULL); CreateDirectoryW(bak, NULL);
-            wsprintfW(bak + lstrlenW(bak), L"\\%lu-%d.reg", GetTickCount(), j);
-            reg_export(g_keys[j], bak);
+            wsprintfW(bn, L"\\%lu-%d.reg", GetTickCount(), j);
+            if (lstrlenW(bak) + lstrlenW(bn) < MAX_PATH) { lstrcatW(bak, bn); reg_export(g_keys[j], bak); }   // bounded: a long install path just skips the backup file
         }
         if (RegOpenKeyExW(hu, g_keys[j], 0, KEY_READ | WOW, &s)) continue;
         if (!RegCreateKeyExW(hm, g_keys[j], 0, NULL, 0, KEY_ALL_ACCESS | WOW, NULL, &d, NULL)) {
@@ -1925,9 +1948,9 @@ int run_elevated(const WCHAR *args, const WCHAR *exe_path)
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
     if (g_pin) lstrcatW(a, L" /pin");                // the elevated stage sets up the Windows 11 pin
     if (g_keep) lstrcatW(a, L" /keep");
-    // Mapped network drives (e.g. a VM's shared folder) do not exist for the elevated process: run a copy in %TEMP%
+    // Mapped network drives (e.g. a shared folder) do not exist for the elevated process: run a copy in %TEMP%
     lstrcpynW(root, g_self, 4);
-    if (!exe_path && root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && (tn = GetTempPathW(MAX_PATH - 40, tmp)) != 0 && tn < MAX_PATH - 40) {
+    if (!exe_path && root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && (tn = GetTempPathW(MAX_PATH - 60, tmp)) != 0 && tn < MAX_PATH - 60) {   // room for the longest name below (17 + 3 x 10 digits + 2 + 4 + NUL)
         q.QuadPart = 0; QueryPerformanceCounter(&q);
         wsprintfW(tmp + lstrlenW(tmp), L"DynaRunFix-Setup-%lu-%lu-%lu.exe", GetCurrentProcessId(), GetTickCount(), q.LowPart);
         // the copy is held open (nobody can change it) from here until the elevated process has ended: what the UAC prompt names is what runs
@@ -2092,6 +2115,15 @@ void autostart_flush(void)
         set_str(r, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         RegCloseKey(r);
     }
+}
+
+// The fix is installed and is this version: the uninstall entry names our version and the launcher and the dll are in the install folder. (A dev build
+// shows its commit as the version, so a rebuilt one is "not current" until it has been installed once.)
+BOOL fix_current(void)
+{
+    static WCHAR v[64], d[MAX_PATH];
+    if (!reg_str(HKEY_LOCAL_MACHINE, UNINSTKEY, L"DisplayVersion", v, 64, 0) || lstrcmpW(v, WIDEN(DRF_DISPLAY))) return FALSE;
+    return exists(g_launcher) && exists(cat3(d, g_dir, L"\\dynafix.dll", NULL));
 }
 
 int install_fix(void)
