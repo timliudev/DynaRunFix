@@ -118,6 +118,7 @@ enum { DRV_SRC_DOWNLOADED = 0, DRV_SRC_LOCAL = 1, DRV_ZIPDIFF = 2, DRV_SRC_DIR =
 // the package passed the sanity checks - the user is asked ("install anyway"); hex / size: the SHA-256 and size of the zip, rep: the files that differ.
 // DRV_E_HASH: not a usable driver package. Other PK_*: the download failed. cb((DWORD)-1, 1) tells the "checking" phase (after the download, not pausable).
 int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch);
+void driver_skip_local_other(void);          // the user declined a local copy that differs: the next driver_fetch skips such copies and downloads
 const WCHAR *driver_pinned_sha256(void);    // the SHA-256 of the zip this program knows
 void driver_forget(const WCHAR *zip);       // deletes the zip when it is our own cache file in %TEMP%\DynaRunFix (a refused download), never a file of the user's
 BOOL driver_partial(DWORD *have);           // a partial driver download that driver_fetch can continue; *have: bytes so far

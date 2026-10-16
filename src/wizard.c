@@ -916,8 +916,10 @@ static void hash_choice(BOOL install)
     lstrcatW(l, g_drvzip); user_log(l);
     if (install) { g_drv_allow = TRUE; set_page(P_DRV_PRESS7); return; }
     if (!(g_drv_how & DRV_SRC_LOCAL)) driver_forget(g_drvzip);             // our own refused download is not offered again; a file of the user's stays
+    if (g_drv_how & DRV_SRC_LOCAL) driver_skip_local_other();              // copies that differ are not offered again in this run: later tries download
     g_drvzip[0] = 0; g_drv_allow = FALSE;
-    lstrcpyW(g_note, T(L"Cancelled: the driver was not installed.", L"已取消，沒有安裝驅動程式。"));
+    lstrcpyW(g_note, (g_drv_how & DRV_SRC_LOCAL) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
+                                                 : T(L"Cancelled: the driver was not installed.", L"已取消，沒有安裝驅動程式。"));
     set_page(P_DRV_INTRO);
 }
 
@@ -1457,5 +1459,7 @@ int wizard(void)
     }
     g_hwnd = NULL;
     if (g_page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
-    return g_page == P_DONE ? 0 : 2;
+    if (g_page == P_DONE || g_page == P_DRV_DONE || g_page == P_DRV_REBOOT) return 0;      // ended on a success page
+    if (g_page == P_FAIL || g_page == P_ERROR || g_page == P_DRV_ERROR) return 1;           // ended on an error page
+    return 2;                                                                               // closed before the end
 }

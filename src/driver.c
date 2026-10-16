@@ -136,7 +136,7 @@ BOOL drv_ci_enforced(DWORD options) { return (options & CI_OPT_ENABLED) != 0; }
 // user left it. A status we could not read (unknown, query failed) is not "off": try the suspension and remember it on success, because a
 // protected PC that is not suspended asks for the recovery key at the restart menu.
 // Protection "off" does not always mean nothing to do: while a volume is still being encrypted or decrypted (also paused) its key protectors can
-// already be in force although WMI reports "off", and the restart menu then asks for the recovery key (seen in a VM). That case is suspended too,
+// already be in force although WMI reports "off", and the restart menu then asks for the recovery key. That case is suspended too,
 // when the volume has at least one key protector.
 BOOL drv_bde_suspend(int ps, int conv, int nprot)
 {
@@ -688,9 +688,13 @@ static void log_differs(const WCHAR *what, const WCHAR *zip, const WCHAR *hex, c
     if (rep && rep[0]) user_log(rep);                                          // the files that differ
 }
 
+static BOOL g_skip_other;                                                      // the user declined a local copy that differs: later driver_fetch calls in this run go to the website
+
+void driver_skip_local_other(void) { g_skip_other = TRUE; }
+
 int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch)
 {
-    WCHAR l[2 * MAX_PATH + 160]; int rc; BOOL known, sane, readable;
+    WCHAR l[2 * MAX_PATH + 160]; int rc; BOOL known, sane, readable, skip_other = g_skip_other; // kept for the whole run, so resume and retry do not offer the declined copy again
     *how = DRV_SRC_DOWNLOADED; hex[0] = 0; *size = 0; if (rep) rep[0] = 0;
     g_pkg_log = user_log;                                                      // the folder search says which folders it looks in
     user_log(L"driver_fetch: looking for a copy of the driver zip on this computer");
@@ -712,7 +716,8 @@ int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, 
     }
     // 2. a zip called "Dyna Pro USB*" whose files differ goes the way of a download that differs: sanity checks, then the user is asked.
     //    One that is not a usable driver package is skipped (logged) and the official site is tried.
-    if (driver_local_other(zip)) {
+    if (skip_other) user_log(L"the user declined a local copy that differs: not offered again, the official site is used");
+    if (!skip_other && driver_local_other(zip)) {
         readable = zip_scan(zip, &known, &sane, rep, repcch);
         if (readable && sane && !known && pkg_sha256(zip, hex, size)) {
             log_differs(L"driver zip on this computer, its files differ from the pinned ones: ", zip, hex, rep);
@@ -725,7 +730,7 @@ int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, 
         hex[0] = 0; *size = 0; if (rep) rep[0] = 0;
     }
     // 2b. an unpacked folder with all 18 files of which some differ: the same warning path (the digest of its file hashes stands for the zip hash)
-    if (pkg_find_dirs(dir_other_cb, zip)) {
+    if (!skip_other && pkg_find_dirs(dir_other_cb, zip)) {
         static drv_check dc; WCHAR tmp[MAX_PATH];
         check_files_at(zip, L"\\", NULL, &dc);
         if (rep) check_report(&dc, rep, repcch);
