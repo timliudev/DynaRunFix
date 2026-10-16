@@ -181,7 +181,7 @@ static BOOL write_file(const WCHAR *p, const void *d, DWORD n)
 // is refused, so the elevated stage cannot be made to write somewhere else through a file planted in %TEMP%.
 static void append_line(const WCHAR *p, const WCHAR *line)
 {
-    static char u[2048]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof(u) - 2, NULL, NULL); DWORD w;
+    static char u[4096]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof(u) - 2, NULL, NULL); DWORD w;
     BY_HANDLE_FILE_INFORMATION bi;
     HANDLE h = CreateFileW(p, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -614,13 +614,32 @@ static void run_log(const WCHAR *line)
 }
 
 // For the other files (the wizard side of the driver step): the line with a time stamp, so that durations can be read from the log.
+// The wizard thread, its worker and the update-hint thread all log: one lock covers the formatting (static buffers) and the write.
+static CRITICAL_SECTION g_ulog_cs;
+static volatile LONG g_ulog_state;                     // 0 not set up, 1 being set up, 2 ready
+
 void user_log(const WCHAR *line)
 {
-    static WCHAR l[2 * MAX_PATH + 400]; SYSTEMTIME t;
+    static WCHAR l[2 * MAX_PATH + 400]; SYSTEMTIME t; const WCHAR *p, *q;
+    if (g_ulog_state != 2) {
+        if (InterlockedCompareExchange(&g_ulog_state, 1, 0) == 0) { InitializeCriticalSection(&g_ulog_cs); g_ulog_state = 2; }
+        else while (g_ulog_state != 2) Sleep(1);
+    }
+    EnterCriticalSection(&g_ulog_cs);
     GetLocalTime(&t);
-    wsprintfW(l, L"[%02u:%02u:%02u.%03u] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
-    lstrcpynW(l + lstrlenW(l), line, (int)(sizeof(l) / sizeof(l[0])) - lstrlenW(l) - 1);
-    run_log(l);
+    for (p = line; *p; p = *q ? q + 1 : q) {                            // a text of several lines is several lines, each with its time; the log is UTF-8 (append_line)
+        int n, pre, cnt;
+        for (q = p; *q && *q != '\n'; q++);
+        n = (int)(q - p);
+        while (n > 0 && p[n - 1] == '\r') n--;
+        if (n <= 0) continue;
+        wsprintfW(l, L"[%02u:%02u:%02u.%03u] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        pre = lstrlenW(l); cnt = n + 1;
+        if (cnt > (int)(sizeof(l) / sizeof(l[0])) - pre) cnt = (int)(sizeof(l) / sizeof(l[0])) - pre;
+        lstrcpynW(l + pre, p, cnt);
+        run_log(l);
+    }
+    LeaveCriticalSection(&g_ulog_cs);
 }
 
 static void log_running(const WCHAR *stage, const runproc *l, int n, int r)
@@ -2092,6 +2111,15 @@ void autostart_flush(void)
         set_str(r, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         RegCloseKey(r);
     }
+}
+
+// The fix is installed and is this version: the uninstall entry names our version and the launcher and the dll are in the install folder. (A dev build
+// shows its commit as the version, so a rebuilt one is "not current" until it has been installed once.)
+BOOL fix_current(void)
+{
+    static WCHAR v[64], d[MAX_PATH];
+    if (!reg_str(HKEY_LOCAL_MACHINE, UNINSTKEY, L"DisplayVersion", v, 64, 0) || lstrcmpW(v, WIDEN(DRF_DISPLAY))) return FALSE;
+    return exists(g_launcher) && exists(cat3(d, g_dir, L"\\dynafix.dll", NULL));
 }
 
 int install_fix(void)

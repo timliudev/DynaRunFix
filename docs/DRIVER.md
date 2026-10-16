@@ -26,8 +26,10 @@ available.
   applies to exactly that zip (or folder) for this one installation and is logged in `driver.log`; while it is in force the staging folder holds
   `accepted.txt` with the SHA-256 of exactly the files that were staged, and it is deleted when the driver step ends. If you cancel the warning for a
   copy found on this computer, later attempts (including resume and retry) download the driver from the Dyna Pro website instead; copies that differ are not offered again until the wizard is started again.
-* The download page has *Pause* / *Resume*, retries by itself (after 1, 2, 4, 8 and 15 seconds) and, if it still fails, goes back with the first error,
-  **Continue download** (from the part that is already there) and **Download manually**.
+* The download page (the same as for the DynaRun setup) has *Pause* / *Resume*, retries by itself (after 1, 2, 4, 8 and 15 seconds) and, if it still fails, shows
+  the first error with **Continue download** (from the part that is already there), **Open website**, **Choose file...** (the zip, or ftdibus.inf in the folder where it is
+  unpacked: the same check follows) and, in the main installer, **Skip**. If Windows says the computer has no network at all, that page comes at once.
+* If DynaRun V3 and the fix are already installed and only the driver is missing, the installer's first page offers just the driver.
 * Windows asks for administrator permission (UAC). On an administrator account that is once; a standard user may be asked for an
   administrator's password again after the restart. If BitLocker protection is on (or its status cannot be read), the wizard suspends it until the driver is installed
   (at most 3 restarts as a safety net, then it is resumed automatically; it is also resumed when the installation finishes or you cancel),
@@ -209,7 +211,8 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
   | ![啟動設定:按 7,停用驅動程式強制簽章](img/driver-press-7.png) |
 
 * 沒按到 7 的話,登入後精靈會告知,並提供 **再試一次**。
-* 下載頁有「暫停」/「繼續」,中斷時會自動重試(依序等 1、2、4、8、15 秒);仍然失敗就回到上一頁並顯示第一個錯誤,提供 **繼續下載**(從已經下載的部分接續)與 **開啟官網手動下載**。
+* 下載頁(和 DynaRun 安裝檔的一樣)有「暫停」/「繼續」,中斷時會自動重試(依序等 1、2、4、8、15 秒);仍然失敗就顯示第一個錯誤,提供 **繼續下載**(從已經下載的部分接續)、**開啟官網**、**選擇檔案…**(zip,或已解開它的資料夾裡的 ftdibus.inf:接著做同樣的檢查),主安裝程式裡還有 **略過**。Windows 說電腦完全沒有網路時,那一頁會立刻出現。
+* 已安裝 DynaRun V3 與修正、只缺驅動程式時,安裝程式第一頁只提供驅動程式。
 * BitLocker 還有一種情況也會暫停:磁碟機仍在加密或解密中(含暫停)且有金鑰保護裝置(Windows 會報成「關閉」,但重新開機選單仍會要求修復金鑰)。暫停之後會檢查;失敗時精靈會顯示警告頁(Windows 很可能會要求修復金鑰;可到 https://aka.ms/myrecoverykey 查詢),讓你選 **仍要重新開機** 或 **稍後**(會撤回所有已設定的項目);**查詢修復金鑰** 會開啟那個頁面。`driver.log` 與旁邊的 `bitlocker-before.txt`(`manage-bde -status` 和 `-protectors -get` 的輸出,修復密碼寫入前先遮蔽)記錄精靈看到與做了什麼。
 * 其他精靈頁面:「確認安裝檔」頁(在主安裝程式的授權合約頁之前)有 **開啟 Dyna Pro 官網** 按鈕。在 Windows 8 與更舊的版本(Windows 8 / 8.1、Vista / 7、XP)上,`/driver` 會顯示 **驅動程式沒有安裝**,附上該版 Windows 的手動步驟與 **開啟手動安裝說明** 按鈕(就是這份文件)。驅動程式已經安裝時,精靈會顯示 **驅動程式已安裝**。
 * 接著 Windows 會跳出紅色警告,而且會出現兩次(兩個驅動程式檔 ftdibus 與 ftdiport 各一次),每次都請選 **仍然安裝此驅動程式軟體**。驅動程式強制簽章在下次正常重新啟動後恢復。精靈最後一頁提供「開始使用 DynaRun」,以你的一般使用者身分啟動(不是提升權限)。

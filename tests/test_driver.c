@@ -678,8 +678,78 @@ static void test_job_table(void)
         labels++;
         if (!(next && next < end)) break;
     }
-    CHECK(labels >= 8, L"all eight jobs were looked at");
+    CHECK(labels >= 7, L"all seven jobs were looked at");
     release(f);
+}
+
+/* ---------- the shared package machinery, the DynaRun update hint ---------- */
+
+static void test_shared(void)
+{
+    WCHAR zip[MAX_PATH], dir[MAX_PATH], p[MAX_PATH], hex[65]; ULONGLONG sz; volatile LONG nocancel = 0; int miss = -1, n;
+    static pkg_file tab[2]; static WCHAR h0[65];
+    zent e[] = {
+        { "Pack/", NULL, 0, 0, NULL, 0, 0, 0 },
+        { "Pack/sub/deeper/a.txt", TEXT66, 66, 0, NULL, 0, 0, 0 },
+        { "Other/b.txt", TEXT66, 66, 0, NULL, 0, 0, 0 },
+        { "Other/ignored.txt", TEXT66, 66, 0, NULL, 0, 0, 0 },
+    };
+    // a table of its own, with a nested path: the generic helpers are not the driver's alone
+    tab[0].rel = L"sub/deeper/a.txt"; tab[0].size = 66; tab[0].sha = L"";
+    tab[1].rel = L"b.txt"; tab[1].size = 66; tab[1].sha = L"";
+    CHECK(pkg_entry_index(tab, 2, "Pack/sub/deeper/a.txt", 21) == 0 && pkg_entry_index(tab, 2, "X/B.TXT", 7) == 1 && pkg_entry_index(tab, 2, "Pack/sub/a.txt", 14) < 0, L"shared: names after a folder boundary, any case");
+    wsprintfW(zip, L"%s\\sh.zip", g_base); build_zip(zip, e, 4);
+    CHECK(pkg_zip_has(zip, tab, 2, 1 << 20) == 2 && pkg_zip_has(zip, tab, 2, 10) == 0, L"shared: the central directory says which table files the zip has, and the size cap counts");
+    wsprintfW(dir, L"%s\\sh1", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(pkg_stage_files(zip, dir, L"Top", tab, 2, 1 << 20, 1 << 20, &nocancel, &miss) == PK_OK && miss == 0, L"shared: staged into dir\\Top with the nested folders made");
+    wsprintfW(p, L"%s\\Top\\sub\\deeper\\a.txt", dir); CHECK(exists(p), L"shared: sub\\deeper\\a.txt is there");
+    wsprintfW(p, L"%s\\Top\\ignored.txt", dir); CHECK(!exists(p), L"shared: a file that is not in the table is not extracted");
+    wsprintfW(p, L"%s\\Top\\sub\\deeper\\a.txt", dir); pkg_sha256(p, h0, &sz);
+    tab[0].sha = h0; tab[1].sha = h0;                                   // both files hold the same text
+    { static pkg_check c; pkg_check_files(dir, L"\\Top\\", tab, 2, NULL, &c); CHECK(c.ok == 2 && c.differ == 0 && c.missing == 0, L"shared: the staged files match their table"); }
+    CHECK(pkg_dirs_plain(dir, L"Top", tab, 2), L"shared: the staging folders are plain ones");
+    CHECK(pkg_stage_files(zip, dir, L"Top", tab, 2, 1 << 20, 1 << 20, &nocancel, &miss) == PK_IO, L"shared: never into a staging folder that already exists");
+    wsprintfW(dir, L"%s\\sh2", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(pkg_stage_files(zip, dir, L"Top", tab, 2, 1 << 20, 100, &nocancel, &miss) == PK_FORMAT, L"shared: the total size cap (a zip bomb) stops it");
+    // from an unpacked folder
+    wsprintfW(p, L"%s\\sh1\\Top", g_base);
+    wsprintfW(dir, L"%s\\sh3", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(pkg_stage_from_dir(p, dir, L"Top", tab, 2, 1 << 20, 1 << 20, &miss) == PK_OK && miss == 0, L"shared: copied from an unpacked folder");
+    { static pkg_check c; pkg_check_files(dir, L"\\Top\\", tab, 2, NULL, &c); CHECK(c.ok == 2, L"shared: the copies are what is checked"); }
+    // a target that is going to be written
+    wsprintfW(p, L"%s\\old.msi", g_base);
+    { HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL); DWORD w; WriteFile(h, "x", 1, &w, NULL); CloseHandle(h); }
+    CHECK(pkg_prepare_target(p) && !exists(p), L"shared: a leftover file is removed before it is written again");
+    CHECK(pkg_prepare_target(p), L"shared: a path that is free is fine");
+    wsprintfW(p, L"%s\\sh1", g_base); CHECK(!pkg_prepare_target(p) && exists(p), L"shared: a folder is refused and left alone");
+    { zipent big; zero(&big, sizeof(big)); big.usize = 500; wsprintfW(p, L"%s\\x.msi", g_base);
+      CHECK(pkg_extract_checked(&big, "", p, 100, NULL, &nocancel) == PK_FORMAT, L"shared: an entry that claims to be bigger than the cap is refused"); }
+    (void)hex; (void)n;
+}
+
+static void test_hint(void)
+{
+    WCHAR v[40];
+    static const char PAGE[] =
+        "<html><head><title>Latest Dyna Pro Software Release.</title><script>var a = \"Dyna Run V3 Software 9.9.9\";</script><style>.x { color: red }</style></head><body>"
+        "<p>The latest release of &lsquo;Dyna Run V3&rsquo; control software Version 3.26.0 has now been released.</p>"
+        "<table><tr><td>&nbsp; Dyna Run V3 Software Manual</td><td>&nbsp; 01/01/2011</td><td>&nbsp; 9.88MB</td></tr>"
+        "<tr><td>&nbsp; Dyna Run V3 Software<br> (Please note that you will need a password from <b>Dyna Pro</b> Dynamometers to open this file)</td>"
+        "<td>&nbsp; 3.26.0</td><td>&nbsp;(Released: 9/05/2026)&nbsp;</td><td>&nbsp; 82.1MB&nbsp;</td></tr>"
+        "<tr><td>&nbsp; Dyna Pro USB Drivers</td><td>&nbsp;02/05/2018</td><td>&nbsp; 1.2MB</td></tr></table></body></html>";
+    // comparing versions
+    CHECK(ver_compare(L"3.26.0", L"3.25.9") > 0 && ver_compare(L"3.25.9", L"3.26.0") < 0 && ver_compare(L"3.26.0", L"3.26.0") == 0, L"version compare: ordinary cases");
+    CHECK(ver_compare(L"3.26", L"3.26.0") == 0 && ver_compare(L"3.26.1", L"3.26.0") > 0 && ver_compare(L"10.0.0", L"9.9.9") > 0 && ver_compare(L"3.26.0.1", L"3.26.0") > 0, L"version compare: missing parts, numbers not text, four parts");
+    CHECK(ver_compare(L"abc", L"3.26.0") == 0 && ver_compare(L"3.26.0", L"") == 0 && ver_compare(L"", L"") == 0, L"version compare: what is not a version says nothing");
+    // the page
+    CHECK(pkg_page_version(PAGE, (DWORD)strlen(PAGE), v, 40) && !lstrcmpW(v, L"3.26.0"), L"page: the version of the Dyna Run V3 Software row is found (not the manual, not the script)");
+    { static const char P2[] = "<p>The latest release of Dyna Run V3 control software Version 3.27.1 has been released.</p><td>Dyna Pro USB Drivers 1.2MB</td>";
+      CHECK(pkg_page_version(P2, (DWORD)strlen(P2), v, 40) && !lstrcmpW(v, L"3.27.1"), L"page: without the table, the news text 'Version x.y.z' is used"); }
+    { static const char P3[] = "<td>Dyna Run V3 Software Manual 01/01/2011 9.88MB</td><td>Dyna Pro USB Drivers 02/05/2018 1.2MB</td>";
+      CHECK(!pkg_page_version(P3, (DWORD)strlen(P3), v, 40) && !v[0], L"page: no version named: no hint"); }
+    CHECK(!pkg_page_version("", 0, v, 40) && !pkg_page_version("<html", 5, v, 40), L"page: an empty or cut-off page is not a version");
+    { static const char P4[] = "<td>DYNA RUN V3 SOFTWARE</td><td>(password needed)</td><td>3.30.2</td>";
+      CHECK(pkg_page_version(P4, (DWORD)strlen(P4), v, 40) && !lstrcmpW(v, L"3.30.2"), L"page: upper case and other markup are tolerated"); }
 }
 
 static void test_real_zip(void)
@@ -734,6 +804,8 @@ int wmain(void)
     wprintf(L"[staging folder]\n"); test_make_base();
     wprintf(L"[pinned files]\n"); test_files();
     wprintf(L"[job table]\n"); test_job_table();
+    wprintf(L"[shared package machinery]\n"); test_shared();
+    wprintf(L"[update hint]\n"); test_hint();
     wprintf(L"[real zip]\n"); test_real_zip();
     delete_tree(g_base, NULL, 0);
     wprintf(L"\n%d passed, %d failed\n", g_pass, g_fail);
