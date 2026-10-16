@@ -1,8 +1,9 @@
 // The setup wizard: one window, one question at a time, for users who never installed software.
 //
 //   DynaRun V3 installed:  Hello -> Install (one UAC prompt) -> Done
-//   not installed:         Hello -> get "Dyna Pro Dynamometers.zip" (found in Downloads/Desktop, or
-//                          downloaded from dynapro.co.uk; the site's download page is one click away)
+//   not installed:         Hello -> get "Dyna Pro Dynamometers.zip" (a network check first; found in Downloads/Desktop, or
+//                          downloaded from dynapro.co.uk with pause / resume; one error page, with the site's download page
+//                          one click away and "Choose file...")
 //                          -> password -> extract -> check it is DynaRun (by the MSI's UpgradeCode, never by
 //                          file name) -> Dyna Pro's license -> Install (msiexec /qb and the fix, one UAC prompt)
 //                          -> Done -> "Start DynaRun"
@@ -63,6 +64,7 @@ static const acq_desc ACQ_SETUP = { L"the DynaRun V3 setup", L"DynaRun V3 安裝
 static const acq_desc ACQ_DRIVER = { L"the Dyna Pro USB driver", L"驅動程式", L"\"Dyna Pro USB Drivers\"", L"「Dyna Pro USB Drivers」",
                                    L"Dyna Pro USB.zip, or ftdibus.inf in the folder where it is unpacked", L"Dyna Pro USB.zip，或已解開它的資料夾裡的 ftdibus.inf", driver_partial };
 static const acq_desc *g_acq = &ACQ_SETUP, *g_dlacq;     // the thing being got now; the one g_dltotal belongs to
+static BOOL g_acq_fresh;                                 // "Download new version" (update hint): no package already on this computer is taken, it is downloaded
 static BOOL g_acq_local_ok;                              // the DynaRun search may hand out another local package (pkg_find_local remembers 8 files)
 #define ACQ_NAME(d) T((d)->name_en, (d)->name_zh)
 static DWORD g_dltotal, g_dlhave;                       // size of the file being downloaded (server's, 0 = not known) and bytes received so far
@@ -535,7 +537,7 @@ static void set_page(int p)
             b[0] = 0;
             if (g_drv_allow) lstrcatW(b, T(L"Note: this driver file is not the version DynaRunFix knows; you chose to install it.\n\n", L"注意：這個驅動程式檔和已知版本不同，是你確認要安裝的。\n\n"));
             else if (g_drv_how & DRV_SRC_LOCAL) {
-                WCHAR nm[100], t[160]; lstrcpynW(nm, file_name(g_drvzip), 100);
+                WCHAR nm[100], t[300]; lstrcpynW(nm, file_name(g_drvzip), 100);   // the longest text: ~95 chars + 99 of nm
                 if (g_drv_how & DRV_SRC_DIR) wsprintfW(t, T(L"The unpacked driver folder (%s) was found on this computer and checked: no need to download it.\n\n", L"在這台電腦上找到已解開的驅動程式資料夾（%s），檢查通過，不用重新下載。\n\n"), nm);
                 else wsprintfW(t, T(L"The driver (%s) was found on this computer and checked: no need to download it again.\n\n", L"在這台電腦上找到驅動程式（%s），檢查通過，不用重新下載。\n\n"), nm);
                 lstrcatW(b, t);
@@ -775,7 +777,7 @@ static void install(int job)
 static void acq_start(const acq_desc *d)
 {
     g_acq = d;
-    if (d == &ACQ_SETUP) { g_pkg_ours = g_pkg_found = FALSE; g_acq_local_ok = g_nfound < 8; }   // the cap: pkg_reject remembers 8 files
+    if (d == &ACQ_SETUP) { g_pkg_ours = g_pkg_found = FALSE; g_acq_local_ok = !g_acq_fresh && g_nfound < 8; }   // the cap: pkg_reject remembers 8 files
     else { g_drvzip[0] = 0; g_drv_allow = FALSE; }
     start_job(JOB_ACQUIRE, P_FETCH);
 }
@@ -1153,6 +1155,15 @@ static void job_done(int job, int rc)
         if (rc == PK_OK) { after_extract(); break; }
         drop_msi();                                  // a failed or cancelled extraction leaves no decrypted copy
         if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); break; }
+        if (g_pkg_found && rc == PK_FORMAT) {        // a copy found on this computer that is damaged (not a usable zip): not offered again; a password or disk problem keeps its own page
+            WCHAR nm[100];
+            lstrcpynW(nm, file_name(g_pkg), 100);
+            pkg_reject(g_pkg);
+            g_acq = &ACQ_SETUP; g_pkg_found = FALSE;
+            wsprintfW(g_note, T(L"The file found on this computer (%s) is damaged, so it will not be used.", L"在這台電腦上找到的檔案（%s）已損毀，所以不使用它。"), nm);
+            set_page(P_FAIL);
+            break;
+        }
         if (rc == PK_PASSWORD) { lstrcpyW(g_note, T(L"Wrong password, or the file is damaged. Please check the password.", L"密碼不正確，或檔案已損毀。請再確認密碼。")); set_page(P_PASSWORD); break; }
         lstrcpyW(g_note, T(L"The setup could not be unpacked. Is the disk full?", L"無法解開安裝檔，硬碟空間是否不足？"));
         set_page(P_ERROR);
@@ -1204,7 +1215,7 @@ static void on_primary(void)
         if (g_driver_only) { g_drv = TRUE; g_autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
         g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_autostart_later = g_drv;                   // the driver restart comes first: the sign-in start is registered after it
-        if (g_installed) install(JOB_INSTALL_FIX); else acq_start(&ACQ_SETUP);
+        if (g_installed) install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
         break;
     case P_FAIL: acq_start(g_acq); break;                                             // Retry / Continue download
     case P_PASSWORD:
@@ -1283,6 +1294,7 @@ static void on_third(void)
         g_drv = !g_driver_only && g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_autostart_later = g_drv;
         user_log(L"DynaRun update hint: the user chose to download the new version");
+        g_acq_fresh = TRUE;                                       // an older package found on this computer would not be the new version
         acq_start(&ACQ_SETUP);
     }
 }

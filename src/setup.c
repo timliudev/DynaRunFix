@@ -12,6 +12,10 @@
 //                                             desktop shortcut as they are (an update, see update.c)
 //   DynaRunFix-Setup.exe /uninstall [/quiet]  uninstall (also run from "Programs and Features")
 //   DynaRunFix-Setup.exe /checkupdate         /update <args>, /offer: the installed copy, run by the launcher (update.c)
+//   /pin                                      (elevated stage) also set up the Windows 11 taskbar pin
+//   DynaRunFix-Setup.exe /driver              the Dyna Pro USB driver step on its own (driver.c; the wizard's last page)
+//   DynaRunFix-Setup.exe /driver-cancel       undo the driver step's preparation (task, start-up menu option, BitLocker)
+//   /driver-prep, /driver-install, /driver-continue   the driver step's own stages (elevated, or started by its scheduled task)
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
 // administrator's credentials are typed into the UAC prompt:
@@ -980,7 +984,7 @@ static void skipped(const WCHAR *key, const WCHAR *why)
 static int promote_com_in(HKEY hu, HKEY hm, WCHAR roots[][MAX_PATH], int nr)
 {
     static const WCHAR *const views[] = { L"WOW6432Node\\CLSID", L"CLSID" };
-    static WCHAR path[600], rel[300], id[128], v[MAX_PATH], prog[300], log[MAX_PATH], bak[MAX_PATH], line[700], tl[128], tlkey[200];
+    static WCHAR path[600], rel[300], id[128], v[MAX_PATH], prog[300], log[MAX_PATH], bak[MAX_PATH], line[700], tl[128], tlkey[200], bn[48];
     const WCHAR *why; HKEY list, s, d; DWORD i, n; int vi, j, copied = 0; WCHAR *dot; BOOL had, ok;
 
     g_nkeys = 0;
@@ -1011,8 +1015,8 @@ static int promote_com_in(HKEY hu, HKEY hm, WCHAR roots[][MAX_PATH], int nr)
         had = has_key(hm, g_keys[j]);
         if (had) {                              // keep what was there before
             cat3(bak, g_dir, L"\\com-backup", NULL); CreateDirectoryW(bak, NULL);
-            wsprintfW(bak + lstrlenW(bak), L"\\%lu-%d.reg", GetTickCount(), j);
-            reg_export(g_keys[j], bak);
+            wsprintfW(bn, L"\\%lu-%d.reg", GetTickCount(), j);
+            if (lstrlenW(bak) + lstrlenW(bn) < MAX_PATH) { lstrcatW(bak, bn); reg_export(g_keys[j], bak); }   // bounded: a long install path just skips the backup file
         }
         if (RegOpenKeyExW(hu, g_keys[j], 0, KEY_READ | WOW, &s)) continue;
         if (!RegCreateKeyExW(hm, g_keys[j], 0, NULL, 0, KEY_ALL_ACCESS | WOW, NULL, &d, NULL)) {
@@ -1944,9 +1948,9 @@ int run_elevated(const WCHAR *args, const WCHAR *exe_path)
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
     if (g_pin) lstrcatW(a, L" /pin");                // the elevated stage sets up the Windows 11 pin
     if (g_keep) lstrcatW(a, L" /keep");
-    // Mapped network drives (e.g. a VM's shared folder) do not exist for the elevated process: run a copy in %TEMP%
+    // Mapped network drives (e.g. a shared folder) do not exist for the elevated process: run a copy in %TEMP%
     lstrcpynW(root, g_self, 4);
-    if (!exe_path && root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && (tn = GetTempPathW(MAX_PATH - 40, tmp)) != 0 && tn < MAX_PATH - 40) {
+    if (!exe_path && root[1] == ':' && GetDriveTypeW(root) == DRIVE_REMOTE && (tn = GetTempPathW(MAX_PATH - 60, tmp)) != 0 && tn < MAX_PATH - 60) {   // room for the longest name below (17 + 3 x 10 digits + 2 + 4 + NUL)
         q.QuadPart = 0; QueryPerformanceCounter(&q);
         wsprintfW(tmp + lstrlenW(tmp), L"DynaRunFix-Setup-%lu-%lu-%lu.exe", GetCurrentProcessId(), GetTickCount(), q.LowPart);
         // the copy is held open (nobody can change it) from here until the elevated process has ended: what the UAC prompt names is what runs

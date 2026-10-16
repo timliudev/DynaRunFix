@@ -70,8 +70,8 @@ typedef struct {
 BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .msi inside, in Downloads/Desktop/Documents or next to us
 BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out);   // the first zip (at most maxsize bytes) in the same places that accept() approves
 extern void (*g_pkg_log)(const WCHAR *line);   // set to log the folders the zip searches look in (NULL: silent)
-BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out);
-BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // accept() for root and the folders up to `depth` levels below it   // the first folder accept() approves, in the same places (two levels down in Downloads)
+BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // the first folder accept() approves, in the same places (two levels down in Downloads)
+BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // accept() for root and the folders up to `depth` levels below it
 BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out);   // the newest zip whose name starts with prefix in the same places
 void pkg_reject(const WCHAR *path);       // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);

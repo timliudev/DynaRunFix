@@ -353,9 +353,10 @@ BOOL pkg_redirect_target(const WCHAR *cur, const WCHAR *loc, const WCHAR *host, 
 // Opens url without letting WinINet follow redirects: each hop is checked (https, and the pinned host) before a request is sent to it.
 // Returns the open request (status = its HTTP status, a 3xx without a Location included), or NULL: *refused when a URL was refused,
 // else *err is the Win32 error. Also used by the update check (update.c).
-HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
+static HINTERNET open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused,
+                                WCHAR *cur, WCHAR *loc, WCHAR *nxt)
 {
-    static WCHAR cur[URLCCH], loc[URLCCH], nxt[URLCCH]; HINTERNET h; DWORD n, hop;
+    HINTERNET h; DWORD n, hop;
     *status = 0; *err = 0; *refused = FALSE;
     lstrcpynW(cur, url, URLCCH);
     for (hop = 0; hop <= MAX_HOPS; hop++) {
@@ -366,7 +367,7 @@ HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, 
         n = sizeof(*status);
         if (!HttpQueryInfoW(h, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, status, &n, NULL)) *status = 0;
         if (*status != 301 && *status != 302 && *status != 303 && *status != 307 && *status != 308) {
-            n = sizeof(loc); loc[0] = 0;               // what the connection really is: still https on the host
+            n = URLCCH * sizeof(WCHAR); loc[0] = 0;               // what the connection really is: still https on the host
             if (!InternetQueryOptionW(h, INTERNET_OPTION_URL, loc, &n) || !url_ok(loc, host)) { InternetCloseHandle(h); *refused = TRUE; return NULL; }
             return h;
         }
@@ -379,6 +380,16 @@ HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, 
     }
     *refused = TRUE;
     return NULL;
+}
+
+// The three URL buffers belong to the call (the update hint and a download can run at the same time); they are on the heap: no C runtime here, so no stack probe for 12 KB.
+HINTERNET pkg_open_following(HINTERNET in, const WCHAR *url, const WCHAR *host, const WCHAR *hdr, DWORD *status, DWORD *err, BOOL *refused)
+{
+    WCHAR *u = alloc(3 * URLCCH * sizeof(WCHAR)); HINTERNET h;
+    if (!u) { *status = 0; *err = ERROR_OUTOFMEMORY; *refused = FALSE; return NULL; }
+    h = open_following(in, url, host, hdr, status, err, refused, u, u + URLCCH, u + 2 * URLCCH);
+    release(u);
+    return h;
 }
 
 static BOOL zip_nothing(const char *name, DWORD nlen, const zipent *e, void *ctx) { (void)name; (void)nlen; (void)e; (void)ctx; return TRUE; }
@@ -401,8 +412,8 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
 
     *err = 0;
     if (!url_ok(url, host)) return PK_URL;
+    pkg_temp_dir(out); lstrcatW(out, L"\\"); lstrcatW(out, name);                     // first: out always names our own file in %TEMP%, never a path the caller held before
     if (pkg_net_state() == NET_NO) { *err = ERROR_INTERNET_DISCONNECTED; return PK_NET; }   // clearly no network at all (cable out, adapter off): the error page at once, no waiting
-    pkg_temp_dir(out); lstrcatW(out, L"\\"); lstrcatW(out, name);
     lstrcpyW(part, out); lstrcatW(part, L".part");
     oldtag[0] = 0;
     if (!RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {

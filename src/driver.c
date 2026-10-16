@@ -6,7 +6,8 @@
 // while driver signature enforcement is off, which a user can switch on for one start of Windows ("Startup Settings", key 7).
 // This file automates that:
 //
-//   download   driver_fetch: the zip from dynapro.co.uk (https, that host only), checked against the pinned SHA-256 below.
+//   find       driver_fetch: a copy already on this computer first (the zip, or an unpacked folder), else the zip from dynapro.co.uk
+//              (https, that host only). The 18 driver files in it are checked one by one against the pinned SHA-256 values below.
 //   prep       (elevated, "/driver-prep <user SID> <zip | ->") stages the driver in %ProgramData%\DynaRunFix\driver (a folder that
 //              only SYSTEM and the Administrators can change; an existing one is replaced, it may have been planted by an ordinary
 //              user), copies this setup to %ProgramData%\DynaRunFix, suspends BitLocker (until the driver is installed; at most 3 restarts as a safety net), asks Windows for its
@@ -1084,12 +1085,16 @@ static void set_bde_flag(BOOL on)
 
 static void bde_resume(void)                    // BitLocker protection on again, if we are the ones who suspended it
 {
-    WCHAR a[80], dr[4]; DWORD rc;
+    WCHAR a[80], dr[4]; DWORD rc; int ps;
     if (!bde_flag()) return;
     sys_drive(dr);
     lstrcpyW(a, L"-protectors -enable "); lstrcatW(a, dr);
-    rc = run_tool(L"manage-bde.exe", a);            // failure is ignored ("already on" is not an error that matters); the log has the code
-    if (rc) drv_log2(L"bitlocker resume failed", NULL, rc);
+    rc = run_tool(L"manage-bde.exe", a);            // the log has the code
+    if (rc) {
+        drv_log2(L"bitlocker resume failed", NULL, rc);
+        ps = bde_protection(dr);
+        if (ps != BDE_PS_ON && ps != BDE_PS_NONE) return;    // still not on: the flag stays, the next cancel / continue / uninstall tries again ("already on" and "no BitLocker here" clear it below)
+    }
     set_bde_flag(FALSE);
 }
 
