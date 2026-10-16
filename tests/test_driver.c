@@ -2,6 +2,8 @@
 // not part of the shipped binaries (see tests\build-driver-tests.cmd). setup.c and driver.c are compiled into this program, so the shipped
 // code is what runs. Nothing outside %TEMP%\drf-drv-<pid> (deleted at the end) is touched: no system tool is started, no HKLM write.
 //
+// (The pinned-file tests also use %TEMP%\DynaRunFix\drvcheck, the scratch folder of the zip scan; it is deleted again.)
+//
 // Optional: set DRF_DRIVER_ZIP to the real "Dyna Pro USB.zip" to check the pinned SHA-256, the extraction and the INF matcher against it.
 #define _CRT_SECURE_NO_WARNINGS
 #define WinMainCRTStartup setup_main_not_used_here
@@ -134,20 +136,31 @@ static void test_ci(void)
 
 static void test_bde(void)
 {
-    CHECK(drv_bde_suspend(BDE_PS_ON), L"protection on: suspend");
-    CHECK(!drv_bde_suspend(BDE_PS_OFF), L"protection off (also suspended by the user, or no key protectors): leave alone");
-    CHECK(!drv_bde_suspend(BDE_PS_NONE), L"no BitLocker on the volume / namespace missing: nothing to suspend");
-    CHECK(drv_bde_suspend(BDE_PS_UNKNOWN), L"status unknown: old behaviour, try");
-    CHECK(drv_bde_suspend(BDE_PS_ERROR), L"WMI not readable: old behaviour, try");
-    CHECK(drv_bde_suspend(7), L"an unexpected value is not 'off'");
+    // (protection status, conversion status: 0 decrypted, 1 encrypted, 2 encrypting, 3 decrypting, 4 / 5 paused, -1 unknown; number of key protectors)
+    CHECK(drv_bde_suspend(BDE_PS_ON, 1, 2), L"protection on: suspend");
+    CHECK(drv_bde_suspend(BDE_PS_ON, -1, -1), L"protection on, nothing else known: suspend");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF, 1, 2), L"off and fully encrypted (suspended by the user): leave alone");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF, 0, 0), L"off and fully decrypted: nothing to suspend");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF, -1, -1), L"off, nothing else known: leave alone");
+    CHECK(drv_bde_suspend(BDE_PS_OFF, 2, 1), L"off but encrypting with a key protector: suspend");
+    CHECK(drv_bde_suspend(BDE_PS_OFF, 4, 1), L"off but encryption paused with a key protector: suspend");
+    CHECK(drv_bde_suspend(BDE_PS_OFF, 3, 1), L"off but decrypting with a key protector: suspend");
+    CHECK(drv_bde_suspend(BDE_PS_OFF, 5, 2), L"off but decryption paused with key protectors: suspend");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF, 2, 0), L"off, encrypting, but no key protector: nothing to suspend");
+    CHECK(!drv_bde_suspend(BDE_PS_OFF, 2, -1), L"off, encrypting, protector count unknown: leave alone");
+    CHECK(!drv_bde_suspend(BDE_PS_NONE, 2, 1), L"no BitLocker on the volume / namespace missing: nothing to suspend");
+    CHECK(drv_bde_suspend(BDE_PS_UNKNOWN, -1, -1), L"status unknown: old behaviour, try");
+    CHECK(drv_bde_suspend(BDE_PS_ERROR, -1, -1), L"WMI not readable: old behaviour, try");
+    CHECK(drv_bde_suspend(7, -1, -1), L"an unexpected value is not 'off'");
     // at prep time (also a retry): a volume we suspended earlier reports protection off, our own flag then still starts the count over
-    CHECK(drv_bde_suspend_now(BDE_PS_ON, FALSE), L"prep, protection on: suspend");
-    CHECK(drv_bde_suspend_now(BDE_PS_ON, TRUE), L"prep, protection on, flag set: suspend");
-    CHECK(drv_bde_suspend_now(BDE_PS_OFF, TRUE), L"retry: off because we suspended it (flag set): suspend again");
-    CHECK(drv_bde_suspend_now(BDE_PS_NONE, TRUE), L"retry, flag set, no status: suspend again");
-    CHECK(!drv_bde_suspend_now(BDE_PS_OFF, FALSE), L"off and not ours: leave alone");
-    CHECK(!drv_bde_suspend_now(BDE_PS_NONE, FALSE), L"no BitLocker and not ours: nothing to do");
-    CHECK(drv_bde_suspend_now(BDE_PS_UNKNOWN, FALSE), L"status unknown: try, as before");
+    CHECK(drv_bde_suspend_now(BDE_PS_ON, 1, 2, FALSE), L"prep, protection on: suspend");
+    CHECK(drv_bde_suspend_now(BDE_PS_ON, 1, 2, TRUE), L"prep, protection on, flag set: suspend");
+    CHECK(drv_bde_suspend_now(BDE_PS_OFF, 1, 2, TRUE), L"retry: off because we suspended it (flag set): suspend again");
+    CHECK(drv_bde_suspend_now(BDE_PS_NONE, -1, -1, TRUE), L"retry, flag set, no status: suspend again");
+    CHECK(!drv_bde_suspend_now(BDE_PS_OFF, 1, 2, FALSE), L"off, fully encrypted and not ours: leave alone");
+    CHECK(!drv_bde_suspend_now(BDE_PS_NONE, -1, -1, FALSE), L"no BitLocker and not ours: nothing to do");
+    CHECK(drv_bde_suspend_now(BDE_PS_UNKNOWN, -1, -1, FALSE), L"status unknown: try, as before");
+    CHECK(drv_bde_suspend_now(BDE_PS_OFF, 2, 1, FALSE), L"off but encrypting with a key protector: suspend");
 }
 
 /* ---------- 3. task XML ---------- */
@@ -540,6 +553,135 @@ static void test_make_base(void)
     g_is_writable = saved;
 }
 
+/* ---------- the pinned files (what is installed is what is checked) ---------- */
+
+static char g_names[24][100];
+
+// A zip with the pinned files (the first n of the table; contents: the INF for ftdibus.inf, else a short text) and the extra entries given.
+static void build_driver_zip(const WCHAR *path, int n, WORD flags, const char *extra1, const char *extra2)
+{
+    zent e[28]; int i, k = 0;
+    memset(e, 0, sizeof(e));
+    for (i = 0; i < n && i < drv_file_count(); i++) {
+        const WCHAR *rel; int j;
+        drv_file_info(i, &rel, NULL, NULL);
+        sprintf(g_names[i], "Dyna Pro USB/");
+        for (j = 0; rel[j]; j++) g_names[i][13 + j] = (char)rel[j];
+        g_names[i][13 + j] = 0;
+        e[k].name = g_names[i];
+        e[k].plain = i == 0 ? (const BYTE *)DYNA_INF : TEXT66; e[k].plain_len = i == 0 ? (DWORD)strlen(DYNA_INF) : 66;
+        e[k].method = 0; e[k].flags = flags; k++;
+    }
+    if (extra1) { e[k].name = extra1; e[k].plain = TEXT66; e[k].plain_len = 66; k++; }
+    if (extra2) { e[k].name = extra2; e[k].plain = TEXT66; e[k].plain_len = 66; k++; }
+    build_zip(path, e, k);
+}
+
+static void test_files(void)
+{
+    WCHAR zip[MAX_PATH], dir[MAX_PATH], p[MAX_PATH], rel[MAX_PATH]; int i, differ, missing, n = drv_file_count(), miss; volatile LONG nocancel = 0; BOOL known, sane;
+    const WCHAR *r, *sha; DWORD size; static WCHAR acc[DRV_MAXF][65]; static drv_check c;
+    // the table
+    CHECK(n == 18, L"18 files are installed (2 INFs, 2 catalogs, 7 + 7 for i386 / amd64)");
+    CHECK(drv_file_find(L"ftdibus.inf") == 0, L"ftdibus.inf is file 0 (bus_inf_loose relies on it)");
+    CHECK(drv_file_find(L"FTDIBUS.INF") == 0 && drv_file_find(L"I386\\FtdiBus.sys") == drv_file_find(L"i386/ftdibus.sys") && drv_file_find(L"i386/ftdibus.sys") > 0, L"names: any case, / or \\");
+    CHECK(drv_file_find(L"readme.txt") < 0 && drv_file_find(L"ftd2xx.inf") < 0 && drv_file_find(L"amd64/ftd2xx.dll") < 0 && drv_file_find(L"") < 0 && drv_file_find(L"i386/ftdibus.sys.") < 0, L"files that are not installed are not in the table");
+    CHECK(drv_file_find(L"i386/ftd2xx.dll") >= 0 && drv_file_find(L"amd64/ftd2xx64.dll") >= 0, L"the i386 ftd2xx.dll (SysWOW64 on x64) and amd64\\ftd2xx64.dll are in it");
+    for (i = 0; i < n; i++) {
+        BOOL ok = drv_file_info(i, &r, &size, &sha);
+        CHECK(ok && lstrlenW(sha) == 64 && size > 0 && drv_file_find(r) == i, L"every row: name, size, 64 hex digits, found by name");
+        CHECK(drv_file_match(i, size, sha) && !drv_file_match(i, size + 1, sha) && !drv_file_match(i, size, L"0000000000000000000000000000000000000000000000000000000000000000") && !drv_file_match(i, size, NULL), L"match needs size and SHA-256");
+    }
+    CHECK(!drv_file_info(-1, NULL, NULL, NULL) && !drv_file_info(n, NULL, NULL, NULL), L"outside the table");
+    // zip entry names -> table index: after a folder boundary, any case, shortest path wins elsewhere
+    CHECK(entry_index("Dyna Pro USB/ftdibus.inf", 24) == 0, L"entry: Dyna Pro USB/ftdibus.inf");
+    CHECK(entry_index("Dyna Pro USB/64-Bit Drivers/ftdibus.inf", 39) == 0, L"entry: the 64-Bit Drivers copy maps to the same file");
+    CHECK(entry_index("x/AMD64/FTDIBUS.SYS", 19) == drv_file_find(L"amd64/ftdibus.sys"), L"entry: re-zipped under another top folder, other case");
+    CHECK(entry_index("ftdibus.inf", 11) == 0, L"entry: no folder at all");
+    CHECK(entry_index("evilftdibus.inf", 15) < 0 && entry_index("Dyna Pro USB/readme.txt", 23) < 0 && entry_index("Dyna Pro USB/", 13) < 0, L"entry: a longer name, other files, a folder: no");
+    // staging from a zip with garbage contents under the pinned names
+    wsprintfW(zip, L"%s\\drv_all.zip", g_base); build_driver_zip(zip, 18, 0, "Dyna Pro USB/readme.txt", "../evil.txt");
+    wsprintfW(dir, L"%s\\stage1", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(stage_files(zip, dir, &nocancel, &miss) == PK_OK && miss == 0, L"stage: all 18 names present");
+    CHECK(drv_check_dir(dir, &differ, &missing) == 0 && differ == 18 && missing == 0, L"check: the INF fixture and the garbage files are none of them the pinned ones");
+    wsprintfW(p, L"%s\\Dyna Pro USB\\readme.txt", dir); CHECK(!exists(p), L"stage: an extra file of the zip is not extracted");
+    wsprintfW(p, L"%s\\..\\evil.txt", dir); CHECK(!exists(p), L"stage: a ../ entry is not extracted anywhere");
+    wsprintfW(p, L"%s\\Dyna Pro USB\\amd64", dir); CHECK(is_plain_dir(p), L"stage: the folders are plain ones");
+    CHECK(stage_files(zip, dir, &nocancel, &miss) == PK_IO, L"stage: into a folder that already has the staging folders: refused (never into what exists)");
+    // missing files, encrypted entries (do not count), a damaged zip
+    wsprintfW(zip, L"%s\\drv_part.zip", g_base); build_driver_zip(zip, 10, 0, NULL, NULL);
+    wsprintfW(dir, L"%s\\stage2", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(stage_files(zip, dir, &nocancel, &miss) == PK_OK && miss == 8, L"stage: 8 files missing in a zip of 10");
+    CHECK(drv_check_dir(dir, &differ, &missing) == 0 && missing == 8 && differ == 10, L"check: missing and differing files are told apart");
+    wsprintfW(zip, L"%s\\drv_enc.zip", g_base); build_driver_zip(zip, 18, 1, NULL, NULL);
+    wsprintfW(dir, L"%s\\stage3", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(stage_files(zip, dir, &nocancel, &miss) == PK_OK && miss == 18, L"stage: encrypted entries count as missing");
+    wsprintfW(zip, L"%s\\drv_bad.zip", g_base); { HANDLE h = CreateFileW(zip, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL); DWORD w; WriteFile(h, "not a zip", 9, &w, NULL); CloseHandle(h); }
+    wsprintfW(dir, L"%s\\stage4", g_base); CreateDirectoryW(dir, NULL);
+    CHECK(stage_files(zip, dir, &nocancel, &miss) == PK_FORMAT, L"stage: not a zip");
+    // the scan (what the wizard side decides on): all there + the bus INF names the device id = sane; the contents are not the pinned ones = not known
+    wsprintfW(zip, L"%s\\drv_all.zip", g_base);
+    CHECK(zip_scan(zip, &known, &sane, NULL, 0) && !known && sane, L"scan: all files there, not the pinned ones: sane but not known");
+    CHECK(!zip_known_cb(zip), L"scan: not accepted as a copy of the official package");
+    wsprintfW(zip, L"%s\\drv_part.zip", g_base);
+    CHECK(zip_scan(zip, &known, &sane, NULL, 0) && !known && !sane, L"scan: files missing: not sane (no 'install anyway')");
+    { WCHAR rep[1500]; wsprintfW(zip, L"%s\\drv_part.zip", g_base); zip_scan(zip, &known, &sane, rep, 1500); CHECK(wcsstr(rep, L"amd64/ftd2xx64.dll: missing") && wcsstr(rep, L"i386/ftdibus.sys: ") && !wcsstr(rep, L"ftdibus.inf: missing"), L"scan: the report names the missing and the differing files"); }
+    // the accepted list ("install anyway"): exactly the staged files, round trip; one changed file, or no list = refused
+    wsprintfW(dir, L"%s\\tb", g_base); CreateDirectoryW(dir, NULL);
+    wsprintfW(p, L"%s\\driver", dir); CreateDirectoryW(p, NULL);
+    wsprintfW(zip, L"%s\\drv_all.zip", g_base);
+    CHECK(stage_files(zip, p, &nocancel, &miss) == PK_OK, L"accepted: staged");
+    CHECK(!staged_ok(dir), L"accepted: files that are not the pinned ones are refused without an accepted list");
+    check_files(p, NULL, &c);
+    CHECK(write_accepted(dir, &c) && load_accepted(dir, acc), L"accepted: the list is written and read back");
+    for (i = 0; i < n; i++) CHECK(!lstrcmpiW(acc[i], c.hex[i]), L"accepted: every hash is the staged file's");
+    CHECK(staged_ok(dir), L"accepted: the staged files are accepted with their list");
+    file_path(rel, p, 3); { HANDLE h = CreateFileW(rel, FILE_APPEND_DATA, 0, NULL, OPEN_EXISTING, 0, NULL); DWORD w; WriteFile(h, "x", 1, &w, NULL); CloseHandle(h); }
+    CHECK(!staged_ok(dir), L"accepted: one staged file changed afterwards: refused (the list is not a switch for anything else)");
+    { WCHAR f[MAX_PATH]; accept_path(f, dir); DeleteFileW(f); }
+    CHECK(!staged_ok(dir), L"accepted: without its list the files are refused again");
+    // an already unpacked folder (the folder that holds ftdibus.inf): found by its layout, checked in place, copied by name
+    { WCHAR sd[MAX_PATH], nd[MAX_PATH], q[MAX_PATH];
+      wsprintfW(sd, L"%s\\stage1\\Dyna Pro USB", g_base);
+      CHECK(dir_layout_ok(sd) && !dir_known_cb(sd) && dir_other_cb(sd), L"folder: all files there, not the pinned ones: offered through the warning path only");
+      wsprintfW(nd, L"%s\\tc", g_base); CreateDirectoryW(nd, NULL);
+      CHECK(stage_from_dir(sd, nd, &miss) == PK_OK && miss == 0, L"folder: copied into a new staging folder");
+      CHECK(drv_check_dir(nd, &differ, &missing) == 0 && differ == 18, L"folder: the staged copies are what gets hashed");
+      CHECK(stage_from_dir(sd, nd, &miss) == PK_IO, L"folder: never into a staging folder that already exists");
+      wsprintfW(q, L"%s\\amd64\\ftser2k.sys", sd); DeleteFileW(q);
+      wsprintfW(nd, L"%s\\td", g_base); CreateDirectoryW(nd, NULL);
+      CHECK(stage_from_dir(sd, nd, &miss) == PK_OK && miss == 1 && !dir_other_cb(sd), L"folder: a missing file is counted; such a folder is not offered");
+      wsprintfW(q, L"%s\\i386", sd); CHECK(!dir_known_cb(q) && !dir_layout_ok(q), L"folder: a folder without ftdibus.inf is not a driver folder");
+    }
+    delete_tree(dir, NULL, 0);
+}
+
+/* ---------- a regression guard on the wizard's job table ---------- */
+
+// Once a comment after the call in `case JOB_DRV_PREP: rc = driver_prep(...);  // ... break;` swallowed the break, and the install ran right after
+// the prep (no restart in between). Every `case JOB_...:` of job_proc in src\wizard.c must have a break outside of comments before the next one.
+static void test_job_table(void)
+{
+    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = read_file(L"src\\wizard.c", &n); int labels = 0;
+    if (!f) { wprintf(L"info: src\\wizard.c not found from this folder: the job table is not checked\n"); return; }
+    t = (char *)f;
+    a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
+    CHECK(a && end, L"job_proc is in src\\wizard.c");
+    for (c = a ? strstr(a, "case JOB_") : NULL; c && c < end; c = next) {
+        char *p, *stop; BOOL has_break = FALSE;
+        next = strstr(c + 5, "case JOB_"); stop = next && next < end ? next : end;
+        for (p = c; p < stop && !has_break; p++) {
+            if (p[0] == '/' && p[1] == '/') { while (p < stop && *p != '\n') p++; continue; }       // a comment runs to the end of its line
+            if (!strncmp(p, "break;", 6)) has_break = TRUE;
+        }
+        CHECK(has_break, L"every case of job_proc ends with a break that is not inside a comment");
+        labels++;
+        if (!(next && next < end)) break;
+    }
+    CHECK(labels >= 8, L"all eight jobs were looked at");
+    release(f);
+}
+
 static void test_real_zip(void)
 {
     WCHAR zip[MAX_PATH], out[MAX_PATH], p[MAX_PATH], hex[65]; ULONGLONG size; int files = 0, rc; volatile LONG nocancel = 0; DWORD n; BYTE *f;
@@ -556,6 +698,20 @@ static void test_real_zip(void)
     f = read_file(p, &n); CHECK(f && !drv_inf_matches(f, n), L"its legacy ftd2xx.inf is not the bus INF"); release(f);
     wsprintfW(p, L"%s\\Dyna Pro USB\\amd64\\ftdibus.sys", out); CHECK(exists(p), L"amd64\\ftdibus.sys is there");
     wsprintfW(p, L"%s\\Dyna Pro USB\\ftdibus.cat", out); CHECK(exists(p), L"ftdibus.cat is there");
+    // the pinned files: extracted by name only, every one of them is the pinned one; extra files of the zip are ignored
+    {
+        WCHAR st[MAX_PATH], rep[1500]; BOOL known, sane; int miss = -1, differ = -1, missing = -1;
+        CHECK(zip_scan(zip, &known, &sane, rep, 1500) && known && sane && !rep[0], L"scan: the real zip: all 18 installed files are the pinned ones");
+        CHECK(zip_known_cb(zip), L"scan: the real zip is accepted as the official package");
+        wsprintfW(st, L"%s\\stage_real", g_base); CreateDirectoryW(st, NULL);
+        CHECK(stage_files(zip, st, &nocancel, &miss) == PK_OK && miss == 0, L"stage: the real zip, the 18 files");
+        CHECK(drv_check_dir(st, &differ, &missing) == 18 && differ == 0 && missing == 0, L"stage: all 18 staged files match the table");
+        { WCHAR ud[MAX_PATH]; wsprintfW(ud, L"%s\\Dyna Pro USB", st); CHECK(dir_known_cb(ud), L"folder: the unpacked official package is accepted in place"); }
+        wsprintfW(p, L"%s\\Dyna Pro USB\\FT Clean", st); CHECK(!exists(p), L"stage: FT Clean and the other files that are not installed are not extracted");
+        wsprintfW(p, L"%s\\Dyna Pro USB\\64-Bit Drivers", st); CHECK(!exists(p), L"stage: the 64-Bit Drivers copy is not extracted");
+        { HANDLE h; DWORD w; wsprintfW(p, L"%s\\Dyna Pro USB\\amd64\\ftdibus.sys", st); h = CreateFileW(p, FILE_APPEND_DATA, 0, NULL, OPEN_EXISTING, 0, NULL); WriteFile(h, "x", 1, &w, NULL); CloseHandle(h); }
+        CHECK(drv_check_dir(st, &differ, &missing) == 17 && differ == 1, L"check: one changed file is found");
+    }
 }
 
 int wmain(void)
@@ -576,6 +732,8 @@ int wmain(void)
     wprintf(L"[zip walk]\n"); test_zip_walk();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[staging folder]\n"); test_make_base();
+    wprintf(L"[pinned files]\n"); test_files();
+    wprintf(L"[job table]\n"); test_job_table();
     wprintf(L"[real zip]\n"); test_real_zip();
     delete_tree(g_base, NULL, 0);
     wprintf(L"\n%d passed, %d failed\n", g_pass, g_fail);

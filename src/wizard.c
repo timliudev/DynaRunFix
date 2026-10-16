@@ -19,9 +19,9 @@
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 
-enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO, ID_DRV, ID_IMG };
-enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
-       P_DRV_INTRO, P_DRV_FETCH, P_DRV_PRESS7, P_DRV_PREP, P_DRV_REBOOT, P_DRV_RETRY, P_DRV_WARN, P_DRV_INSTALL, P_DRV_DONE, P_DRV_ERROR };   // driver.c
+enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO, ID_DRV, ID_IMG, ID_INFO };
+enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
+       P_DRV_INTRO, P_DRV_FETCH, P_DRV_PRESS7, P_DRV_HASH, P_DRV_BDE, P_DRV_PREP, P_DRV_REBOOT, P_DRV_RETRY, P_DRV_WARN, P_DRV_INSTALL, P_DRV_DONE, P_DRV_ERROR };   // driver.c
 enum { JOB_DOWNLOAD, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_FETCH, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL };
 #define WM_PROGRESS (WM_APP + 1)
 #define WM_JOBDONE  (WM_APP + 2)
@@ -38,6 +38,15 @@ static char g_pw[256];
 static char *g_rtf;
 static WCHAR g_info[2200];   // what the license page shows about the package (path, size, SHA-256, MSI version/manufacturer)
 static DWORD g_neterr, g_total;
+static BOOL g_paused, g_pause_req, g_drv_fetch_fail;   // download paused (worker ended, .part kept) / pause asked, worker still stopping / the driver download failed (intro page shows why)
+static BOOL g_checking, g_marquee, g_drv_allow;          // the non-pausable "checking" phase / marquee bar (size unknown) / the user chose "install anyway" for a zip with another hash
+static int g_drv_how;                                    // DRV_SRC_*: the driver zip was downloaded, or found on this computer (nothing downloaded)
+static WCHAR g_drv_hex[65];                              // SHA-256 and size of a driver zip that is not the pinned file (the warning page shows them)
+static ULONGLONG g_drv_size;
+static WCHAR g_drv_rep[1500];                           // the driver files that differ from the pinned ones, one per line (the warning page lists them)
+static int g_drv_bl = -1;                                // BitLocker hint for the press-7 page, asked in the worker (WMI can take seconds): 1 on, 0 off, -1 cannot be told
+static int g_dljob = -1;                               // the download job g_dltotal belongs to
+static DWORD g_dltotal, g_dlhave;                       // size of the file being downloaded (server's, 0 = not known) and bytes received so far
 static HFONT g_font, g_big;
 static HBRUSH g_white, g_grey;
 // the Dyna Pro USB driver (driver.c): g_drv_avail: the check box on the first page is offered (Windows 10+, driver not there yet); g_drv: ticked
@@ -54,7 +63,16 @@ static void place(int id, int x, int y, int w, int h);
 
 static void vis(int id, BOOL on) { ShowWindow(H(id), on ? SW_SHOW : SW_HIDE); }
 static void text(int id, const WCHAR *t) { SetWindowTextW(H(id), t ? t : L""); vis(id, t != NULL); }
-static void status(const WCHAR *t, BOOL err) { g_status_err = err; text(ID_STATUS, t); }
+static int g_sth = -1;               // room the layout reserved for the status line (its measured height, 0 when hidden)
+static BOOL g_building;              // set_page is rebuilding the page: it lays out once at its end
+static int status_need(void);
+// Sets the status line. When the room it needs differs from what the layout reserved (shown, hidden, another number of lines), the page is laid out
+// again, so the line is never cut off by the button bar and the flexible parts (license text, picture, info box) give way.
+static void status(const WCHAR *t, BOOL err)
+{
+    g_status_err = err; text(ID_STATUS, t);
+    if (g_hwnd && !g_building && status_need() != g_sth) layout();
+}
 
 static void buttons(const WCHAR *primary, const WCHAR *second, const WCHAR *extra)
 {
@@ -73,6 +91,24 @@ static void progress(BOOL marquee)
     SendMessageW(p, PBM_SETPOS, 0, 0);
     g_lastpct = -1;
     vis(ID_PROG, TRUE);
+}
+
+static void fmt_mb(WCHAR *o, DWORD n) { wsprintfW(o, L"%lu.%lu", n / 1048576, n % 1048576 / 104858); }
+
+// A download that can be continued where it stopped (its .part and ETag are there): appends how much is already received to g_note and returns TRUE.
+// driver: the driver zip, else the DynaRun zip. The button then reads "Continue download" instead of "Retry".
+static BOOL resume_note(BOOL driver)
+{
+    DWORD have = 0; WCHAR a[24], t[24], line[200];
+    if (!(driver ? driver_partial(&have) : pkg_download_partial(&have))) return FALSE;
+    fmt_mb(a, have);
+    if (g_dltotal > have) {
+        fmt_mb(t, g_dltotal);
+        wsprintfW(line, T(L"\n\n%s of %s MB are downloaded. \"Continue download\" carries on from there.", L"\n\n已下載 %s / %s MB，按「繼續下載」會從中斷的地方接續。"), a, t);
+    } else
+        wsprintfW(line, T(L"\n\n%s MB are downloaded. \"Continue download\" carries on from there.", L"\n\n已下載 %s MB，按「繼續下載」會從中斷的地方接續。"), a);
+    lstrcatW(g_note, line);
+    return TRUE;
 }
 
 static UINT StrToUint(const WCHAR *s) { UINT v = 0; while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0'); return v; }
@@ -168,12 +204,47 @@ static HBITMAP load_png(int id, int *w, int *h)
     return hb;
 }
 
-static HBITMAP scale_bitmap(HBITMAP src, int sw, int sh, int tw, int th)
+// Highlight of the "7) Disable driver signature enforcement" line of the restart menu picture (driver-press-7.png, 683 x 468): the line's
+// rectangle in picture pixels. Drawn on the scaled copy, so the outline stays sharp at any size and DPI.
+#define HL_X0 110
+#define HL_Y0 259
+#define HL_X1 306
+#define HL_Y1 285
+
+static void draw_highlight(HDC dc, int sw, int sh, int tw, int th)
+{
+    int x0 = MulDiv(HL_X0, tw, sw), y0 = MulDiv(HL_Y0, th, sh), x1 = MulDiv(HL_X1, tw, sw), y1 = MulDiv(HL_Y1, th, sh);
+    int lw = S(3) < 2 ? 2 : S(3), rh = y1 - y0, rad = rh / 2 + 2, lx0 = x1 + lw + rh, lx1;
+    HPEN pen = CreatePen(PS_SOLID, lw, RGB(255, 153, 0)), op;
+    HBRUSH red = CreateSolidBrush(RGB(224, 52, 0)), ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+    LOGFONTW lf; HFONT f, of; const WCHAR *t = T(L"Press 7", L"按 7"); SIZE sz; POINT tri[3]; RECT tr;
+    op = (HPEN)SelectObject(dc, pen);
+    RoundRect(dc, x0 - lw, y0 - lw, x1 + lw, y1 + lw, rad, rad);               // orange outline around the line
+    // callout to the right of the line: red label "Press 7" with a small arrow pointing at it
+    GetObjectW(g_font, sizeof(lf), &lf); lf.lfHeight = -(rh * 7 / 10 < 10 ? 10 : rh * 7 / 10); lf.lfWeight = FW_BOLD; lf.lfQuality = CLEARTYPE_QUALITY;
+    f = CreateFontIndirectW(&lf); of = (HFONT)SelectObject(dc, f);
+    GetTextExtentPoint32W(dc, t, lstrlenW(t), &sz);
+    lx1 = lx0 + sz.cx + rh;
+    if (lx1 > tw - 2) { lx0 -= lx1 - (tw - 2); lx1 = tw - 2; }                // keep it inside the picture
+    SelectObject(dc, GetStockObject(NULL_PEN)); SelectObject(dc, red);
+    RoundRect(dc, lx0, y0 - lw, lx1, y1 + lw, rad, rad);
+    tri[0].x = x1 + lw + 3; tri[0].y = (y0 + y1) / 2;                          // tip, next to the outline
+    tri[1].x = lx0 + 1; tri[1].y = y0 - lw; tri[2].x = lx0 + 1; tri[2].y = y1 + lw;
+    Polygon(dc, tri, 3);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 255, 255));
+    tr.left = lx0; tr.right = lx1; tr.top = y0 - lw; tr.bottom = y1 + lw;
+    DrawTextW(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, of); DeleteObject(f);
+    SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen); DeleteObject(red);
+}
+
+static HBITMAP scale_bitmap(HBITMAP src, int sw, int sh, int tw, int th, BOOL highlight)
 {
     HDC scr = GetDC(NULL), a = CreateCompatibleDC(scr), b = CreateCompatibleDC(scr); HBITMAP dst = CreateCompatibleBitmap(scr, tw, th), oa, ob;
     oa = SelectObject(a, src); ob = SelectObject(b, dst);
     SetStretchBltMode(b, HALFTONE); SetBrushOrgEx(b, 0, 0, NULL);
     StretchBlt(b, 0, 0, tw, th, a, 0, 0, sw, sh, SRCCOPY);
+    if (highlight) draw_highlight(b, sw, sh, tw, th);
     SelectObject(a, oa); SelectObject(b, ob); DeleteDC(a); DeleteDC(b); ReleaseDC(NULL, scr);
     return dst;
 }
@@ -185,16 +256,23 @@ static void show_image(int which)            // 0: press 7 menu, 1: "install any
     vis(ID_IMG, g_bmp[which] != NULL);
 }
 
-// Fits the picture of the current page into w x ah (not larger than at 96 dpi scaled to this screen); returns the height used.
+// Size of the picture of the current page fitted into w x ah (not larger than at 96 dpi scaled to this screen).
+static void fit_image(int w, int ah, int *tw, int *th)
+{
+    int ow = g_bw[g_img], oh = g_bh[g_img];
+    if (ah < S(60)) ah = S(60);
+    *tw = w; *th = MulDiv(oh, *tw, ow);
+    if (*th > ah) { *th = ah; *tw = MulDiv(ow, *th, oh); }
+    if (*tw > MulDiv(ow, g_dpi, 96)) { *tw = MulDiv(ow, g_dpi, 96); *th = MulDiv(oh, *tw, ow); }
+}
+
+// Fits the picture of the current page into w x ah; returns the height used.
 static int place_image(int x, int y, int w, int ah)
 {
     int ow = g_bw[g_img], oh = g_bh[g_img], tw, th; HBITMAP old;
-    if (ah < S(60)) ah = S(60);
-    tw = w; th = MulDiv(oh, tw, ow);
-    if (th > ah) { th = ah; tw = MulDiv(ow, th, oh); }
-    if (tw > MulDiv(ow, g_dpi, 96)) { tw = MulDiv(ow, g_dpi, 96); th = MulDiv(oh, tw, ow); }
+    fit_image(w, ah, &tw, &th);
     if (g_shown_img != g_img || g_shown_w != tw || g_shown_h != th) {
-        HBITMAP s = scale_bitmap(g_bmp[g_img], ow, oh, tw, th);
+        HBITMAP s = scale_bitmap(g_bmp[g_img], ow, oh, tw, th, g_img == 0);
         old = (HBITMAP)SendMessageW(H(ID_IMG), STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)s);
         if (old) DeleteObject(old);
         g_shown = s; g_shown_img = g_img; g_shown_w = tw; g_shown_h = th;
@@ -203,12 +281,26 @@ static int place_image(int x, int y, int w, int ah)
     return th;
 }
 
+// The "Start DynaRun" button is offered only when DynaRun is installed here and our launcher is in place (g_exe comes from locate_dynarun, which
+// the wizard runs at start in every mode, so this also holds in the process the sign-in task starts after the restart; g_launcher from init_paths).
+static BOOL can_start_dynarun(void) { return g_installed && g_exe[0] && exists(g_launcher); }
+
+// Appends s to d (a buffer of cap characters), cutting it where it no longer fits; d always stays terminated.
+static void cat_to(WCHAR *d, int cap, const WCHAR *s)
+{
+    int n = lstrlenW(d);
+    if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
+}
+
 static void set_page(int p)
 {
     static WCHAR b[2600];
     g_page = p;
+    g_paused = g_pause_req = FALSE;
+    g_checking = g_marquee = FALSE;                     // a page starts with a plain bar; a download started again (also after the checking phase) shows its progress
+    g_building = TRUE;                                  // status() does not lay out while the page is being rebuilt; the layout at the end does
     KillTimer(g_hwnd, TIMER_RUNNING);
-    vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_DRV, FALSE); vis(ID_IMG, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
+    vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_DRV, FALSE); vis(ID_IMG, FALSE); vis(ID_INFO, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
     switch (p) {
     case P_HELLO:
         if (g_installed) {
@@ -242,18 +334,21 @@ static void set_page(int p)
         text(ID_TITLE, T(L"Downloading the setup", L"正在下載安裝檔"));
         fetch_body(0);
         progress(FALSE); status(L" ", FALSE);
-        buttons(NULL, T(L"Cancel", L"取消"), T(L"Download manually", L"開啟官網手動下載"));
+        buttons(T(L"Pause", L"暫停"), T(L"Cancel", L"取消"), T(L"Download manually", L"開啟官網手動下載"));
         break;
     case P_FAIL:
         text(ID_TITLE, g_badfile ? T(L"This is not the DynaRun V3 setup", L"這不是 DynaRun V3 安裝檔")
                                  : T(L"The setup could not be downloaded", L"無法自動下載安裝檔"));
-        g_badfile = FALSE;
-        wsprintfW(b, T(L"%s\n\nDownload it yourself:\n   1.  click \"Open website\"\n   2.  on the page, click the download for \"Dyna Run V3 Software\"\n"
-                       L"   3.  come back here and click \"Retry\" (or \"Choose file...\")",
-                       L"%s\n\n請自己下載：\n   1.  按「開啟官網」\n   2.  在網頁上下載「Dyna Run V3 Software」\n"
-                       L"   3.  下載完成後回到這裡按「重試」（或「選擇檔案…」）"), g_note);
-        text(ID_BODY, b);
-        buttons(T(L"Retry", L"重試"), T(L"Choose file...", L"選擇檔案…"), T(L"Open website", L"開啟官網"));
+        {
+            BOOL resume = !g_badfile && resume_note(FALSE);       // a .part to carry on from (appends its size to the note)
+            g_badfile = FALSE;
+            wsprintfW(b, T(L"%s\n\nDownload it yourself:\n   1.  click \"Open website\"\n   2.  on the page, click the download for \"Dyna Run V3 Software\"\n"
+                           L"   3.  come back here and click \"Retry\" or \"Continue download\" (or \"Choose file...\")",
+                           L"%s\n\n請自己下載：\n   1.  按「開啟官網」\n   2.  在網頁上下載「Dyna Run V3 Software」\n"
+                           L"   3.  下載完成後回到這裡按「重試」或「繼續下載」（或「選擇檔案…」）"), g_note);
+            text(ID_BODY, b);
+            buttons(resume ? T(L"Continue download", L"繼續下載") : T(L"Retry", L"重試"), T(L"Choose file...", L"選擇檔案…"), T(L"Open website", L"開啟官網"));
+        }
         break;
     case P_PASSWORD:
         text(ID_TITLE, T(L"Enter the setup password", L"輸入安裝密碼"));
@@ -271,12 +366,20 @@ static void set_page(int p)
         progress(FALSE);
         buttons(NULL, T(L"Cancel", L"取消"), NULL);
         break;
+    case P_CHECK:                                    // everything we know about the setup file, to compare with what Dyna Pro gives
+        text(ID_TITLE, T(L"Check the installer", L"確認安裝檔"));
+        text(ID_BODY, T(L"Compare this with what Dyna Pro gives you. Dyna Pro does not sign its setup, so DynaRunFix cannot prove that it is exactly what Dyna Pro released: install only a file you got from Dyna Pro.",
+                        L"請與 Dyna Pro 提供的資訊比對。Dyna Pro 的安裝檔沒有數位簽章，DynaRunFix 無法證明它與 Dyna Pro 發布的完全一致，請只安裝從 Dyna Pro 取得的檔案。"));
+        SetWindowTextW(H(ID_INFO), g_info);
+        vis(ID_INFO, TRUE);
+        buttons(T(L"Next", L"下一步"), T(L"Cancel", L"取消"), T(L"Open Dyna Pro website", L"開啟 Dyna Pro 官網"));
+        if (g_note[0]) status(g_note, TRUE);
+        break;
     case P_LICENSE:
         text(ID_TITLE, T(L"Dyna Pro license agreement", L"Dyna Pro 授權合約"));
         lstrcpyW(b, g_nolicense ? T(L"The license agreement in this DynaRun V3 setup could not be shown.",
                                     L"無法顯示這個 DynaRun V3 安裝檔裡的授權合約。")
                                 : T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
-        lstrcatW(b, L"\n\n"); lstrcatW(b, g_info);
         text(ID_BODY, b);
         SetWindowTextW(H(ID_CHECK), g_nolicense ? T(L"I understand and &accept Dyna Pro's license terms", L"我了解並同意 Dyna Pro 的授權條款(&A)")
                                                 : T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
@@ -328,7 +431,8 @@ static void set_page(int p)
                 L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
             : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
                 L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
-        if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
+        if (g_autostart) lstrcatW(b, g_drv ? T(L"\n\nDynaRun will start automatically when you sign in, once the driver is installed.", L"\n\n驅動程式安裝完成後，以後開機登入時會自動啟動 DynaRun。")
+                                           : T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
         if (g_drv) lstrcatW(b, T(L"\n\nNext: the Dyna Pro USB driver, so that this computer can talk to the dynamometer.", L"\n\n下一步：安裝 Dyna Pro USB 驅動程式，電腦才能和馬力機連線。"));
         lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
         text(ID_BODY, b);
@@ -360,22 +464,115 @@ static void set_page(int p)
                         L"廠商封裝中的驅動程式設定檔（INF）不在隨附的 Microsoft 簽署目錄檔中，Windows 無法驗證，所以只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
                         L"下次重新開機會自動恢復。\n\n"
                         L"如果這台電腦有啟用 BitLocker，保護會暫停到驅動程式安裝完成為止，之後會自動恢復（最多經過 3 次重新開機）。"));
-        buttons(T(L"Download and continue", L"下載並繼續"), g_drvmode == DRV_MODE_NONE ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"), NULL);
+        {   // after a failed download: carry on from the .part when there is one, and offer the website
+            BOOL resume = g_drv_fetch_fail && resume_note(TRUE);
+            buttons(resume ? T(L"Continue download", L"繼續下載") : g_drv_fetch_fail ? T(L"Retry", L"重試") : T(L"Download and continue", L"下載並繼續"),
+                    g_drvmode == DRV_MODE_NONE ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"),
+                    g_drv_fetch_fail ? T(L"Download manually", L"開啟官網手動下載") : NULL);
+            g_drv_fetch_fail = FALSE;
+        }
         if (g_note[0]) status(g_note, TRUE);
         break;
     case P_DRV_FETCH:
         text(ID_TITLE, T(L"Downloading the driver", L"正在下載驅動程式"));
-        text(ID_BODY, T(L"Downloading the driver from the Dyna Pro website and checking it...", L"正在從 Dyna Pro 官網下載驅動程式並檢查…"));
+        text(ID_BODY, T(L"Downloading the driver from the Dyna Pro website and checking it...\n\n"
+                        L"If it does not work, click \"Download manually\" to get \"Dyna Pro USB.zip\" (under USB Drivers) from the website yourself, "
+                        L"or install the driver by hand with the steps in the manual.",
+                        L"正在從 Dyna Pro 官網下載驅動程式並檢查…\n\n"
+                        L"如果下載不順利，可以按「開啟官網手動下載」，自己從官網下載「Dyna Pro USB.zip」（USB Drivers 區），"
+                        L"或照說明文件的手動步驟安裝。"));
         progress(FALSE); status(L" ", FALSE);
-        buttons(NULL, T(L"Cancel", L"取消"), NULL);
+        buttons(T(L"Pause", L"暫停"), T(L"Cancel", L"取消"), T(L"Download manually", L"開啟官網手動下載"));
         break;
     case P_DRV_PRESS7:
         text(ID_TITLE, T(L"After the restart you will see this: press 7", L"重新開機後會看到這個畫面，請按 7"));
-        text(ID_BODY, T(L"Tip: take a photo of this page with your phone.\nSave your work in other programs before you restart.",
-                        L"建議用手機拍下這一頁。\n按「重新開機」前請先存好其他程式的資料。"));
+        {
+            int bl = g_drv_bl;                          // asked in the worker (not elevated: -1 when WMI will not tell)
+            b[0] = 0;
+            if (g_drv_allow) lstrcatW(b, T(L"Note: this driver file is not the version DynaRunFix knows; you chose to install it.\n\n", L"注意：這個驅動程式檔和已知版本不同，是你確認要安裝的。\n\n"));
+            else if (g_drv_how & DRV_SRC_LOCAL) {
+                WCHAR nm[100], t[160]; lstrcpynW(nm, file_name(g_drvzip), 100);
+                if (g_drv_how & DRV_SRC_DIR) wsprintfW(t, T(L"The unpacked driver folder (%s) was found on this computer and checked: no need to download it.\n\n", L"在這台電腦上找到已解開的驅動程式資料夾（%s），檢查通過，不用重新下載。\n\n"), nm);
+                else wsprintfW(t, T(L"The driver (%s) was found on this computer and checked: no need to download it again.\n\n", L"在這台電腦上找到驅動程式（%s），檢查通過，不用重新下載。\n\n"), nm);
+                lstrcatW(b, t);
+            }
+            if (!g_drv_allow && (g_drv_how & DRV_ZIPDIFF)) lstrcatW(b, T(L"The zip differs from the known version, but the driver files are identical: it can be installed.\n\n", L"壓縮檔和已知版本不同，但驅動程式檔案相同，可以安裝。\n\n"));
+            lstrcatW(b, T(L"Tip: take a photo of this page with your phone.\nSave your work in other programs before you restart.",
+                          L"建議用手機拍下這一頁。\n按「重新開機」前請先存好其他程式的資料。"));
+            if (bl > 0) lstrcatW(b, T(L"\n\nThis computer uses BitLocker: protection is suspended for the restart and turned on again by itself after the driver is installed.",
+                                      L"\n\n這台電腦開了 BitLocker，重新開機前會暫時停用保護，驅動裝好後自動恢復。"));
+            else if (bl < 0) lstrcatW(b, T(L"\n\nIf this computer uses BitLocker, protection is suspended for the restart and turned on again by itself after the driver is installed.",
+                                           L"\n\n如果這台電腦有開 BitLocker，重新開機前會暫時停用保護，驅動裝好後自動恢復。"));
+            text(ID_BODY, b);
+        }
         show_image(0);
         buttons(T(L"Restart now", L"重新開機"), T(L"Later", L"稍後"), NULL);
         if (g_note[0]) status(g_note, TRUE);
+        break;
+    case P_DRV_HASH: {                                // a driver zip that is not the file this program knows: the user decides
+        static WCHAR src[2 * MAX_PATH + 40];
+        if (g_drv_how & DRV_SRC_LOCAL) { lstrcpyW(src, (g_drv_how & DRV_SRC_DIR) ? T(L"found on this computer (unpacked folder): ", L"在這台電腦上找到（已解開的資料夾）：") : T(L"found on this computer: ", L"在這台電腦上找到：")); lstrcatW(src, g_drvzip); }
+        else lstrcpyW(src, T(L"downloaded from the Dyna Pro website (dynapro.co.uk)", L"從 Dyna Pro 官網下載"));
+        text(ID_TITLE, T(L"The driver differs from the known version", L"驅動程式和已知版本不同"));
+        // wsprintfW cuts its output at 1024 characters, so the text is put together with bounded appends (b holds 2600): the advice to
+        // cancel comes before the details, and the list of files goes last so that only the end of the list can be lost
+        b[0] = 0;
+        if (g_drv_how & DRV_SRC_DIR) {                  // an unpacked folder: there is no zip to show a size or hash of
+            cat_to(b, 2600, T(L"The driver files in this folder are not the version DynaRunFix knows. Dyna Pro may have updated them, or the files may be damaged or tampered with.\n\n"
+                              L"Install them only if you are sure that they come from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
+                              L"這個資料夾裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
+                              L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。\n\n來源："));
+            cat_to(b, 2600, src);
+            cat_to(b, 2600, L"\n\n");
+        } else {
+            WCHAR sz[24];
+            wsprintfW(sz, L"%lu", (DWORD)g_drv_size);
+            cat_to(b, 2600, T(L"The driver files in this package are not the version DynaRunFix knows. Dyna Pro may have updated them, or the file may be damaged or tampered with.\n\n"
+                              L"Install it only if you are sure that it comes from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
+                              L"這個驅動程式包裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
+                              L"確定檔案來自 Dyna Pro 才按「仍要安裝」；不確定請按「取消」。\n\n來源："));
+            cat_to(b, 2600, src);
+            cat_to(b, 2600, T(L"\nZip size: ", L"\n壓縮檔大小："));
+            cat_to(b, 2600, sz);
+            cat_to(b, 2600, T(L" bytes\nZip SHA-256: ", L" 位元組\n壓縮檔 SHA-256："));
+            cat_to(b, 2600, g_drv_hex);
+            cat_to(b, 2600, T(L"\nKnown zip SHA-256: ", L"\n已知的壓縮檔 SHA-256："));
+            cat_to(b, 2600, driver_pinned_sha256());
+            cat_to(b, 2600, L"\n\n");
+        }
+        cat_to(b, 2600, T(L"Files that differ (actual / expected):\n", L"不同的檔案（實際 / 已知）：\n"));
+        {
+            int room = 2600 - lstrlenW(b) - 48;        // keep room for the "and N more" line
+            const WCHAR *p = g_drv_rep;
+            int used = 0, more = 0;
+            while (*p) {
+                const WCHAR *e = p; int n;
+                while (*e && *e != L'\n') e++;
+                n = (int)(e - p) + (*e ? 1 : 0);        // the line with its line feed
+                if (!more && used + n <= room) { lstrcpynW(b + lstrlenW(b), p, n + 1); used += n; }
+                else more++;
+                p += n;
+            }
+            if (more) {
+                WCHAR t[48];
+                wsprintfW(t, T(L"  (and %d more)", L"  （另外還有 %d 個）"), more);
+                cat_to(b, 2600, t);
+            }
+        }
+        text(ID_BODY, b);
+        // "Cancel" is the default button (the right-most one, Enter); "Install anyway" is the second; the website is bottom-left
+        buttons(T(L"Cancel", L"取消"), T(L"Install anyway", L"仍要安裝"), T(L"Download manually", L"開啟官網手動下載"));
+        if (g_note[0]) status(g_note, TRUE);
+        break;
+    }
+    case P_DRV_BDE:
+        text(ID_TITLE, T(L"BitLocker could not be suspended", L"BitLocker 沒有暫停成功"));
+        text(ID_BODY, T(L"This computer uses BitLocker, and its protection could not be suspended for the restart. After the restart Windows will probably ask for the "
+                        L"BitLocker recovery key before it shows the start-up menu.\n\nYou can look the key up at https://aka.ms/myrecoverykey (Microsoft account), or ask your administrator. "
+                        L"Without the key, choose \"Later\", suspend BitLocker yourself (Settings > Privacy & security > Device encryption, or Control Panel > BitLocker) and try again.",
+                        L"這台電腦有開 BitLocker，但重新開機前無法暫停它的保護。重新開機後 Windows 很可能會先要求輸入 BitLocker 修復金鑰（「您必須輸入修復金鑰以存取啟動設定」），才會顯示選單。\n\n"
+                        L"修復金鑰可到 https://aka.ms/myrecoverykey 用微軟帳戶查詢，或詢問系統管理員。沒有金鑰的話，請按「稍後」，自己先暫停 BitLocker（設定 → 隱私權與安全性 → 裝置加密，或控制台 → BitLocker）再試一次。"));
+        buttons(T(L"Restart anyway", L"仍要重新開機"), T(L"Later", L"稍後"), T(L"Find the recovery key", L"查詢修復金鑰"));
         break;
     case P_DRV_PREP:
         text(ID_TITLE, T(L"Please wait", L"請稍候"));
@@ -427,7 +624,8 @@ static void set_page(int p)
                 L"Driver signature checking comes back by itself the next time you restart the computer normally. Nothing else to set.",
                 L"請用 USB 接上 Dyna Pro 馬力機並開機，Windows 會自動認得它。\n\n"
                 L"驅動程式簽章檢查會在下次正常重新開機後自動恢復，不需要再做任何設定。"));
-        buttons(T(L"Close", L"關閉"), NULL, NULL);
+        if (can_start_dynarun()) buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);   // only after a success (this page); a failure shows P_DRV_ERROR
+        else buttons(T(L"Close", L"關閉"), NULL, NULL);
         break;
     case P_DRV_ERROR:
         text(ID_TITLE, T(L"The driver was not installed", L"驅動程式沒有安裝"));
@@ -436,6 +634,7 @@ static void set_page(int p)
         break;
     }
     g_note[0] = 0;
+    g_building = FALSE;
     layout();
     if (!GetFocus() || !IsWindowEnabled(GetFocus()) || !(GetWindowLongW(GetFocus(), GWL_STYLE) & WS_VISIBLE))
         SetFocus(GetNextDlgTabItem(g_hwnd, NULL, FALSE));       // something must hold the keyboard focus
@@ -446,6 +645,7 @@ static void set_page(int p)
 static void on_progress(DWORD done, DWORD total)
 {
     int pct = total ? MulDiv(done, 1000, total) : 0;
+    if (done == (DWORD)-1) { PostMessageW(g_hwnd, WM_PROGRESS, done, total); return; }   // the "checking" phase (driver_fetch)
     if (pct == g_lastpct) return;
     g_lastpct = pct;
     PostMessageW(g_hwnd, WM_PROGRESS, done, total);
@@ -459,8 +659,18 @@ static DWORD WINAPI job_proc(LPVOID unused)
     case JOB_EXTRACT:  rc = zip_extract(&g_zip, g_pw, g_msi, on_progress, &g_cancel); SecureZeroMemory(g_pw, sizeof(g_pw)); break;   // the password is not needed any more
     case JOB_INSTALL_ALL: rc = install_all(g_msi); break;
     case JOB_INSTALL_FIX: rc = install_fix(); break;
-    case JOB_DRV_FETCH: rc = driver_fetch(g_drvzip, on_progress, &g_cancel, &g_neterr); break;
-    case JOB_DRV_PREP: rc = driver_prep(g_drvzip[0] ? g_drvzip : L"-"); break;
+    case JOB_DRV_FETCH:
+        rc = driver_fetch(g_drvzip, on_progress, &g_cancel, &g_neterr, &g_drv_how, g_drv_hex, &g_drv_size, g_drv_rep, 1500);
+        if (rc == PK_OK || rc == DRV_W_HASH) {
+            on_progress((DWORD)-1, 1);                              // the page says "checking" (marquee) while the BitLocker state is asked
+            g_drv_bl = driver_bitlocker();                          // here, not while the next page is built: the WMI query can block for seconds
+        }
+        break;
+    case JOB_DRV_PREP:
+        // "install anyway" accepts exactly this zip (its SHA-256), nothing else. (No comment after the call on the line of a break: it once swallowed the
+        // break, and the install followed the prep at once, without the restart.)
+        rc = driver_prep(g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
+        break;
     case JOB_DRV_INSTALL: rc = driver_install(); break;
     case JOB_DRV_CANCEL: rc = driver_cancel(); break;
     }
@@ -473,6 +683,7 @@ static void start_job(int job, int page)
 {
     DWORD tid;
     g_job = job; g_cancel = 0; g_busy = TRUE;
+    if ((job == JOB_DOWNLOAD || job == JOB_DRV_FETCH) && job != g_dljob) { g_dljob = job; g_dltotal = g_dlhave = 0; }   // a resume of the same job keeps what is known
     set_page(page);
     g_thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
     if (job == JOB_INSTALL_ALL || job == JOB_INSTALL_FIX || job >= JOB_DRV_PREP) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
@@ -540,25 +751,21 @@ static void build_info(void)
     msi_info(g_msi, ver, mfr, 64);
     SetCursor(old);
     g_info[0] = 0;
-    lstrcatW(g_info, T(L"Package: ", L"安裝檔："));
-    lstrcatW(g_info, g_pkg);
-    lstrcatW(g_info, g_pkg_ours ? T(L"\n(downloaded now from dynapro.co.uk)", L"\n（剛從 dynapro.co.uk 下載）")
-                     : g_pkg_found ? T(L"\n(found on this computer, not downloaded by DynaRunFix)", L"\n（在這台電腦上找到，不是 DynaRunFix 下載的）")
-                     : T(L"\n(chosen by you)", L"\n（你選擇的檔案）"));
+    lstrcatW(g_info, T(L"Source:  ", L"來源：")); 
+    lstrcatW(g_info, g_pkg_ours ? T(L"downloaded now from dynapro.co.uk", L"剛從 dynapro.co.uk 下載")
+                     : g_pkg_found ? T(L"found on this computer, not downloaded by DynaRunFix", L"在這台電腦上找到，不是 DynaRunFix 下載的")
+                     : T(L"chosen by you", L"你選擇的檔案"));
+    lstrcatW(g_info, T(L"\r\n\r\nFile:\r\n", L"\r\n\r\n檔案路徑：\r\n")); lstrcatW(g_info, g_pkg);
     fmt_size(sz, size);
-    lstrcatW(g_info, T(L"\nSize: ", L"\n大小：")); lstrcatW(g_info, sz);
-    lstrcatW(g_info, L"\nSHA-256: "); lstrcatW(g_info, okp ? hex : L"?");
+    lstrcatW(g_info, T(L"\r\n\r\nSize:  ", L"\r\n\r\n大小：")); lstrcatW(g_info, sz);
+    lstrcatW(g_info, L"\r\nSHA-256:\r\n"); lstrcatW(g_info, okp ? hex : L"?");
     if (!same) {
         fmt_size(sz, size2);
-        lstrcatW(g_info, T(L"\nSetup.msi inside: ", L"\n其中的 Setup.msi：")); lstrcatW(g_info, sz);
-        lstrcatW(g_info, L"\nSHA-256: "); lstrcatW(g_info, okm ? hex2 : L"?");
+        lstrcatW(g_info, T(L"\r\n\r\nSetup.msi inside the file, size:  ", L"\r\n\r\n檔案裡的 Setup.msi，大小：")); lstrcatW(g_info, sz);
+        lstrcatW(g_info, L"\r\nSHA-256:\r\n"); lstrcatW(g_info, okm ? hex2 : L"?");
     }
-    lstrcatW(g_info, T(L"\nMSI ProductVersion: ", L"\nMSI ProductVersion："));
-    lstrcatW(g_info, ver[0] ? ver : L"?");
-    lstrcatW(g_info, T(L"   Manufacturer: ", L"   Manufacturer："));
-    lstrcatW(g_info, mfr[0] ? mfr : L"?");
-    lstrcatW(g_info, T(L"\nCompare this with what Dyna Pro gives you. Dyna Pro does not sign its setup, so DynaRunFix cannot prove that it is exactly what Dyna Pro released: install only a file you got from Dyna Pro.",
-                       L"\n請與 Dyna Pro 提供的資訊比對。Dyna Pro 的安裝檔沒有數位簽章，DynaRunFix 無法證明它與 Dyna Pro 發布的完全一致，請只安裝從 Dyna Pro 取得的檔案。"));
+    lstrcatW(g_info, L"\r\n\r\nMSI ProductVersion:  "); lstrcatW(g_info, ver[0] ? ver : L"?");
+    lstrcatW(g_info, L"\r\nManufacturer:  "); lstrcatW(g_info, mfr[0] ? mfr : L"?");
 }
 
 static void after_extract(void)
@@ -585,7 +792,7 @@ static void after_extract(void)
                                      L"如需閱讀合約，請聯絡 Dyna Pro（support@dynapro.co.uk）或參考其官網（下方「開啟 Dyna Pro 官網」）。\r\n\r\n"
                                      L"請在同意 Dyna Pro 的授權條款後再安裝。"));
     SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
-    set_page(P_LICENSE);
+    set_page(P_CHECK);
 }
 
 static void open_package(void)
@@ -719,6 +926,54 @@ static void drv_start(void)
     } else set_page(g_drv_have ? P_DRV_DONE : P_DRV_INTRO);
 }
 
+// The download worker has ended because "Pause" was clicked: the .part and its ETag are kept, the page stays, the button becomes "Resume".
+static void fetch_paused(void)
+{
+    WCHAR a[24], t[24], s[160];
+    g_paused = TRUE; g_pause_req = FALSE;
+    fmt_mb(a, g_dlhave);
+    if (g_dltotal) { fmt_mb(t, g_dltotal); wsprintfW(s, T(L"Paused: %s of %s MB downloaded.", L"已暫停：已下載 %s / %s MB。"), a, t); }
+    else wsprintfW(s, T(L"Paused: %s MB downloaded.", L"已暫停：已下載 %s MB。"), a);
+    buttons(T(L"Resume", L"繼續"), T(L"Cancel", L"取消"), T(L"Download manually", L"開啟官網手動下載"));
+    status(s, FALSE);
+    layout();
+}
+
+// "Cancel" while paused (no worker is running any more): the same result as a cancel during the transfer.
+static void fetch_stopped(void)
+{
+    BOOL drv = g_page == P_DRV_FETCH;
+    g_paused = FALSE;
+    lstrcpyW(g_note, T(L"The download was stopped.", L"已停止下載。"));
+    set_page(drv ? P_DRV_INTRO : P_FAIL);
+}
+
+// A failed driver download (no connection, server error, file could not be saved): back to the first driver page with the reason, the way to carry on
+// from the .part, and the website; the other driver errors go to the error page (drv_error).
+// The choice on the warning page: install the zip anyway (the elevated step is told, see driver_prep) or cancel. Both are logged.
+static void hash_choice(BOOL install)
+{
+    static WCHAR l[2 * MAX_PATH + 120];
+    lstrcpyW(l, install ? L"driver zip with another hash: the user chose to install it anyway: " : L"driver zip with another hash: the user cancelled: ");
+    lstrcatW(l, g_drvzip); user_log(l);
+    if (install) { g_drv_allow = TRUE; set_page(P_DRV_PRESS7); return; }
+    if (!(g_drv_how & DRV_SRC_LOCAL)) driver_forget(g_drvzip);             // our own refused download is not offered again; a file of the user's stays
+    if (g_drv_how & DRV_SRC_LOCAL) driver_skip_local_other();              // copies that differ are not offered again in this run: later tries download
+    g_drvzip[0] = 0; g_drv_allow = FALSE;
+    lstrcpyW(g_note, (g_drv_how & DRV_SRC_LOCAL) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
+                                                 : T(L"Cancelled: the driver was not installed.", L"已取消，沒有安裝驅動程式。"));
+    set_page(P_DRV_INTRO);
+}
+
+static void drv_net_error(int rc)
+{
+    if (rc == PK_HTTP) wsprintfW(g_note, T(L"The Dyna Pro website answered with error %lu.", L"Dyna Pro 官網回應錯誤 %lu。"), g_neterr);
+    else if (rc == PK_IO) wsprintfW(g_note, T(L"The file could not be saved (error %lu).", L"無法儲存檔案（錯誤 %lu）。"), g_neterr);
+    else wsprintfW(g_note, T(L"No connection to the Dyna Pro website (error %lu).", L"連不上 Dyna Pro 官網（錯誤 %lu）。"), g_neterr);
+    g_drv_fetch_fail = TRUE;
+    set_page(P_DRV_INTRO);
+}
+
 static void job_done(int job, int rc)
 {
     WaitForSingleObject(g_thread, INFINITE); CloseHandle(g_thread); g_thread = NULL; g_busy = FALSE;
@@ -726,6 +981,7 @@ static void job_done(int job, int rc)
     switch (job) {
     case JOB_DOWNLOAD:
         if (rc == PK_OK) { open_package(); break; }
+        if (rc == PK_CANCEL && g_pause_req && g_cancel == 2) { fetch_paused(); break; }
         if (rc == PK_CANCEL) lstrcpyW(g_note, T(L"The download was stopped.", L"已停止下載。"));
         else if (rc == PK_HTTP) wsprintfW(g_note, T(L"The Dyna Pro website answered with error %lu.", L"Dyna Pro 官網回應錯誤 %lu。"), g_neterr);
         else if (rc == PK_CERT) wsprintfW(g_note, T(L"The security certificate of the Dyna Pro website could not be verified (error %lu), so nothing was downloaded. "
@@ -760,12 +1016,28 @@ static void job_done(int job, int rc)
         set_page(P_ERROR);
         break;
     case JOB_DRV_FETCH:
-        if (rc == PK_OK) { set_page(P_DRV_PRESS7); break; }
+        if ((rc == PK_OK || rc == DRV_W_HASH) && g_cancel == 1) {                       // "Cancel" while the file was being checked
+            if (!(g_drv_how & DRV_SRC_LOCAL) && rc == DRV_W_HASH) driver_forget(g_drvzip);
+            lstrcpyW(g_note, T(L"The download was stopped.", L"已停止下載。")); set_page(P_DRV_INTRO); break;
+        }
+        if (rc == PK_OK) {
+            g_drv_allow = FALSE;
+            if (!g_bmp[0]) g_bmp[0] = load_png(18, &g_bw[0], &g_bh[0]);                 // the picture is decoded before the page changes, so the new page is built at once
+            set_page(P_DRV_PRESS7); break;
+        }
+        if (rc == DRV_W_HASH) {
+            g_drv_allow = FALSE;
+            { WCHAR m[2 * MAX_PATH + 200]; lstrcpyW(m, T(L"driver zip with another hash: the warning page is shown for ", L"driver zip with another hash: the warning page is shown for ")); lstrcatW(m, g_drvzip); user_log(m); }
+            set_page(P_DRV_HASH); break;
+        }
+        if (rc == PK_CANCEL && g_pause_req && g_cancel == 2) { fetch_paused(); break; }
         if (rc == PK_CANCEL) { lstrcpyW(g_note, T(L"The download was stopped.", L"已停止下載。")); set_page(P_DRV_INTRO); break; }
+        if (rc == PK_NET || rc == PK_HTTP || rc == PK_IO) { drv_net_error(rc); break; }
         drv_error(rc);
         break;
     case JOB_DRV_PREP:
         if (rc == 0) { drv_reboot_now(); break; }
+        if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); break; }      // armed, but BitLocker is still on: the user decides
         if (rc == 2) {
             lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
             set_page(g_drvmode == DRV_MODE_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
@@ -776,6 +1048,10 @@ static void job_done(int job, int rc)
     case JOB_DRV_INSTALL:
         if (rc == 0) { g_drv_have = FALSE; set_page(P_DRV_DONE); break; }
         if (rc == 2) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); break; }
+        if (rc == DRV_E_ENFORCED) {                        // this start still checks signatures: nothing was installed, the restart stays armed
+            lstrcpyW(g_note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
+            set_page(P_DRV_RETRY); break;
+        }
         drv_error(rc);
         break;
     case JOB_DRV_CANCEL:
@@ -791,6 +1067,7 @@ static void on_primary(void)
         g_pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_autostart_later = g_drv;                   // the driver restart comes first: the sign-in start is registered after it
         if (g_installed) install(JOB_INSTALL_FIX); else fetch();
         break;
     case P_FAIL: fetch(); break;
@@ -802,6 +1079,7 @@ static void on_primary(void)
         }
         start_job(JOB_EXTRACT, P_EXTRACT);
         break;
+    case P_CHECK: set_page(P_LICENSE); break;
     case P_LICENSE: install(JOB_INSTALL_ALL); break;
     case P_RUNNING:
         g_close = TRUE;                              // the elevated stage closes DynaRun (see close_programs in setup.c)
@@ -813,11 +1091,25 @@ static void on_primary(void)
         DestroyWindow(g_hwnd);
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;
-    case P_DRV_INTRO: g_drvzip[0] = 0; start_job(JOB_DRV_FETCH, P_DRV_FETCH); break;
+    case P_DRV_INTRO: g_drvzip[0] = 0; g_drv_allow = FALSE; start_job(JOB_DRV_FETCH, P_DRV_FETCH); break;
     case P_DRV_PRESS7: start_job(JOB_DRV_PREP, P_DRV_PREP); break;
+    case P_DRV_HASH: hash_choice(FALSE); break;                                       // "Cancel" is the default button
     case P_DRV_RETRY: g_drvzip[0] = 0; start_job(JOB_DRV_PREP, P_DRV_PREP); break;       // the staged driver is still there
     case P_DRV_WARN: start_job(JOB_DRV_INSTALL, P_DRV_INSTALL); break;
-    case P_DRV_REBOOT: case P_DRV_DONE: case P_DRV_ERROR: DestroyWindow(g_hwnd); break;
+    case P_DRV_BDE: drv_reboot_now(); break;                                         // "Restart anyway"
+    case P_DRV_DONE:
+        if (can_start_dynarun()) start_dynarun();                                     // "Start DynaRun" (otherwise the button reads "Close")
+        DestroyWindow(g_hwnd);
+        break;
+    case P_FETCH: case P_DRV_FETCH:                                                   // "Pause" / "Resume"
+        if (g_paused) { g_paused = FALSE; start_job(g_page == P_FETCH ? JOB_DOWNLOAD : JOB_DRV_FETCH, g_page); }   // the worker had ended; Range / If-Range continue the .part
+        else if (g_busy && !g_pause_req) {
+            g_pause_req = TRUE;
+            InterlockedExchange(&g_cancel, 2);                                        // 2 = pause (1 = cancel): the worker stops cleanly between two reads and keeps the .part and its ETag
+            text(ID_PRIMARY, T(L"Pausing...", L"暫停中…")); EnableWindow(H(ID_PRIMARY), FALSE); layout();
+        }
+        break;
+    case P_DRV_REBOOT: case P_DRV_ERROR: DestroyWindow(g_hwnd); break;
     }
 }
 
@@ -827,16 +1119,21 @@ static void on_close(void)
     if (g_busy) { g_closing = TRUE; InterlockedExchange(&g_cancel, 1); return; }
     // after the restart: closing the window ends the installation like "Cancel" (done at once when this runs elevated, as the task does)
     if (g_drvmode == DRV_MODE_CONTINUE && (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) && is_admin()) driver_cancel();
+    if (g_page == P_DRV_BDE) { start_job(JOB_DRV_CANCEL, P_DRV_PREP); return; }       // the task, the menu flag and the suspension were armed: take them back first
     DestroyWindow(g_hwnd);
 }
 
 // The second button (and Esc): Cancel / Skip / Later / Close
 static void on_second(BOOL button)
 {
-    if (g_page == P_FAIL && button) choose_file();
-    else if ((g_page == P_FETCH || g_page == P_DRV_FETCH) && button) InterlockedExchange(&g_cancel, 1);   // stop, then offer the other ways
+    if (g_page == P_DRV_HASH) hash_choice(button);                       // the button is "Install anyway"; Esc is a cancel
+    else if (g_page == P_FAIL && button) choose_file();
+    else if ((g_page == P_FETCH || g_page == P_DRV_FETCH) && button) {
+        if (g_paused) fetch_stopped();                  // paused: no worker is running, finish at once
+        else InterlockedExchange(&g_cancel, 1);         // stop, then offer the other ways (also overrides a pause that is still taking effect)
+    }
     else if (g_page == P_DRV_INTRO && g_drvmode == DRV_MODE_NONE) { g_drv = FALSE; set_page(P_DONE); }       // "Skip": back to the end of the install
-    else if (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) start_job(JOB_DRV_CANCEL, P_DRV_PREP);          // the task, the menu flag and BitLocker back
+    else if (g_page == P_DRV_RETRY || g_page == P_DRV_WARN || g_page == P_DRV_BDE) start_job(JOB_DRV_CANCEL, P_DRV_PREP);          // the task, the menu flag and BitLocker back
     else if (g_page != P_INSTALL) on_close();
 }
 
@@ -846,8 +1143,8 @@ static void on_second(BOOL button)
 
 static HWND add(const WCHAR *cls, DWORD style, int id)
 {
-    DWORD ex = (id == ID_EDIT || id == ID_RICH) ? WS_EX_CLIENTEDGE : 0;   // themed border like other Windows text boxes
-    HWND c = CreateWindowExW(ex, cls, L"", WS_CHILD | style, 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, NULL, NULL);
+    DWORD ex = (id == ID_EDIT || id == ID_RICH || id == ID_INFO) ? WS_EX_CLIENTEDGE : 0;   // themed border like other Windows text boxes
+    HWND c = CreateWindowExW(ex, cls, L"", WS_CHILD | WS_CLIPSIBLINGS | style, 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, NULL, NULL);
     SendMessageW(c, WM_SETFONT, (WPARAM)(id == ID_TITLE ? g_big : g_font), FALSE);
     return c;
 }
@@ -863,6 +1160,7 @@ static void create_controls(void)
     add(L"STATIC", WS_VISIBLE | SS_NOPREFIX, ID_BODY);
     add(L"EDIT", WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL, ID_EDIT);
     add(rich, WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY, ID_RICH);
+    add(L"EDIT", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY, ID_INFO);
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_CHECK);
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_PIN);
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO);
@@ -882,47 +1180,96 @@ static void create_controls(void)
     add(L"BUTTON", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_PRIMARY);
 }
 
-// Height of a control's text wrapped to width w, or its width when w is 0.
+// Height of a control's text wrapped to width w, or its width when w is 0. (The buffer holds the longest text of any page, the license page's
+// info block, with room to spare; a cut-off text would measure too short and the controls below it would overlap the last lines.)
 static int measure(int id, int w)
 {
-    WCHAR t[1200]; RECT r; HDC dc = GetDC(g_hwnd);
+    static WCHAR t[4096]; RECT r; HDC dc = GetDC(g_hwnd);
     HGDIOBJ old = SelectObject(dc, (HGDIOBJ)SendMessageW(H(id), WM_GETFONT, 0, 0));
-    GetWindowTextW(H(id), t, 1200);
+    GetWindowTextW(H(id), t, 4096);
     r.left = r.top = 0; r.right = w ? w : 10000; r.bottom = 0;
-    DrawTextW(dc, t, -1, &r, DT_CALCRECT | DT_NOPREFIX | (w ? DT_WORDBREAK : DT_SINGLELINE));
+    DrawTextW(dc, t, -1, &r, DT_CALCRECT | DT_NOPREFIX | DT_EXPANDTABS | (w ? DT_WORDBREAK : DT_SINGLELINE));
     SelectObject(dc, old); ReleaseDC(g_hwnd, dc);
     return w ? r.bottom : r.right;
 }
 
 static BOOL shown(int id) { return (GetWindowLongW(H(id), GWL_STYLE) & WS_VISIBLE) != 0; }   // also before the window is shown
+
+static int status_need(void)
+{
+    RECT c;
+    if (!shown(ID_STATUS)) return 0;
+    GetClientRect(g_hwnd, &c);
+    return measure(ID_STATUS, c.right - 2 * S(32)) + S(8);
+}
 static void place(int id, int x, int y, int w, int h) { SetWindowPos(H(id), NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE); }
 
-// Stacks the visible controls top-down from the measured text heights; buttons right-aligned in the footer.
+// One top-down pass over the visible controls from their measured sizes. apply FALSE: nothing is moved, it returns the client height the page needs
+// (the picture and the license text at the size they want); TRUE: places the controls so that the flexible ones (picture, license text, note) use
+// what is left above the button band at `bottom`.
+static int stack(BOOL apply, int w, int bottom)
+{
+    int m = S(32), y, h, sh = shown(ID_STATUS) ? measure(ID_STATUS, w) + S(8) : 0;   // sh: room the status line needs at this width and DPI (it may wrap)
+    if (apply) g_sth = sh;
+    y = S(shown(ID_PIN) ? 18 : 24);                     // tighter on the first page: its text and the options must fit
+    h = measure(ID_TITLE, w); if (apply) place(ID_TITLE, m, y, w, h); y += h + S(shown(ID_PIN) ? 10 : 16);
+    h = measure(ID_BODY, w) + S(6); if (apply) place(ID_BODY, m, y, w, h); y += h + S(shown(ID_PIN) ? 6 : 20);
+    if (shown(ID_PIN)) {                                // the two options: side by side when they fit, else stacked
+        int a = measure(ID_PIN, 0) + S(24), b2 = measure(ID_AUTO, 0) + S(24), side = a + b2 + S(16) <= w;
+        if (apply) { place(ID_PIN, m, y, a, S(24)); place(ID_AUTO, side ? m + a + S(16) : m, side ? y : y + S(24), b2, S(24)); }
+        y += side ? S(24) : S(48);
+    }
+    if (shown(ID_DRV)) { h = measure(ID_DRV, w - S(24)) + S(8); if (apply) place(ID_DRV, m, y + S(2), w, h); y += h + S(4); }
+    if (shown(ID_IMG)) {
+        if (apply) y += place_image(m, y, w, bottom - y - S(10) - sh) + S(8);       // the status line below keeps its room
+        else { int tw, th; fit_image(w, 100000, &tw, &th); y += th + S(8); }
+    }
+    if (shown(ID_EDIT)) { if (apply) place(ID_EDIT, m, y, w < S(360) ? w : S(360), S(34)); y += S(34) + S(12); }
+    if (shown(ID_PROG)) { if (apply) place(ID_PROG, m, y, w, S(20)); y += S(20) + S(10); }
+    if (shown(ID_RICH)) {
+        int cy = apply ? bottom - (sh ? sh + S(6) : S(16)) - S(28) : y + S(200) + S(10);   // the license text: at least ~200 px high; it gives way to the status line
+        if (apply) { place(ID_CHECK, m, cy, w, S(28)); place(ID_RICH, m, y, w, cy - S(10) - y); }
+        y = cy + S(28) + (apply && sh ? S(4) : 0);
+    }
+    if (shown(ID_INFO)) {                               // the details of the setup file: a read-only text box (selectable, copyable) with the rest of the page
+        int bh2 = apply ? bottom - S(16) - y - sh : S(200);
+        if (apply) place(ID_INFO, m, y, w, bh2 > S(60) ? bh2 : S(60));
+        y += bh2 + S(16);
+    }
+    if (shown(ID_STATUS)) {
+        if (apply) place(ID_STATUS, m, y, w, bottom - y > 0 ? bottom - y : 0);
+        else y += measure(ID_STATUS, w) + S(8);
+    }
+    return apply ? y : y + S(FOOTER);
+}
+
+// Sets the client height of the window to `need` (at least the usual one, at most what the screen's work area allows), keeping it centred.
+static void fit_window(int need)
+{
+    RECT wr, cr, work; int target = need > S(580) ? need : S(580), nc, nh, y;
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) return;
+    GetWindowRect(g_hwnd, &wr); GetClientRect(g_hwnd, &cr);
+    nc = (wr.bottom - wr.top) - cr.bottom;
+    if (target + nc > work.bottom - work.top) target = work.bottom - work.top - nc;
+    if (target == cr.bottom) return;
+    nh = target + nc;
+    y = wr.top - (nh - (wr.bottom - wr.top)) / 2;
+    if (y + nh > work.bottom) y = work.bottom - nh;
+    if (y < work.top) y = work.top;
+    SetWindowPos(g_hwnd, NULL, wr.left, y, wr.right - wr.left, nh, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Lays the visible controls out top-down from the measured text heights (the window grows when a page needs more room); buttons right-aligned in the footer.
 static void layout(void)
 {
     static const int btn[] = { ID_PRIMARY, ID_SECOND };
-    RECT c; int m = S(32), w, y, h, x, i, bw, bh = S(36), by, bottom;
+    RECT c; int m = S(32), w, x, i, bw, bh = S(36), by, bottom;
     GetClientRect(g_hwnd, &c);
-    w = c.right - 2 * m; bottom = c.bottom - S(FOOTER);
-    y = S(shown(ID_PIN) ? 18 : 24);                     // tighter on the first page: its text and the options must fit
-    h = measure(ID_TITLE, w); place(ID_TITLE, m, y, w, h); y += h + S(shown(ID_PIN) ? 10 : 16);
-    h = measure(ID_BODY, w) + S(4); place(ID_BODY, m, y, w, h); y += h + S(shown(ID_PIN) ? 6 : 20);
-    if (shown(ID_PIN)) {                                // the two options: side by side when they fit, else stacked
-        int a = measure(ID_PIN, 0) + S(24), b2 = measure(ID_AUTO, 0) + S(24), side = a + b2 + S(16) <= w;
-        place(ID_PIN, m, y, a, S(24)); place(ID_AUTO, side ? m + a + S(16) : m, side ? y : y + S(24), b2, S(24));
-        y += side ? S(24) : S(48);
-    }
-    if (shown(ID_DRV)) { h = measure(ID_DRV, w - S(24)) + S(8); place(ID_DRV, m, y + S(2), w, h); y += h + S(4); }
-    if (shown(ID_IMG)) y += place_image(m, y, w, bottom - y - S(10)) + S(8);
-    if (shown(ID_EDIT)) { place(ID_EDIT, m, y, w < S(360) ? w : S(360), S(34)); y += S(34) + S(12); }
-    if (shown(ID_PROG)) { place(ID_PROG, m, y, w, S(20)); y += S(20) + S(10); }
-    if (shown(ID_RICH)) {
-        int cy = bottom - S(16) - S(28);
-        place(ID_CHECK, m, cy, w, S(28));
-        place(ID_RICH, m, y, w, cy - S(10) - y);
-        y = cy + S(28);
-    }
-    place(ID_STATUS, m, y, w, bottom - y > 0 ? bottom - y : 0);
+    w = c.right - 2 * m;
+    fit_window(stack(FALSE, w, 0));
+    GetClientRect(g_hwnd, &c);
+    bottom = c.bottom - S(FOOTER);
+    stack(TRUE, w, bottom);
     by = bottom + (S(FOOTER) - bh) / 2;
     for (x = c.right - m, i = 0; i < 2; i++) {
         if (!shown(btn[i])) continue;
@@ -1012,10 +1359,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDOK: case ID_PRIMARY: if (IsWindowVisible(H(ID_PRIMARY)) && IsWindowEnabled(H(ID_PRIMARY))) on_primary(); break;
         case IDCANCEL: case ID_SECOND: on_second(LOWORD(w) == ID_SECOND); break;
         case ID_EXTRA:
-            if (g_page == P_FAIL || g_page == P_FETCH || g_page == P_LICENSE) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            if (g_page == P_FAIL || g_page == P_FETCH || g_page == P_DRV_FETCH || g_page == P_CHECK || g_page == P_LICENSE) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
+            else if (g_page == P_DRV_BDE) ShellExecuteW(h, NULL, L"https://aka.ms/myrecoverykey", NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_PASSWORD) choose_file();
             else if (g_page == P_HELLO) choose_exe();
             else if (g_page == P_DRV_ERROR) ShellExecuteW(h, NULL, DRIVER_DOC_URL, NULL, NULL, SW_SHOWNORMAL);
+            else if (g_page == P_DRV_INTRO || g_page == P_DRV_HASH) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);   // after a failed driver download
             break;
         case ID_CHECK: EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED); break;
         }
@@ -1023,9 +1372,28 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_PROGRESS: {
         static WCHAR b[100];
         DWORD done = (DWORD)w, total = (DWORD)l;
-        SendMessageW(H(ID_PROG), PBM_SETPOS, total ? MulDiv(done, 1000, total) : 0, 0);
-        if (g_page == P_FETCH) {
-            if (total != g_total) { fetch_body(total); layout(); }
+        if (done == (DWORD)-1) {                    // download over, the file is being checked: not pausable, bar and text say so
+            if (g_page == P_DRV_FETCH && !g_paused) {
+                g_marquee = TRUE;
+                progress(TRUE);
+                if (total == 2) status(T(L"Looking for the driver on this computer...", L"正在尋找電腦上現有的驅動程式…"), FALSE);   // before anything is downloaded: a bar that moves
+                else {                                                                                       // the file is being checked: not pausable
+                    g_checking = TRUE;
+                    text(ID_TITLE, T(L"Checking the driver", L"正在檢查驅動程式"));
+                    status(T(L"Checking the driver...", L"正在檢查驅動程式…"), FALSE);
+                    EnableWindow(H(ID_PRIMARY), FALSE);
+                }
+                layout();
+            }
+            return 0;
+        }
+        if (g_checking) return 0;
+        if (total && g_marquee) { g_marquee = FALSE; progress(FALSE); }                                  // the size became known
+        else if (!total && !g_marquee && (g_page == P_FETCH || g_page == P_DRV_FETCH)) { g_marquee = TRUE; progress(TRUE); }   // size unknown: a moving bar and the MB received
+        if (!g_marquee) SendMessageW(H(ID_PROG), PBM_SETPOS, total ? MulDiv(done, 1000, total) : 0, 0);
+        g_dlhave = done; if (total) g_dltotal = total;
+        if (g_page == P_FETCH || g_page == P_DRV_FETCH) {
+            if (g_page == P_FETCH && total != g_total) { fetch_body(total); layout(); }
             wsprintfW(b, total ? L"%lu.%lu / %lu.%lu MB" : L"%lu.%lu MB", done / 1048576, done % 1048576 / 104858,
                       total / 1048576, total % 1048576 / 104858);
             status(b, FALSE);
@@ -1099,7 +1467,7 @@ int wizard(void)
     r.left = r.top = 0; r.right = S(620); r.bottom = S(580);                                  // the first page: text, disclaimer, the two options and a one-line note
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
     wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_DISPLAY));
-    g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
                              (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2, (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
     if (!g_hwnd) return 1;
@@ -1132,5 +1500,8 @@ int wizard(void)
         TranslateMessage(&msg); DispatchMessageW(&msg);
     }
     g_hwnd = NULL;
-    return g_page == P_DONE ? 0 : 2;
+    if (g_page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
+    if (g_page == P_DONE || g_page == P_DRV_DONE || g_page == P_DRV_REBOOT) return 0;      // ended on a success page
+    if (g_page == P_FAIL || g_page == P_ERROR || g_page == P_DRV_ERROR) return 1;           // ended on an error page
+    return 2;                                                                               // closed before the end
 }
