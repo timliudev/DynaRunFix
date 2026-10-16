@@ -338,6 +338,24 @@ static void cat_to(WCHAR *d, int cap, const WCHAR *s)
     if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
 }
 
+// What is said about the taskbar pin (g_pinresult, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
+// the install (g_fix_done: the page "Done" is skipped), on the restart page.
+static void pin_hint(WCHAR *b)
+{
+    if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
+        ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
+            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
+        : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
+            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
+}
+static void acp_warning(void)
+{
+    if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
+        status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
+               L"請到「設定 → 時間與語言 → 語言與地區 → 系統管理語言設定 → 變更系統地區設定」選「中文（繁體，台灣）」，再重新開機。", TRUE);
+}
+
 static void set_page(int p)
 {
     static WCHAR b[2600];
@@ -491,19 +509,12 @@ static void set_page(int p)
                       L"The first start asks for your dynamometer model. If Windows asks whether to allow changes, click \"Yes\".",
                       L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
                       L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
-        if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-        if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
-            ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
-                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
-            : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
-                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
+        pin_hint(b);
         if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
         lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
         text(ID_BODY, b);
         buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
-        if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
-            status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
-                   L"請到「設定 → 時間與語言 → 語言與地區 → 系統管理語言設定 → 變更系統地區設定」選「中文（繁體，台灣）」，再重新開機。", TRUE);
+        acp_warning();
         break;
     case P_ERROR:
         text(ID_TITLE, T(L"Something went wrong", L"發生問題"));
@@ -634,14 +645,17 @@ static void set_page(int p)
         break;
     case P_DRV_REBOOT:
         text(ID_TITLE, g_drv_noreboot ? T(L"Please restart the computer", L"請重新開機") : T(L"Restarting", L"即將重新開機"));
-        text(ID_BODY, g_drv_noreboot
+        lstrcpyW(b, g_drv_noreboot
             ? T(L"Everything is ready, but Windows would not restart by itself.\n\nPlease restart the computer yourself (Start, the power button, Restart). "
                 L"When the menu appears, press 7. After you sign in, this program continues by itself.",
                 L"都準備好了，但 Windows 沒有自動重新開機。\n\n請自己重新開機（開始 → 電源 → 重新啟動）。出現選單時請按 7；登入後本程式會自動繼續。")
             : T(L"The computer restarts now.\n\nWhen the menu appears, press 7. After you sign in, this program continues by itself.\n\n"
                 L"If the computer does not restart (a program is waiting for you), save your work and restart it yourself.",
                 L"電腦即將重新開機。\n\n出現選單時請按 7；登入後本程式會自動繼續。\n\n如果電腦沒有重新開機（有程式在等你回應），請存好資料後自己重新開機。"));
+        if (g_fix_done) pin_hint(b);                      // the fix was installed with the driver: the hints of the page "Done", which is skipped
+        text(ID_BODY, b);
         buttons(T(L"Close", L"關閉"), NULL, NULL);
+        if (g_fix_done) acp_warning();
         break;
     case P_DRV_RETRY:
         text(ID_TITLE, T(L"7 was not pressed", L"剛才沒有按到 7"));

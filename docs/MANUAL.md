@@ -222,7 +222,7 @@ Up to three options on the first page of the wizard, all on by default (`/quiet`
   (`TaskbarLayout.xml` in the install folder; `StartLayoutFile` / `LockedStartLayout` under
   `HKEY_USERS\<user>\Software\Policies\Microsoft\Windows\Explorer`, set by the administrator step): the icon
   appears after the next sign-out / sign-in. If an organization has already set a layout file it is left alone,
-  and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*). That page does not appear with the driver option, where the install goes straight on to the restart.
+  and the last page tells how to pin by hand (right-click the desktop icon → *Show more options* → *Pin to taskbar*). Without the driver option this is on the last page (*Done*); with it, the install goes straight on to the restart and the same hint is on the page before the restart.
   A running DynaRun groups under the pinned icon (the launcher shortcuts and DynaRun share an AppUserModelID). The pinning
   technique for Windows 7 to 10 is the one described by Gee Law ([blog post](https://geelaw.blog/entries/msedge-pins/)); Firefox uses the same approach; no Mozilla code is included.
 - **Start DynaRun when Windows starts:** the value `DynaRunFix` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
@@ -419,7 +419,7 @@ LE gives DynaRun the Big5 code page and charset in every window, including toolt
 For other DBCS locales (and if LE is missing) `dynafix.dll` creates DynaRun's ANSI-charset fonts with the
 locale's charset instead (`DYNAFIX_CHARSET`). Nothing in the registry is changed.
 If the system locale is not Chinese at all, DynaRun's Chinese cannot be shown: set *Language for non-Unicode
-programs* to Chinese (Traditional, Taiwan); the Chinese installer says so on its last page when it detects it (not with the driver option, where the install goes straight on to the restart).
+programs* to Chinese (Traditional, Taiwan); the Chinese installer says so on its last page when it detects it (without the driver option on the last page, *Done*; with it, on the page before the restart).
 
 ### Garbled Chinese (or other DBCS) text with Windows' UTF-8 option
 
@@ -866,7 +866,7 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
   所以安裝程式改用微軟的[工作列配置原則](https://learn.microsoft.com/windows/configuration/taskbar/pinned-apps)
   （安裝資料夾裡的 `TaskbarLayout.xml`；系統管理員那一步會在 `HKEY_USERS\<使用者>\Software\Policies\Microsoft\Windows\Explorer`
   設定 `StartLayoutFile`／`LockedStartLayout`）：登出再登入後圖示才會出現。組織已經設定配置檔時不會去動它，
-  最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。勾選驅動程式選項時不會出現那一頁（安裝直接進入重新開機）。
+  最後一頁會說明手動釘選的方式（在桌面圖示按右鍵 →「顯示其他選項」→「釘選到工作列」）。沒有勾選驅動程式選項時，這段說明在最後一頁（「完成」）；勾選時安裝直接進入重新開機，同樣的說明會出現在重新開機之前的那一頁。
   執行中的 DynaRun 會歸在釘選的圖示下（啟動器捷徑和 DynaRun 使用相同的 AppUserModelID）。Windows 7 到 10 的釘選手法是 Gee Law 描述的方式（[部落格文章](https://geelaw.blog/entries/msedge-pins/)；Firefox 也用同一手法）；不含任何 Mozilla 程式碼。
 - **開機時自動啟動 DynaRun：** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `DynaRunFix` 值在登入時啟動啟動器（`DynaRunFix.exe /autostart`）。
   取消勾選後重新安裝會移除它；解除安裝會移除所有帳號的這個值、執行解除安裝的帳號、安裝時記錄的帳號，以及工作列配置檔仍是我們的其他帳號的工作列原則值（為此會短暫載入它們的登錄 hive），並把釘選的啟動器捷徑改回指向 `DynaRun V3.exe`。同時使用驅動程式選項時，這個值**不會**馬上寫入：先記在 `HKCU\Software\DynaRunFix` 的 `AutostartPending`，
@@ -987,7 +987,7 @@ Windows 以英文安裝、之後才把系統地區改成中文(台灣)時,`HKLM\
 系統地區是繁體中文時,啟動器偵測到這種情況就改用 Locale Emulator 啟動 DynaRun(照常掛上 `dynafix.dll`),
 所有視窗(含工具提示和 OCX 控制項)都以 Big5 字碼頁與字元集顯示。其他 DBCS 地區(或找不到 LE 時)則由 `dynafix.dll`
 只在 DynaRun 內把 ANSI 字元集字型改用該地區的字元集建立(`DYNAFIX_CHARSET`)。不改登錄。
-系統地區根本不是中文時無法顯示 DynaRun 的中文,請把「非 Unicode 程式的語言」設為「中文(繁體,台灣)」;中文版安裝程式偵測到時會在最後一頁提示（勾選驅動程式選項時不會有那一頁，安裝直接進入重新開機）。
+系統地區根本不是中文時無法顯示 DynaRun 的中文,請把「非 Unicode 程式的語言」設為「中文(繁體,台灣)」;中文版安裝程式偵測到時會在最後一頁提示（沒有勾選驅動程式選項時在最後一頁「完成」；勾選時在重新開機之前的那一頁）。
 
 ### 開啟系統 UTF-8 選項時中文亂碼
 「地區 → 系統管理 → 變更系統地區設定 → Beta:使用 Unicode UTF-8 提供全球語言支援」開啟時,系統 ANSI 字碼頁是 65001,VB6 程式的中文會變亂碼。
