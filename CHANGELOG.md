@@ -438,15 +438,15 @@ Changed and fixed (after a review of v1.4.0):
 
 - **First start:** the language picked on the first start and the optional features picked on the system
   selection (climate monitor, water cooler, cooling fans, AFR analyser) are kept; Dyna Pro's configuration
-  helper used to reset them to English / off. ([details](README.md#first-time-setup))
+  helper used to reset them to English / off. ([details](docs/MANUAL.md#first-time-setup))
 - **Fonts:** all of DynaRun's text is drawn in Windows' own UI font for the language (Microsoft JhengHei UI on
   Traditional Chinese, Segoe UI on English Windows) instead of a mix of Arial, MS Sans Serif and MingLiU.
-  ([details](README.md#fonts-windows-ui-font-everywhere))
+  ([details](docs/MANUAL.md#fonts-windows-ui-font-everywhere))
 - **Garbled text:** Windows installed in English with the locale changed to Traditional Chinese later
   (FontAssoc without `ANSI(00)=YES`) now also runs DynaRun through Locale Emulator: every window, tooltips
-  included, shows Chinese. ([details](README.md#garbled-chinese-text-with-a-traditional-chinese-system-locale))
+  included, shows Chinese. ([details](docs/MANUAL.md#garbled-chinese-text-with-a-traditional-chinese-system-locale))
 - **Status bar:** the taskbar no longer hides DynaRun's bottom status bar; DynaRun is laid out for the screen's
-  work area. ([details](README.md#status-bar-hidden-behind-the-taskbar))
+  work area. ([details](docs/MANUAL.md#status-bar-hidden-behind-the-taskbar))
 - **Launcher:** the fix is attached before DynaRun's first window, so the splash screen and the first forms are
   covered too.
 - **Installer:**
@@ -780,12 +780,12 @@ Changed and fixed (after a review of v1.4.0):
 ### v1.2.2 — 2026-10-07
 
 - **首次啟動:** 保留第一次啟動時選的語言,以及系統選擇畫面勾選的選購功能(大氣監測、水冷、冷卻風扇、空燃比分析儀);
-  以前會被 Dyna Pro 的設定程式改回英文、關閉。([說明](README.md#首次設定))
+  以前會被 Dyna Pro 的設定程式改回英文、關閉。([說明](docs/MANUAL.md#首次設定))
 - **字型:** DynaRun 所有文字改用 Windows 該語言的介面字型(繁中:Microsoft JhengHei UI;英文 Windows:Segoe UI),
-  不再混用 Arial、MS Sans Serif、新細明體。([說明](README.md#字型全部使用-windows-介面字型))
+  不再混用 Arial、MS Sans Serif、新細明體。([說明](docs/MANUAL.md#字型全部使用-windows-介面字型))
 - **亂碼:** 以英文安裝、之後才改成繁中地區的 Windows(FontAssoc 缺 `ANSI(00)=YES`)也改用 Locale Emulator 啟動 DynaRun,
-  所有視窗(含工具提示)都是中文。([說明](README.md#系統地區是繁體中文仍然亂碼))
-- **狀態列:** 工作列不再遮住 DynaRun 底部的狀態列,DynaRun 依螢幕的工作區排版。([說明](README.md#狀態列被工作列遮住))
+  所有視窗(含工具提示)都是中文。([說明](docs/MANUAL.md#系統地區是繁體中文仍然亂碼))
+- **狀態列:** 工作列不再遮住 DynaRun 底部的狀態列,DynaRun 依螢幕的工作區排版。([說明](docs/MANUAL.md#狀態列被工作列遮住))
 - **啟動器:** 在 DynaRun 第一個視窗出現前就掛上修正,啟動畫面和最先載入的表單也涵蓋在內。
 - **安裝程式:**
   - DynaRun 執行中:改為「關閉 DynaRun 並安裝」,不再在執行中的 DynaRun 底下換檔案;`/quiet` 以代碼 6 結束,`/quiet /close` 先關閉 DynaRun。
