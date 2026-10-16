@@ -31,8 +31,10 @@ available.
   the first error with **Continue download** (from the part that is already there), **Open website**, **Choose file...** (the zip, or ftdibus.inf in the folder where it is
   unpacked: the same check follows) and, in the main installer, **Skip**. If Windows says the computer has no network at all, that page comes at once.
 * If DynaRun V3 and the fix are already installed and only the driver is missing, the installer's first page offers just the driver.
-* Windows asks for administrator permission (UAC). On an administrator account that is once; a standard user may be asked for an
-  administrator's password again after the restart. If BitLocker protection is on (or its status cannot be read), the wizard suspends it until the driver is installed
+* Windows asks for administrator permission (UAC) **once** on an administrator account, for the whole installation: in the main installer the same prompt
+  (on *Install and restart*) installs the fix, installs DynaRun V3 first if the wizard does that too, and prepares the driver; none follows after the restart. A standard user is asked
+  for an administrator's password before the restart and again after it. The red *Windows Security* "can't verify the publisher" window (below) is not a UAC prompt. In the main installer the
+  driver pages (download and check, the picture of the restart menu) come before anything is installed, and **Skip** installs the fix without the driver. If BitLocker protection is on (or its status cannot be read), the wizard suspends it until the driver is installed
   (at most 3 restarts as a safety net, then it is resumed automatically; it is also resumed when the installation finishes or you cancel),
   sets the one-time advanced boot options and registers a task that continues the wizard when you sign in. While it is suspended, the
   drive is not protected; if you decide not to go on, cancel in the wizard (or run `/driver-cancel`, see below) so that it is resumed.
@@ -205,7 +207,7 @@ DynaRunFix 安裝程式可以幫你做完下面的步驟。除非它說做不到
 * 精靈會先找你已經有的「Dyna Pro USB.zip」(它自己先前下載的、精靈所在資料夾、下載資料夾與其下一層、桌面、文件;檔名不限,所以「Dyna Pro USB (1).zip」也算,已經解開的資料夾例如 Downloads\Dyna Pro USB 也算),內容正確就直接使用、不用下載;找不到才從 dynapro.co.uk 下載官方的 zip(不內附)。檢查的是**內容**:Windows 會安裝的 18 個檔案(兩個 INF、它們的兩個 catalog,以及它們所指定的 i386 與 amd64 的 `.sys` / `.dll`)必須各自符合程式內建的 SHA-256;zip 裡的其他檔案(readme、FT Clean、重複的「64-Bit Drivers」資料夾)不看,也只解開這 18 個。Windows 安裝的就是解開並檢查過的那份。
 * 如果檔案不同(可能是 Dyna Pro 更新了驅動程式,也可能是檔案損毀或被竄改),精靈會顯示警告頁,列出來源、zip 的 SHA-256 和不同的檔案。只有套件看起來仍是 Dyna Pro 的(18 個檔案都在、bus INF 含 Dyna Pro 的裝置 ID)才會提供「仍要安裝」(不是預設按鈕);否則請用下方的手動方式。選「仍要安裝」只對那一個 zip、這一次安裝有效,並記錄在 `driver.log`。「仍要安裝」生效期間,暫存資料夾裡有 `accepted.txt`(只含實際暫存的那些檔案的 SHA-256),驅動程式步驟結束時刪除。如果你對這台電腦上找到的檔案取消了警告頁,之後的嘗試(包括繼續與重試)都會改從 Dyna Pro 官網下載;在重新開啟精靈之前,不會再提供內容不同的檔案。只有精靈自己找到的副本會這樣被跳過:你用 **選擇檔案…** 選的檔案或資料夾一律照實檢查,不受這個記憶影響。
 * DynaRunFix 不驗證驅動程式檔的數位簽章。它只比對檔案的 SHA-256 與程式內建的值,而在「仍要安裝」時檢查 bus INF 是否含 Dyna Pro 的裝置 ID。內容不同的套件來源可不可信,由你自己判斷。
-* Windows 會要求系統管理員權限(UAC)。使用系統管理員帳戶時只會問一次;標準使用者在重新啟動後可能會再被要求輸入系統管理員密碼。若 BitLocker 保護為開啟(或無法讀取其狀態),精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復;安裝完成或你按取消時也會恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。暫停期間磁碟機沒有受到保護;如果你決定不繼續,請在精靈中按取消(或執行 `/driver-cancel`,見下方),讓保護恢復。
+* Windows 會要求系統管理員權限(UAC)。使用系統管理員帳戶時，整個安裝只會問**一次**:在主安裝程式中,按「安裝並重新開機」時的同一次提示,就涵蓋修正的安裝(精靈也要安裝 DynaRun V3 時先裝它)和驅動程式的準備,重新啟動後不會再問。標準使用者在重新啟動前會被要求輸入系統管理員密碼,重新啟動後還會再被要求一次。紅色的「Windows 安全性」「無法驗證發行者」視窗(見下方)不是 UAC 提示。在主安裝程式中,驅動程式的頁面(下載與檢查、重新開機選單的圖片)排在安裝任何東西之前,按 **略過** 就只安裝修正、不裝驅動程式。若 BitLocker 保護為開啟(或無法讀取其狀態),精靈會暫停它直到驅動程式安裝完成(最多 3 次重新啟動作為保險,之後自動恢復;安裝完成或你按取消時也會恢復),設定一次性的進階開機選項,並登錄一個工作,在你登入後讓精靈繼續。暫停期間磁碟機沒有受到保護;如果你決定不繼續,請在精靈中按取消(或執行 `/driver-cancel`,見下方),讓保護恢復。
 * 重新啟動後,在啟動選單按 **7**(停用驅動程式強制簽章)。精靈會顯示下面這個畫面,建議先用手機拍下來。圖上會標出「7) 停用驅動程式強制簽章」那一行並寫著 **按 7**。
 
   | 按 7 |
