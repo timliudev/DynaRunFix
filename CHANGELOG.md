@@ -2,7 +2,7 @@
 
 [繁體中文在下方](#更新紀錄)
 
-## Unreleased
+## v1.7.0 — 2026-10-17
 
 Added (setup wizard):
 
@@ -484,7 +484,7 @@ Changed and fixed (after a review of v1.4.0):
 
 ## 更新紀錄
 
-### 未發布
+### v1.7.0 — 2026-10-17
 
 新增(安裝精靈):
 

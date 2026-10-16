@@ -87,6 +87,12 @@ whenever DynaRun starts its first-time setup helper (normally only on the very f
 
 ## What's new
 
+v1.7.0 (released 2026-10-17):
+- New: a hint on the first page when Dyna Pro's software page publishes a newer DynaRun V3 than the installed one, with *Download new version* (nothing is automatic). For the driver, *Choose file...* also takes the ftdibus.inf of an unpacked folder.
+- New: when DynaRun and the fix are installed and only the driver is missing, the first page offers just the driver.
+- Changed: DynaRun's setup and the driver share one download flow and one error page, and the buttons are the same on every page.
+- Fix: *Download new version* really downloads; a damaged DynaRun package found on the computer is not offered again; a file you chose is no longer deleted when the wizard is closed without a network; the update hint and a download no longer disturb each other; over-long names and paths no longer risk overrunning buffers; a failed BitLocker resume is remembered and retried; cancelling the warning for an automatically found driver copy skips only such copies, a file you chose is always checked.
+
 v1.6.0 (released 2026-10-17):
 - New: the setup wizard checks the driver before using it. It looks for a copy on this computer first (its own cache, the setup's folder, Downloads, Desktop, Documents; a zip or an unpacked folder) and downloads only when none matches. The 18 driver files are compared with a table of SHA-256 values; when they differ, a warning page lists them and *Install anyway* is offered (not the default). See [docs/DRIVER.md](docs/DRIVER.md).
 - New: the license page is two pages (a *Check the installer* page with the details of the setup file, then the license). Downloads retry by themselves, can be paused and continued, and show their progress; the driver's last page has *Start DynaRun*.
@@ -801,6 +807,12 @@ DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;�
 log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.7.0(2026-10-17 發行):
+- 新增:Dyna Pro 的軟體頁面有比已安裝版本更新的 DynaRun V3 時,第一頁會提示並提供「下載新版」(完全不會自動執行)。驅動程式的「選擇檔案…」也可以選已解開資料夾裡的 ftdibus.inf。
+- 新增:已安裝 DynaRun 與修正、只缺驅動程式時,第一頁只提供驅動程式。
+- 變更:DynaRun 安裝檔與驅動程式共用同一個下載流程與錯誤頁,所有頁面的按鈕一致。
+- 修正:「下載新版」現在真的會下載;電腦上找到損毀的 DynaRun 安裝檔不再一直重複提供;沒有網路時關閉精靈不會刪到自己選的檔案;新版提示和下載不再互相干擾;過長的名稱與路徑不再有超出緩衝區的風險;重新開啟 BitLocker 失敗時會記住並再試;取消自動找到的驅動程式副本的警告只會跳過這類副本,自己選的檔案一律照實檢查。
+
 v1.6.0(2026-10-17 發行):
 - 新增:安裝精靈在使用驅動程式前會先檢查。先找電腦上現有的(它自己的暫存、安裝程式所在資料夾、下載、桌面、文件;zip 或已解開的資料夾),都不符才下載。18 個驅動程式檔案會和內建的 SHA-256 表比對;不同時警告頁會列出來,並提供「仍要安裝」(不是預設)。見 [docs/DRIVER.md](docs/DRIVER.md#繁體中文)。
 - 新增:授權合約頁拆成兩頁(先是列出安裝檔資訊的「確認安裝檔」頁,再是授權合約)。下載會自動重試、可暫停與繼續,並顯示進度;驅動程式的最後一頁有「開始使用 DynaRun」。
