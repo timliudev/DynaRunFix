@@ -2,6 +2,18 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.7.1 — 2026-10-17
+
+Fixed:
+
+- **A full install with the driver asked for administrator permission twice, not once.** Earlier notes (v1.5.0 and the driver documentation) said that an administrator account is asked once; that was not true when the driver was ticked: Windows asked for the install (the fix, with DynaRun's setup first when it was missing) and again for the driver's preparation. Now ONE elevated step does both, so an administrator account gets a single prompt for the whole install and none after the restart (the sign-in task already runs elevated). A standard user is asked for an administrator's password before the restart and, as before, once more after it. The red *Windows Security* "can't verify the publisher" window is not a UAC prompt and still appears twice.
+
+Changed (setup wizard):
+
+- **The driver pages come before the install** when the driver is ticked: after the license page (or, when DynaRun V3 is already installed, right after the first page) the wizard shows what the driver step does, looks for / downloads and checks the driver, and shows the restart-menu picture with the button *Install and restart*; that button installs the fix and prepares the driver in one elevated step and restarts the computer. *Skip* on these pages installs the fix without the driver; *Cancel* (or closing the window) on the restart page changes nothing. The page "Done" is not shown when the install goes straight on to the restart.
+- If the fix fails, the driver is not prepared and the usual error page appears. If the fix is installed but the driver preparation fails, the driver error page says that the fix itself is installed and points to the Start menu shortcut for trying the driver again. The driver alone (first page with only the driver, `/driver`, the Start menu shortcut) is unchanged: its restart page still reads *Restart now*, and it asks once.
+- Internal: the elevated stage (`/machine`, `/full`) takes `/with-driver <zip> [/unverified <sha256>]` and runs the driver's preparation in the same process after the fix; `/driver-prep` alone is unchanged.
+
 ## v1.7.0 — 2026-10-17
 
 Added (setup wizard):
@@ -483,6 +495,18 @@ Changed and fixed (after a review of v1.4.0):
 ---
 
 ## 更新紀錄
+
+### v1.7.1 — 2026-10-17
+
+修正:
+
+- **同時安裝驅動程式的完整安裝,系統管理員權限被詢問了兩次,而不是一次。** 先前的說明(v1.5.0 與驅動程式文件)寫「系統管理員帳戶只會問一次」,勾選驅動程式時其實不成立:Windows 為安裝(修正;DynaRun 還沒安裝時先裝它的安裝程式)問一次,為準備驅動程式又問一次。現在由**同一個**提升權限的步驟一次做完,所以系統管理員帳戶在整個安裝只會看到一次提示,重新開機後不會再問(登入時的排程工作本來就以提升的權限執行)。標準使用者在重新開機前要輸入系統管理員密碼,重新開機後和以前一樣再被要求一次。紅色的「Windows 安全性」「無法驗證發行者」視窗不是 UAC 提示,仍然會出現兩次。
+
+變更(安裝精靈):
+
+- **勾選驅動程式時,驅動程式的頁面排在安裝之前:** 授權合約頁之後(DynaRun V3 已安裝時,則是第一頁之後),精靈先說明驅動程式這一步要做什麼、尋找或下載並檢查驅動程式,再顯示重新開機選單的圖片和「安裝並重新開機」按鈕;按下後在同一個提升權限的步驟裡安裝修正、準備驅動程式,然後重新開機。這些頁面的「略過」只安裝修正、不裝驅動程式;重新開機那一頁按「取消」(或關閉視窗)不會改變任何東西。安裝直接進入重新開機時,不會顯示「完成」頁。
+- 修正安裝失敗時,不會準備驅動程式,顯示原本的錯誤頁。修正已裝好、但驅動程式的準備失敗時,驅動程式的錯誤頁會說明修正本身已安裝,並指出可用開始功能表的捷徑再試驅動程式。只裝驅動程式的情況(第一頁只提供驅動程式、`/driver`、開始功能表捷徑)沒有改變:重新開機那一頁仍是「重新開機」,而且只問一次。
+- 內部:提升權限的階段(`/machine`、`/full`)可帶 `/with-driver <zip> [/unverified <sha256>]`,在同一個行程裡於修正之後執行驅動程式的準備;單獨的 `/driver-prep` 沒有改變。
 
 ### v1.7.0 — 2026-10-17
 
