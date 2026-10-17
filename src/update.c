@@ -66,6 +66,13 @@ static void uplog(const char *fmt, const char *a, int b)
 
 static void set_time(HKEY k, const WCHAR *name, ULONGLONG t) { RegSetValueExW(k, name, 0, REG_QWORD, (const BYTE *)&t, 8); }
 
+// Nothing is noted any more (it was installed, or GitHub lists nothing newer); skip: also forget the version the user chose to skip
+static void clear_note(HKEY k, BOOL skip)
+{
+    RegDeleteValueW(k, WIDEN(RV_UPDATE_VERSION)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SHA256)); RegDeleteValueW(k, WIDEN(RV_UPDATE_ASK));
+    if (skip) RegDeleteValueW(k, WIDEN(RV_UPDATE_SKIP));
+}
+
 /* ---------- the release, from GitHub's API ---------- */
 
 // GET url over https (INTERNET_FLAG_SECURE; certificate errors are never ignored) and the answer's body; *status = the HTTP status,
@@ -196,7 +203,7 @@ int update_check(void)
         set_time(k, WIDEN(RV_UPDATE_CHECKED), now());           // answered: once a day at most
         if (!newer(v, cur)) {
             uplog("latest is %s: nothing to do %d", tag, 0);
-            RegDeleteValueW(k, WIDEN(RV_UPDATE_VERSION)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SHA256)); RegDeleteValueW(k, WIDEN(RV_UPDATE_ASK)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SKIP));
+            clear_note(k, TRUE);
         }
         else {
             if (release_asset(j, tag, hex)) {
@@ -318,90 +325,81 @@ static void start_launcher(const WCHAR *args, BOOL updated)
     }
 }
 
-int update_run(const WCHAR *args)
+// The two ways a noted release is offered (one function, update_prompt; the policy picks the differences):
+enum prompt_policy {
+    BEFORE_DYNARUN,     // /update <args>: DynaRun is not running. Yes / No (No = tomorrow); the launcher is started afterwards
+    BESIDE_DYNARUN      // /offer: the launcher has started DynaRun. Yes = install once DynaRun is closed, No = skip this version,
+                        // Cancel or the window's close button (X, Esc) = tomorrow (the launcher has already set UpdateAsk)
+};
+
+// Asks about the release noted in HKCU\Software\DynaRunFix and installs it on Yes. Only one at a time (Local\DynaRunFix-update).
+// BEFORE_DYNARUN asks only while DynaRun is not running and starts the launcher with args at the end, whatever happened;
+// BESIDE_DYNARUN asks only while DynaRun runs (after it has had up to 10 s to open) and does not start the launcher again.
+static int update_prompt(enum prompt_policy p, const WCHAR *args)
 {
-    static WCHAR tag[64], sha[80], txt[600]; HKEY k; DWORD n; int rc = 0; BOOL updated = FALSE;
+    static WCHAR tag[64], sha[80], txt[700]; HKEY k; DWORD n, t0; int rc = 0, ans; BOOL beside = p == BESIDE_DYNARUN, updated = FALSE; char a[64];
     HANDLE mx = CreateMutexW(NULL, FALSE, L"Local\\DynaRunFix-update");
-    if (GetLastError() != ERROR_ALREADY_EXISTS && !(running_programs() & RUN_DYNARUN) &&
+    if (GetLastError() != ERROR_ALREADY_EXISTS && (beside || !(running_programs() & RUN_DYNARUN)) &&
         !RegOpenKeyExW(HKEY_CURRENT_USER, KEY, 0, KEY_ALL_ACCESS, &k)) {
         n = sizeof(tag) - 2; if (RegQueryValueExW(k, WIDEN(RV_UPDATE_VERSION), NULL, NULL, (BYTE *)tag, &n)) tag[0] = 0;
         n = sizeof(sha) - 2; if (RegQueryValueExW(k, WIDEN(RV_UPDATE_SHA256), NULL, NULL, (BYTE *)sha, &n)) sha[0] = 0;
-        if (tag[0] && lstrlenW(sha) == 64) {
-            wsprintfW(txt, T(L"A new version of DynaRunFix is available: %s (this is v%s).\n\n"
-                             L"Update now? It takes about a minute; DynaRun opens afterwards.\n\n"
-                             L"\"No\" asks again tomorrow.",
-                             L"DynaRunFix 有新版本：%s（目前是 v%s）。\n\n"
-                             L"現在更新嗎？大約一分鐘，更新完 DynaRun 會自動開啟。\n\n"
-                             L"按「否」明天會再問一次。"), tag, WIDEN(DRF_VERSION));
-            rc = msg(txt, MB_YESNO | MB_ICONQUESTION) == IDYES;
-            { char a[64]; WideCharToMultiByte(CP_ACP, 0, tag, -1, a, sizeof(a), NULL, NULL); uplog("asked about %s: %d (1 = yes)", a, rc); }
-            if (rc) {
-                rc = install(tag, sha);
-                if (!rc) { updated = TRUE; RegDeleteValueW(k, WIDEN(RV_UPDATE_VERSION)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SHA256)); RegDeleteValueW(k, WIDEN(RV_UPDATE_ASK)); }
-            } else rc = 2;
+        // DynaRun is still opening: do not put a window over its start-up
+        if (beside) for (t0 = GetTickCount(); GetTickCount() - t0 < 10000 && (running_programs() & RUN_DYNARUN); ) Sleep(500);   // a deadline, not a count of sleeps
+        if (tag[0] && lstrlenW(sha) == 64 && (!beside || (running_programs() & RUN_DYNARUN))) {
+            if (beside)
+                wsprintfW(txt, T(L"A new version of DynaRunFix is available: %s (this is v%s).\n\n"
+                                 L"Yes: install it after you close DynaRun (DynaRun keeps running now).\n"
+                                 L"No: skip this version (it is not offered again; a newer one is).\n"
+                                 L"Cancel, or closing this window: ask again tomorrow.",
+                                 L"DynaRunFix 有新版本：%s（目前是 v%s）。\n\n"
+                                 L"是：等您關閉 DynaRun 後再安裝（DynaRun 照常使用）。\n"
+                                 L"否：略過這個版本（不再詢問；有更新的版本才會再問）。\n"
+                                 L"取消，或直接關閉這個視窗：明天再問。"), tag, WIDEN(DRF_VERSION));
+            else
+                wsprintfW(txt, T(L"A new version of DynaRunFix is available: %s (this is v%s).\n\n"
+                                 L"Update now? It takes about a minute; DynaRun opens afterwards.\n\n"
+                                 L"\"No\" asks again tomorrow.",
+                                 L"DynaRunFix 有新版本：%s（目前是 v%s）。\n\n"
+                                 L"現在更新嗎？大約一分鐘，更新完 DynaRun 會自動開啟。\n\n"
+                                 L"按「否」明天會再問一次。"), tag, WIDEN(DRF_VERSION));
+            ans = msg(txt, (beside ? MB_YESNOCANCEL : MB_YESNO) | MB_ICONQUESTION);
+            WideCharToMultiByte(CP_ACP, 0, tag, -1, a, sizeof(a), NULL, NULL);
+            if (beside) uplog("asked about %s while DynaRun runs: %d (6 = after DynaRun closes, 7 = skip, 2 = Cancel/closed: tomorrow)", a, ans);
+            else uplog("asked about %s: %d (1 = yes)", a, ans == IDYES);
+            if (ans == IDYES) {
+                if (beside) {
+                    while (running_programs()) Sleep(2000);     // until DynaRun (and what the setup replaces) is closed
+                    Sleep(3000);
+                }
+                rc = beside && running_programs() ? 3 : install(tag, sha);
+                if (!rc) { updated = TRUE; clear_note(k, beside); }
+            }
+            else if (!beside) rc = 2;                       // "No": tomorrow
+            // Cancel and the window's close button (X, Esc) both answer IDCANCEL: they must not skip a version for good,
+            // so they mean "tomorrow" (UpdateAsk is already set by the launcher); the explicit skip is "No"
+            else if (ans == IDNO) RegSetValueExW(k, WIDEN(RV_UPDATE_SKIP), 0, REG_SZ, (const BYTE *)tag, (lstrlenW(tag) + 1) * sizeof(WCHAR));
             if (rc) set_time(k, WIDEN(RV_UPDATE_ASK), now() + DAY);
             if (g_hwnd) { DestroyWindow(g_hwnd); g_hwnd = NULL; }
             if (rc && rc != 2) {        // 2: "No", or the UAC prompt was cancelled (the new setup said so already)
-                wsprintfW(txt, T(L"The update did not finish (error %d). DynaRun opens as usual; the update is tried again tomorrow.",
-                                 L"更新沒有完成（錯誤 %d）。DynaRun 會照常開啟，明天會再試一次。"), rc);
+                if (beside)
+                    wsprintfW(txt, T(L"The update did not finish (error %d). It is tried again tomorrow.",
+                                     L"更新沒有完成（錯誤 %d）。明天會再試一次。"), rc);
+                else
+                    wsprintfW(txt, T(L"The update did not finish (error %d). DynaRun opens as usual; the update is tried again tomorrow.",
+                                     L"更新沒有完成（錯誤 %d）。DynaRun 會照常開啟，明天會再試一次。"), rc);
                 msg(txt, MB_ICONWARNING);
             }
         }
         RegCloseKey(k);
     }
-    start_launcher(args, updated);
+    if (!beside) start_launcher(args, updated);
     if (mx) CloseHandle(mx);
     return rc;
 }
 
-// Called by the launcher AFTER it has started DynaRun (DynaRun never waits for this): the question is asked beside the
-// running DynaRun, and an accepted update is installed once DynaRun has been closed (the installer replaces files DynaRun
-// holds). Yes = install after DynaRun closes, No = skip this version (UpdateSkip, not offered again; a newer release is),
-// Cancel or the window's close button (X, Esc) = ask again tomorrow (the launcher has already set UpdateAsk). The launcher is not
-// started again.
-int update_offer(void)
-{
-    static WCHAR tag[64], sha[80], txt[700]; HKEY k; DWORD n, t0; int rc = 0, ans;
-    HANDLE mx = CreateMutexW(NULL, FALSE, L"Local\\DynaRunFix-update");
-    if (GetLastError() != ERROR_ALREADY_EXISTS && !RegOpenKeyExW(HKEY_CURRENT_USER, KEY, 0, KEY_ALL_ACCESS, &k)) {
-        n = sizeof(tag) - 2; if (RegQueryValueExW(k, WIDEN(RV_UPDATE_VERSION), NULL, NULL, (BYTE *)tag, &n)) tag[0] = 0;
-        n = sizeof(sha) - 2; if (RegQueryValueExW(k, WIDEN(RV_UPDATE_SHA256), NULL, NULL, (BYTE *)sha, &n)) sha[0] = 0;
-        // DynaRun is still opening: do not put a window over its start-up
-        for (t0 = GetTickCount(); GetTickCount() - t0 < 10000 && (running_programs() & RUN_DYNARUN); ) Sleep(500);   // a deadline, not a count of sleeps
-        if (tag[0] && lstrlenW(sha) == 64 && (running_programs() & RUN_DYNARUN)) {
-            wsprintfW(txt, T(L"A new version of DynaRunFix is available: %s (this is v%s).\n\n"
-                             L"Yes: install it after you close DynaRun (DynaRun keeps running now).\n"
-                             L"No: skip this version (it is not offered again; a newer one is).\n"
-                             L"Cancel, or closing this window: ask again tomorrow.",
-                             L"DynaRunFix 有新版本：%s（目前是 v%s）。\n\n"
-                             L"是：等您關閉 DynaRun 後再安裝（DynaRun 照常使用）。\n"
-                             L"否：略過這個版本（不再詢問；有更新的版本才會再問）。\n"
-                             L"取消，或直接關閉這個視窗：明天再問。"), tag, WIDEN(DRF_VERSION));
-            ans = msg(txt, MB_YESNOCANCEL | MB_ICONQUESTION);
-            { char a[64]; WideCharToMultiByte(CP_ACP, 0, tag, -1, a, sizeof(a), NULL, NULL);
-              uplog("asked about %s while DynaRun runs: %d (6 = after DynaRun closes, 7 = skip, 2 = Cancel/closed: tomorrow)", a, ans); }
-            // Cancel and the window's close button (X, Esc) both answer IDCANCEL: they must not skip a version for good,
-            // so they mean "tomorrow" (UpdateAsk is already set by the launcher); the explicit skip is "No"
-            if (ans == IDNO) {
-                RegSetValueExW(k, WIDEN(RV_UPDATE_SKIP), 0, REG_SZ, (const BYTE *)tag, (lstrlenW(tag) + 1) * sizeof(WCHAR));
-            } else if (ans == IDYES) {
-                while (running_programs()) Sleep(2000);     // until DynaRun (and what the setup replaces) is closed
-                Sleep(3000);
-                rc = running_programs() ? 3 : install(tag, sha);
-                if (g_hwnd) { DestroyWindow(g_hwnd); g_hwnd = NULL; }
-                if (!rc) { RegDeleteValueW(k, WIDEN(RV_UPDATE_VERSION)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SHA256)); RegDeleteValueW(k, WIDEN(RV_UPDATE_ASK)); RegDeleteValueW(k, WIDEN(RV_UPDATE_SKIP)); }
-                else {
-                    set_time(k, WIDEN(RV_UPDATE_ASK), now() + DAY);
-                    if (rc != 2) {
-                        wsprintfW(txt, T(L"The update did not finish (error %d). It is tried again tomorrow.",
-                                         L"更新沒有完成（錯誤 %d）。明天會再試一次。"), rc);
-                        msg(txt, MB_ICONWARNING);
-                    }
-                }
-            }
-        }
-        RegCloseKey(k);
-    }
-    if (mx) CloseHandle(mx);
-    return rc;
-}
+// /update <args> (a launcher of an earlier version runs it when DynaRun is not running): ask, install, start the launcher
+int update_run(const WCHAR *args) { return update_prompt(BEFORE_DYNARUN, args); }
+
+// /offer: called by the launcher AFTER it has started DynaRun (DynaRun never waits for this): the question is asked beside the
+// running DynaRun, and an accepted update is installed once DynaRun has been closed (the installer replaces files DynaRun holds).
+int update_offer(void) { return update_prompt(BESIDE_DYNARUN, NULL); }
