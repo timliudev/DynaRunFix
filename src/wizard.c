@@ -44,6 +44,9 @@ static DWORD g_neterr, g_total;
 static BOOL g_paused, g_pause_req;                      // download paused (worker ended, .part kept) / pause asked, worker still stopping
 static int g_hint;                                       // DynaRun update hint (pkg_update_hint): 0 none, 1 a newer version is published, 2 the site's zip differs from the last download
 static WCHAR g_hint_inst[40], g_hint_new[40];            // the installed and the published version (hint 1)
+static BOOL g_pre;                                        // the driver is ticked in the main flow: its package is fetched and checked BEFORE the install, and the one elevated stage installs the fix and prepares the driver (one UAC prompt)
+static int g_inst_job;                                    // the install job (JOB_INSTALL_ALL / JOB_INSTALL_FIX) that waits for the driver package while g_pre
+static BOOL g_fix_done;                                   // g_pre: the fix is installed (the driver step after it may still have failed)
 static BOOL g_driver_only;                                // DynaRun and its fix are installed (this version) and only the driver is missing: the first page offers just that
 static BOOL g_checking, g_marquee, g_drv_allow;          // the non-pausable "checking" phase / marquee bar (size unknown) / the user chose "install anyway" for a zip with another hash
 static int g_drv_how;                                    // DRV_SRC_*: the driver zip was downloaded, or found on this computer (nothing downloaded)
@@ -309,7 +312,7 @@ static int place_image(int x, int y, int w, int ah)
 
 // The "Start DynaRun" button is offered only when DynaRun is installed here and our launcher is in place (g_exe comes from locate_dynarun, which
 // the wizard runs at start in every mode, so this also holds in the process the sign-in task starts after the restart; g_launcher from init_paths).
-// The driver step may be skipped (back to the end of the install) only in the main install flow, not when it is the whole job (the shortcut, /driver, or the driver-only first page).
+// The driver step may be skipped (the fix is installed without it) only in the main install flow, not when it is the whole job (the shortcut, /driver, or the driver-only first page).
 static BOOL can_skip_driver(void) { return g_drvmode == DRV_MODE_NONE && !g_driver_only; }
 
 // The line about a newer DynaRun on the first page, and its button. A hint only: nothing happens unless the button is clicked.
@@ -333,6 +336,24 @@ static void cat_to(WCHAR *d, int cap, const WCHAR *s)
 {
     int n = lstrlenW(d);
     if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
+}
+
+// What is said about the taskbar pin (g_pinresult, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
+// the install (g_fix_done: the page "Done" is skipped), on the restart page.
+static void pin_hint(WCHAR *b)
+{
+    if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
+        ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
+            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
+        : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
+            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
+}
+static void acp_warning(void)
+{
+    if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
+        status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
+               L"請到「設定 → 時間與語言 → 語言與地區 → 系統管理語言設定 → 變更系統地區設定」選「中文（繁體，台灣）」，再重新開機。", TRUE);
 }
 
 static void set_page(int p)
@@ -488,22 +509,12 @@ static void set_page(int p)
                       L"The first start asks for your dynamometer model. If Windows asks whether to allow changes, click \"Yes\".",
                       L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
                       L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
-        if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-        if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
-            ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
-                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
-            : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
-                L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
-        if (g_autostart) lstrcatW(b, g_drv ? T(L"\n\nDynaRun will start automatically when you sign in, once the driver is installed.", L"\n\n驅動程式安裝完成後，以後開機登入時會自動啟動 DynaRun。")
-                                           : T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
-        if (g_drv) lstrcatW(b, T(L"\n\nNext: the Dyna Pro USB driver, so that this computer can talk to the dynamometer.", L"\n\n下一步：安裝 Dyna Pro USB 驅動程式，電腦才能和馬力機連線。"));
+        pin_hint(b);
+        if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
         lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
         text(ID_BODY, b);
-        if (g_drv) buttons(T(L"Next", L"下一步"), T(L"Close", L"關閉"), NULL);
-        else buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
-        if (g_zh && legacy_acp() != 950)   // DynaRun's Chinese is Big5: only a zh-TW system locale shows it everywhere
-            status(L"注意：這台電腦的「非 Unicode 程式的語言」不是中文（台灣），DynaRun 的中文可能會變成亂碼。\n"
-                   L"請到「設定 → 時間與語言 → 語言與地區 → 系統管理語言設定 → 變更系統地區設定」選「中文（繁體，台灣）」，再重新開機。", TRUE);
+        buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
+        acp_warning();
         break;
     case P_ERROR:
         text(ID_TITLE, T(L"Something went wrong", L"發生問題"));
@@ -512,7 +523,7 @@ static void set_page(int p)
         break;
     case P_DRV_INTRO:
         text(ID_TITLE, T(L"Install the Dyna Pro USB driver", L"安裝 Dyna Pro USB 驅動程式"));
-        text(ID_BODY, T(L"Windows needs Dyna Pro's USB driver to talk to the dynamometer.\n\nThis program will:\n"
+        lstrcpyW(b, T(L"Windows needs Dyna Pro's USB driver to talk to the dynamometer.\n\nThis program will:\n"
                         L"   1.  download the driver from the Dyna Pro website (dynapro.co.uk, about 2 MB)\n"
                         L"   2.  restart the computer once: a menu appears, press 7 on the keyboard\n"
                         L"   3.  come back by itself after you sign in and finish the installation\n\n"
@@ -527,6 +538,9 @@ static void set_page(int p)
                         L"廠商封裝中的驅動程式設定檔（INF）不在隨附的 Microsoft 簽署目錄檔中，Windows 無法驗證，所以只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
                         L"下次重新開機會自動恢復。\n\n"
                         L"如果這台電腦有啟用 BitLocker，保護會暫停到驅動程式安裝完成為止，之後會自動恢復（最多經過 3 次重新開機）。"));
+        if (g_pre) lstrcatW(b, T(L"\n\nDynaRun's fix is installed in the same step, just before the restart, so Windows asks for permission only once.",
+                                 L"\n\nDynaRun 的修正會在同一步、重新開機之前一起安裝，所以 Windows 只會詢問一次是否允許變更。"));
+        text(ID_BODY, b);
         buttons(T(L"Next", L"下一步"), can_skip_driver() ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"), NULL);
         if (g_note[0]) status(g_note, TRUE);
         break;
@@ -543,6 +557,8 @@ static void set_page(int p)
                 lstrcatW(b, t);
             }
             if (!g_drv_allow && (g_drv_how & DRV_ZIPDIFF)) lstrcatW(b, T(L"The zip differs from the known version, but the driver files are identical: it can be installed.\n\n", L"壓縮檔和已知版本不同，但驅動程式檔案相同，可以安裝。\n\n"));
+            if (g_pre) lstrcatW(b, T(L"Click \"Install and restart\": DynaRun's fix is installed and the driver is prepared in one step (Windows asks for permission once), then the computer restarts.\n\n",
+                                     L"按「安裝並重新開機」後，會一次完成 DynaRun 修正的安裝和驅動程式的準備（Windows 只會詢問一次是否允許變更），接著電腦重新開機。\n\n"));
             lstrcatW(b, T(L"Tip: take a photo of this page with your phone.\nSave your work in other programs before you restart.",
                           L"建議用手機拍下這一頁。\n按「重新開機」前請先存好其他程式的資料。"));
             if (bl > 0) lstrcatW(b, T(L"\n\nThis computer uses BitLocker: protection is suspended for the restart and turned on again by itself after the driver is installed.",
@@ -552,7 +568,8 @@ static void set_page(int p)
             text(ID_BODY, b);
         }
         show_image(0);
-        buttons(T(L"Restart now", L"重新開機"), T(L"Later", L"稍後"), NULL);
+        if (g_pre) buttons(T(L"Install and restart", L"安裝並重新開機"), T(L"Cancel", L"取消"), NULL);   // nothing is installed yet
+        else buttons(T(L"Restart now", L"重新開機"), T(L"Later", L"稍後"), NULL);
         if (g_note[0]) status(g_note, TRUE);
         break;
     case P_DRV_HASH: {                                // a driver zip that is not the file this program knows: the user decides
@@ -628,14 +645,17 @@ static void set_page(int p)
         break;
     case P_DRV_REBOOT:
         text(ID_TITLE, g_drv_noreboot ? T(L"Please restart the computer", L"請重新開機") : T(L"Restarting", L"即將重新開機"));
-        text(ID_BODY, g_drv_noreboot
+        lstrcpyW(b, g_drv_noreboot
             ? T(L"Everything is ready, but Windows would not restart by itself.\n\nPlease restart the computer yourself (Start, the power button, Restart). "
                 L"When the menu appears, press 7. After you sign in, this program continues by itself.",
                 L"都準備好了，但 Windows 沒有自動重新開機。\n\n請自己重新開機（開始 → 電源 → 重新啟動）。出現選單時請按 7；登入後本程式會自動繼續。")
             : T(L"The computer restarts now.\n\nWhen the menu appears, press 7. After you sign in, this program continues by itself.\n\n"
                 L"If the computer does not restart (a program is waiting for you), save your work and restart it yourself.",
                 L"電腦即將重新開機。\n\n出現選單時請按 7；登入後本程式會自動繼續。\n\n如果電腦沒有重新開機（有程式在等你回應），請存好資料後自己重新開機。"));
+        if (g_fix_done) pin_hint(b);                      // the fix was installed with the driver: the hints of the page "Done", which is skipped
+        text(ID_BODY, b);
         buttons(T(L"Close", L"關閉"), NULL, NULL);
+        if (g_fix_done) acp_warning();
         break;
     case P_DRV_RETRY:
         text(ID_TITLE, T(L"7 was not pressed", L"剛才沒有按到 7"));
@@ -716,8 +736,8 @@ static DWORD WINAPI job_proc(LPVOID unused)
         }
         break;
     case JOB_EXTRACT:  rc = pkg_extract_checked(&g_zip, g_pw, g_msi, 400UL * 1024UL * 1024UL, on_progress, &g_cancel); SecureZeroMemory(g_pw, sizeof(g_pw)); break;   // a size cap, and a free target (shared with the driver)   // the password is not needed any more
-    case JOB_INSTALL_ALL: rc = install_all(g_msi); break;
-    case JOB_INSTALL_FIX: rc = install_fix(); break;
+    case JOB_INSTALL_ALL: rc = g_pre ? install_all_driver(g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(g_msi); break;   // g_pre: the driver's preparation in the same elevated stage
+    case JOB_INSTALL_FIX: rc = g_pre ? install_fix_driver(g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(); break;
     case JOB_DRV_PREP:
         // "install anyway" accepts exactly this zip (its SHA-256), nothing else. (No comment after the call on the line of a break: it once swallowed the
         // break, and the install followed the prep at once, without the restart.)
@@ -771,6 +791,22 @@ static void install(int job)
     g_pending = job;
     if (running_programs()) set_page(P_RUNNING);
     else start_job(job, P_INSTALL);
+}
+
+// The install of the fix (job: JOB_INSTALL_ALL / JOB_INSTALL_FIX). With the driver ticked its package is fetched and checked first (the driver pages), and the
+// one elevated stage then does both: the UAC prompt comes once, before the restart. The driver-only first page (g_driver_only) has no install: it starts the prep itself.
+static void go_install(int job)
+{
+    if (g_drv && !g_driver_only && g_drvmode == DRV_MODE_NONE && !g_pre) { g_pre = TRUE; g_inst_job = job; g_note[0] = 0; set_page(P_DRV_INTRO); }
+    else install(job);
+}
+
+// "Skip" on the driver pages of the main flow: the fix is installed without the driver (the sign-in start is then registered by the install itself).
+static void skip_driver(void)
+{
+    user_log(L"driver: skipped, the fix is installed without it");
+    g_drv = FALSE; g_autostart_later = FALSE; g_pre = FALSE;
+    install(g_inst_job);
 }
 
 // Starts the acquire flow for the DynaRun setup or the driver (the same pages; a network check comes first inside the download).
@@ -945,6 +981,8 @@ static void drv_error(int rc)
     default: wsprintfW(g_note, T(L"The driver could not be prepared (code %d).", L"無法準備驅動程式（代碼 %d）。"), rc); break;
     }
     lstrcatW(g_note, T(L"\n\nYou can install the driver by hand instead: click \"Open the manual steps\".", L"\n\n也可以改用手動方式安裝，請按「開啟手動安裝說明」。"));
+    if (g_fix_done) lstrcatW(g_note, T(L"\n\nDynaRun's fix itself is installed. To try the driver again later, use \"Install Dyna Pro USB driver\" in the Start menu.",
+                                       L"\n\nDynaRun 的修正本身已經安裝好了。之後想再試一次驅動程式，可以用開始功能表裡的「安裝 Dyna Pro USB 驅動程式」。"));
     set_page(P_DRV_ERROR);
 }
 
@@ -1170,11 +1208,19 @@ static void job_done(int job, int rc)
         break;
     case JOB_INSTALL_ALL:
     case JOB_INSTALL_FIX:
+        if (g_pre && (rc == 0 || rc >= DRV_E_HASH)) {            // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
+            cleanup_files();
+            g_fix_done = TRUE;
+            if (rc == 0) drv_reboot_now();
+            else if (rc == DRV_W_BDE) set_page(P_DRV_BDE);
+            else drv_error(rc);
+            break;
+        }
         if (rc == 0) { cleanup_files(); set_page(P_DONE); break; }
         if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); break; }   // DynaRun was started meanwhile
         if (rc == 2) {
             lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
-            set_page(job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);
+            set_page(g_pre ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // g_pre: the page with the button that started it
             break;
         }
         wsprintfW(g_note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
@@ -1215,7 +1261,7 @@ static void on_primary(void)
         if (g_driver_only) { g_drv = TRUE; g_autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
         g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_autostart_later = g_drv;                   // the driver restart comes first: the sign-in start is registered after it
-        if (g_installed) install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
+        if (g_installed) go_install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
         break;
     case P_FAIL: acq_start(g_acq); break;                                             // Retry / Continue download
     case P_PASSWORD:
@@ -1227,19 +1273,18 @@ static void on_primary(void)
         start_job(JOB_EXTRACT, P_EXTRACT);
         break;
     case P_CHECK: set_page(P_LICENSE); break;
-    case P_LICENSE: install(JOB_INSTALL_ALL); break;
+    case P_LICENSE: go_install(JOB_INSTALL_ALL); break;
     case P_RUNNING:
         g_close = TRUE;                              // the elevated stage closes DynaRun (see close_programs in setup.c)
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
-        if (g_drv) { set_page(P_DRV_INTRO); break; }                 // "Next": the driver
         start_dynarun();
         DestroyWindow(g_hwnd);
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;
     case P_DRV_INTRO: acq_start(&ACQ_DRIVER); break;
-    case P_DRV_PRESS7: start_job(JOB_DRV_PREP, P_DRV_PREP); break;
+    case P_DRV_PRESS7: if (g_pre) install(g_inst_job); else start_job(JOB_DRV_PREP, P_DRV_PREP); break;   // g_pre: the fix and the driver preparation in one elevated stage
     case P_DRV_HASH: hash_choice(FALSE); break;                                       // "Cancel" is the default button
     case P_DRV_RETRY: g_drvzip[0] = 0; start_job(JOB_DRV_PREP, P_DRV_PREP); break;       // the staged driver is still there
     case P_DRV_WARN: start_job(JOB_DRV_INSTALL, P_DRV_INSTALL); break;
@@ -1274,12 +1319,12 @@ static void on_close(void)
 static void on_second(BOOL button)
 {
     if (g_page == P_DRV_HASH) hash_choice(button);                       // the button is "Install anyway"; Esc is a cancel
-    else if (g_page == P_FAIL && button && g_acq == &ACQ_DRIVER && can_skip_driver()) { g_drv = FALSE; set_page(P_DONE); }   // "Skip": back to the end of the install
+    else if (g_page == P_FAIL && button && g_acq == &ACQ_DRIVER && can_skip_driver()) skip_driver();   // "Skip": the fix without the driver
     else if (g_page == P_FETCH && button) {
         if (g_paused) fetch_stopped();                  // paused: no worker is running, finish at once
         else InterlockedExchange(&g_cancel, 1);         // stop, then offer the other ways (also overrides a pause that is still taking effect)
     }
-    else if (g_page == P_DRV_INTRO && button && can_skip_driver()) { g_drv = FALSE; set_page(P_DONE); }   // "Skip": back to the end of the install
+    else if (g_page == P_DRV_INTRO && button && can_skip_driver()) skip_driver();   // "Skip": the fix without the driver
     else if (g_page == P_DRV_RETRY || g_page == P_DRV_WARN || g_page == P_DRV_BDE) start_job(JOB_DRV_CANCEL, P_DRV_PREP);          // the task, the menu flag and BitLocker back
     else if (g_page != P_INSTALL) on_close();
 }

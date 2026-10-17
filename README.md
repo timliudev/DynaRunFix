@@ -17,7 +17,7 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
 
 - Windows 10 or 11 (the installer also runs on Windows XP and 7; the automatic driver installation needs Windows 10 or 11).
 - A legally installed DynaRun V3, or the setup password you got from Dyna Pro (the installer can download and install DynaRun V3 for you).
-- Administrator permission for the install (Windows asks once). DynaRun itself never runs with more rights than a normal start.
+- Administrator permission for the install. On an administrator account Windows asks once for the whole install, the driver included; a standard user types an administrator's password, and again after the restart when the driver is installed. DynaRun itself never runs with more rights than a normal start.
 
 ## Install
 
@@ -25,7 +25,7 @@ software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively o
    SmartScreen may say *"Windows protected your PC"* because the file is not code-signed: click **More info → Run anyway**.
 2. Follow the wizard. It installs DynaRun V3 first if it is missing (asking for the setup password from Dyna Pro), then the fix, and points DynaRun's shortcuts at it.
 3. **First time on this PC? Also install the Dyna Pro USB driver.** Leave **Also install the Dyna Pro USB driver (one restart needed)**
-   ticked on the first page (Windows 10 / 11); it needs one restart, where you press **7**. Steps and problems:
+   ticked on the first page (Windows 10 / 11); it needs one restart, where you press **7**; Windows still asks for permission only once. Steps and problems:
    [manual: Installing the Dyna Pro USB driver](https://github.com/timliudev/DynaRunFix/blob/main/docs/MANUAL.md#installing-the-dyna-pro-usb-driver) and the [driver guide](https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md).
 
 ## Use
@@ -59,7 +59,7 @@ MIT, see [LICENSE](https://github.com/timliudev/DynaRunFix/blob/main/LICENSE). T
 
 - Windows 10 或 11(安裝程式也可在 Windows XP、7 執行;自動安裝驅動程式需要 Windows 10 或 11)。
 - 合法安裝的 DynaRun V3,或你從 Dyna Pro 取得的安裝密碼(安裝程式可以替你下載並安裝 DynaRun V3)。
-- 安裝時需要系統管理員權限(Windows 會問一次)。DynaRun 本身永遠不會以高於一般啟動的權限執行。
+- 安裝時需要系統管理員權限。使用系統管理員帳戶時，整個安裝（包括驅動程式）Windows 只會問一次；標準使用者要輸入系統管理員密碼，安裝驅動程式時重新開機後還會再問一次。DynaRun 本身永遠不會以高於一般啟動的權限執行。
 
 ### 安裝
 
@@ -67,7 +67,7 @@ MIT, see [LICENSE](https://github.com/timliudev/DynaRunFix/blob/main/LICENSE). T
    因為檔案沒有程式碼簽章,SmartScreen 可能顯示「Windows 已保護您的電腦」:按**其他資訊 → 仍要執行**。
 2. 照精靈畫面操作。還沒安裝 DynaRun V3 時會先安裝(會要求 Dyna Pro 給你的安裝密碼),接著安裝修正,並把 DynaRun 的捷徑指向它。
 3. **這台電腦第一次使用?還需要安裝 Dyna Pro USB 驅動程式。** 讓精靈第一頁的**同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**維持勾選(Windows 10 / 11);
-   需要重新開機一次,並在選單按 **7**。步驟與疑難排解:
+   需要重新開機一次,並在選單按 **7**;Windows 仍然只會詢問一次是否允許變更。步驟與疑難排解:
    [使用手冊:安裝 Dyna Pro USB 驅動程式](https://github.com/timliudev/DynaRunFix/blob/main/docs/MANUAL.md#安裝-dyna-pro-usb-驅動程式)與[驅動程式指南](https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md#繁體中文)。
 
 ### 使用

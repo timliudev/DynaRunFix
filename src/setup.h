@@ -29,6 +29,10 @@ BOOL locate_dynarun(void);                  // fills g_exe from the registry or 
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
 int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
+// The same, and the driver's preparation (driver_prep) in the SAME elevated stage: one UAC prompt for both. zip/accept as for driver_prep.
+// 0 ok; 2 cancelled; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
+int install_fix_driver(const WCHAR *zip, const WCHAR *accept);
+int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept);
 // shared with driver.c
 void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth);   // a link is removed itself, never followed; in-use files go at the next restart
 BOOL same_file(const WCHAR *a, const WCHAR *b);
@@ -149,6 +153,7 @@ const WCHAR *driver_pinned_sha256(void);    // the SHA-256 of the zip this progr
 void driver_forget(const WCHAR *zip);       // deletes the zip when it is our own cache file in %TEMP%\DynaRunFix (a refused download), never a file of the user's
 BOOL driver_partial(DWORD *have);           // a partial driver download that driver_fetch can continue; *have: bytes so far
 int driver_prep(const WCHAR *zip, const WCHAR *accept);         // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
+int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept);   // elevated, inside the install stage (setup.c): driver_prep for sid, no further elevation
 int driver_bitlocker(void);                // BitLocker protection of the system drive, not elevated: 1 on, 0 off / none, -1 cannot be told (needs administrator rights)
 int driver_install(void);                   // elevated: pnputil, then clean up. 0 or DRV_E_*, 2 = UAC cancelled
 int driver_cancel(void);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
