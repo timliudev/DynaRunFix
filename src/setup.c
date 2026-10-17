@@ -821,42 +821,100 @@ static void set_appid(IShellLinkW *sl, const WCHAR *id)
 // file Dyna Pro's MSI gives its shortcuts. Windows shows a running DynaRun with the icon of the shortcut that carries
 // its AppUserModelID, so every shortcut of ours gets that logo, taken from a DynaRun shortcut that does not use the exe.
 static BOOL g_icontried; static WCHAR g_icon[MAX_PATH]; static int g_iconidx;
+static BOOL is_lnk(const WCHAR *p) { int n = lstrlenW(p); return n >= 4 && !lstrcmpiW(p + n - 4, L".lnk"); }
+
+// The shell folders that can hold a DynaRun shortcut: ONE list, for every walk and check that looks at them (the icon search, the fix, the
+// uninstall's point-back, the search for our own shortcut, and the check of the paths a backup is put back to). A row says which of them
+// include the folder (SFU_*) and which of those also look into its subfolders (deep); nothing else lists a shortcut folder, so a folder that
+// is not here is neither scanned nor accepted by restore_shortcuts.
+enum { SFU_FIX = 1, SFU_UNRET = 2, SFU_FIND = 4, SFU_ICON = 8, SFU_RESTORE = 16 };
+enum { SF_DESKTOP, SF_STARTMENU, SF_PROGRAMS, SF_QUICKLAUNCH, SF_OWN, SF_COUNT };      // the index in SF[]; the first two are searched first
+enum { SF_USER = 1, SF_COMMON = 2, SF_BOTH = 3 };                                       // which of the two folders of a row (bit 0 the user's, bit 1 all users')
+typedef struct {
+    int csidl[2];                   // [0] the user's folder, [1] the all users' folder (0: there is none)
+    const WCHAR *sub;               // below that folder
+    const WCHAR *reg, *rel;         // the folder of another account (unretarget_user): its name in User Shell Folders, and the default below the profile
+    unsigned uses, deep;
+} shortcut_folder;
+static const WCHAR QUICKLAUNCH[] = L"\\Microsoft\\Internet Explorer\\Quick Launch";     // incl. pinned taskbar items
+static const shortcut_folder SF[SF_COUNT] = {
+    { { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY }, NULL, L"Desktop", L"Desktop",
+      SFU_FIX | SFU_UNRET | SFU_FIND | SFU_ICON | SFU_RESTORE, 0 },
+    // the Start menu root (not just Programs): some DynaRun installs put their shortcut there. The fix and the point-back look at the root
+    // alone and at Programs on its own; the two searches look below the whole Start menu.
+    { { CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU }, NULL, L"Start Menu", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu",
+      SFU_FIX | SFU_UNRET | SFU_FIND | SFU_ICON | SFU_RESTORE, SFU_FIND | SFU_ICON },
+    { { CSIDL_PROGRAMS, CSIDL_COMMON_PROGRAMS }, NULL, L"Programs", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+      SFU_FIX | SFU_UNRET | SFU_RESTORE, SFU_FIX | SFU_UNRET },
+    { { CSIDL_APPDATA, 0 }, QUICKLAUNCH, L"AppData", L"AppData\\Roaming",
+      SFU_FIX | SFU_UNRET | SFU_RESTORE, SFU_FIX | SFU_UNRET },
+    { { CSIDL_APPDATA, 0 }, L"\\DynaRunFix", NULL, NULL, SFU_RESTORE, 0 },              // desktop_link(): the shortcut it creates when there is none
+};
+
+// The folder of row id (common: the all users' one) in out (MAX_PATH characters); FALSE when the shell has none, or when check is set and the path is
+// too long for what goes below it (the uninstall's point-back and the restore path check have always checked; the other callers have not).
+static BOOL sf_path(int id, BOOL common, WCHAR *out, BOOL check)
+{
+    const shortcut_folder *f = &SF[id]; int csidl = f->csidl[common ? 1 : 0];
+    if (!csidl || !SHGetSpecialFolderPathW(NULL, out, csidl, FALSE)) return FALSE;
+    if (f->sub) { if (check && lstrlenW(out) + 50 >= MAX_PATH) return FALSE; lstrcatW(out, f->sub); }
+    return TRUE;
+}
+
+// fn(folder, row, common, deep, ctx) is called for each folder that the use (one SFU_*) lists, in the scope (SF_USER, SF_COMMON, SF_BOTH): a row's
+// user folder before its all users' one. fn returns FALSE to stop; then this returns TRUE.
+typedef BOOL (*sf_fn)(const WCHAR *dir, int id, BOOL common, BOOL deep, void *ctx);
+static BOOL shortcut_folders(unsigned use, int scope, sf_fn fn, void *ctx)
+{
+    WCHAR d[MAX_PATH]; int i, id, c;
+    for (i = 0; i < SF_COUNT; i++) {
+        id = use == SFU_ICON && i < 2 ? 1 - i : i;              // the icon is looked for in the Start menu before the Desktop
+        if (!(SF[id].uses & use)) continue;
+        for (c = 0; c < 2; c++)
+            if ((scope & (1 << c)) && sf_path(id, c, d, use == SFU_UNRET || use == SFU_RESTORE) && !fn(d, id, c, (SF[id].deep & use) != 0, ctx)) return TRUE;
+    }
+    return FALSE;
+}
+
+// DynaRun's own icon. DynaRun V3.exe holds only the chart icon of its windows; the blue Dyna Run logo is in the icon
+// file Dyna Pro's MSI gives its shortcuts. Windows shows a running DynaRun with the icon of the shortcut that carries
+// its AppUserModelID, so every shortcut of ours gets that logo, taken from a DynaRun shortcut that does not use the exe.
+// The walks below (dir_walk) skip names that start with '.' and paths longer than their buffer; all but the fix do not follow links.
+typedef struct { WCHAR p[MAX_PATH], ic[MAX_PATH], x[MAX_PATH]; BOOL recurse, found; } icon_walk;
+static BOOL find_icon(const WCHAR *dir, BOOL recurse);
+static BOOL icon_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
+{
+    icon_walk *w = vc; IShellLinkW *sl; int idx;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return TRUE;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (w->recurse) w->found = find_icon(p, TRUE); return !w->found; }
+    if (!is_lnk(p) || classify(p) == LNK_OTHER || !(sl = load_link(p))) return TRUE;
+    w->ic[0] = 0; idx = 0;
+    IShellLinkW_GetIconLocation(sl, w->ic, MAX_PATH, &idx);
+    IShellLinkW_Release(sl);
+    if (w->ic[0] && lstrcmpiW(w->ic, g_exe) && ExpandEnvironmentStringsW(w->ic, w->x, MAX_PATH) && exists(w->x)) {
+        lstrcpyW(g_icon, w->ic); g_iconidx = idx; w->found = TRUE;
+    }
+    return !w->found;
+}
+
 static BOOL find_icon(const WCHAR *dir, BOOL recurse)
 {
-    WCHAR *p = alloc(3 * MAX_PATH * sizeof(WCHAR)), *ic, *x; WIN32_FIND_DATAW fd; HANDLE f; IShellLinkW *sl; int idx; BOOL r = FALSE;
-    if (!p) return FALSE;
-    ic = p + MAX_PATH; x = ic + MAX_PATH;
-    // p has room for MAX_PATH characters only (ic and x follow it): longer paths are skipped
-    f = lstrlenW(dir) + 3 > MAX_PATH ? INVALID_HANDLE_VALUE : FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
-    if (f != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-            if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 > MAX_PATH) continue;
-            if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 > 2 * MAX_PATH) continue;     // a path too long for the buffer
-            cat3(p, dir, L"\\", fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) r = find_icon(p, TRUE); continue; }
-            if (lstrlenW(p) < 4 || lstrcmpiW(p + lstrlenW(p) - 4, L".lnk") || classify(p) == LNK_OTHER || !(sl = load_link(p))) continue;
-            ic[0] = 0; idx = 0;
-            IShellLinkW_GetIconLocation(sl, ic, MAX_PATH, &idx);
-            IShellLinkW_Release(sl);
-            if (ic[0] && lstrcmpiW(ic, g_exe) && ExpandEnvironmentStringsW(ic, x, MAX_PATH) && exists(x)) {
-                lstrcpyW(g_icon, ic); g_iconidx = idx; r = TRUE;
-            }
-        } while (!r && FindNextFileW(f, &fd));
-        FindClose(f);
-    }
-    release(p);
+    icon_walk *w = alloc(sizeof(*w)); BOOL r;
+    if (!w) return FALSE;
+    w->recurse = recurse;
+    dir_walk(dir, w->p, MAX_PATH, MAX_PATH + 1, icon_entry, w);      // paths of at most MAX_PATH characters (dir_walk's limit is "shorter than")
+    r = w->found;
+    release(w);
     return r;
 }
 
+static BOOL icon_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *ctx) { return !find_icon(dir, deep); }
+
 static void dynarun_icon(void)
 {
-    static const int dirs[] = { CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU, CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY };
-    WCHAR d[MAX_PATH]; int i;
     if (g_icontried) return;
     g_icontried = TRUE;
-    for (i = 0; i < 4; i++)
-        if (SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_icon(d, i < 2)) return;
+    shortcut_folders(SFU_ICON, SF_BOTH, icon_folder, NULL);
 }
 
 static BOOL save_link(const WCHAR *p, const WCHAR *target, const WCHAR *icon, int idx, WORD hotkey, int show, BOOL runas)
@@ -910,76 +968,83 @@ static void retarget(const WCHAR *p, HKEY backup)
     release(orig);
 }
 
+typedef struct { WCHAR p[2 * MAX_PATH]; HKEY backup; BOOL recurse; int found; } scan_walk;
+static int scan(const WCHAR *dir, BOOL recurse, HKEY backup);
+static BOOL scan_lnk(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)      // (this walk follows links; the others do not)
+{
+    scan_walk *w = vc; int c;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (w->recurse) w->found += scan(p, TRUE, w->backup); return TRUE; }
+    if (!is_lnk(p)) return TRUE;
+    if ((c = classify(p)) == LNK_DYNARUN) retarget(p, w->backup);
+    // ours from an older version (before v1.3.0 they had no AppUserModelID): written again with the ID, else the
+    // running DynaRun (ID set by dynafix.dll) matches no shortcut and Windows shows its window icon, not DynaRun's
+    else if (c == LNK_OURS) relink(p, g_launcher);
+    if (c != LNK_OTHER) w->found++;
+    return TRUE;
+}
+
 static int scan(const WCHAR *dir, BOOL recurse, HKEY backup)   // returns number of DynaRun shortcuts
 {
-    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; int found = 0, c; WCHAR *ext;
-    if (!p) return 0;
-    f = lstrlenW(dir) + 3 > 2 * MAX_PATH ? INVALID_HANDLE_VALUE : FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
-    if (f != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == '.') continue;
-            if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 > 2 * MAX_PATH) continue;     // a path too long for the buffer
-            cat3(p, dir, L"\\", fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) found += scan(p, TRUE, backup); continue; }
-            ext = p + lstrlenW(p) - 4;
-            if (ext < p || lstrcmpiW(ext, L".lnk")) continue;
-            if ((c = classify(p)) == LNK_DYNARUN) retarget(p, backup);
-            // ours from an older version (before v1.3.0 they had no AppUserModelID): written again with the ID, else the
-            // running DynaRun (ID set by dynafix.dll) matches no shortcut and Windows shows its window icon, not DynaRun's
-            else if (c == LNK_OURS) relink(p, g_launcher);
-            if (c != LNK_OTHER) found++;
-        } while (FindNextFileW(f, &fd));
-        FindClose(f);
-    }
-    release(p);
+    scan_walk *w = alloc(sizeof(*w)); int found;
+    if (!w) return 0;
+    w->backup = backup; w->recurse = recurse;
+    dir_walk(dir, w->p, 2 * MAX_PATH, 2 * MAX_PATH + 1, scan_lnk, w);
+    found = w->found;
+    release(w);
     return found;
+}
+
+typedef struct { WCHAR p[2 * MAX_PATH]; WCHAR *out; BOOL recurse, found; } ours_walk;
+static BOOL find_ours(const WCHAR *dir, BOOL recurse, WCHAR *out);
+static BOOL ours_lnk(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
+{
+    ours_walk *w = vc;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return TRUE;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (w->recurse) w->found = find_ours(p, TRUE, w->out); return !w->found; }
+    if (is_lnk(p) && classify(p) == LNK_OURS) { lstrcpyW(w->out, p); w->found = TRUE; }
+    return !w->found;
 }
 
 static BOOL find_ours(const WCHAR *dir, BOOL recurse, WCHAR *out)    // the first shortcut of ours below dir
 {
-    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; WCHAR *ext; BOOL r = FALSE;
-    if (!p) return FALSE;
-    f = lstrlenW(dir) + 3 > 2 * MAX_PATH ? INVALID_HANDLE_VALUE : FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
-    if (f != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-            if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 > 2 * MAX_PATH) continue;     // a path too long for the buffer
-            cat3(p, dir, L"\\", fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) r = find_ours(p, TRUE, out); continue; }
-            ext = p + lstrlenW(p) - 4;
-            if (ext >= p && !lstrcmpiW(ext, L".lnk") && classify(p) == LNK_OURS) { lstrcpyW(out, p); r = TRUE; }
-        } while (!r && FindNextFileW(f, &fd));
-        FindClose(f);
-    }
-    release(p);
+    ours_walk *w = alloc(sizeof(*w)); BOOL r;
+    if (!w) return FALSE;
+    w->out = out; w->recurse = recurse;
+    dir_walk(dir, w->p, 2 * MAX_PATH, 2 * MAX_PATH + 1, ours_lnk, w);
+    r = w->found;
+    release(w);
     return r;
 }
 
-static int fix_shortcuts(BOOL common, HKEY backup)
+// The first shortcut of ours where a user sees it: the Desktop, then the Start menu (the user's folder before the all users' one).
+static BOOL ours_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *out) { return !find_ours(dir, deep, out); }
+static BOOL find_our_shortcut(WCHAR *out) { return shortcut_folders(SFU_FIND, SF_BOTH, ours_folder, out); }
+
+typedef struct { HKEY backup; int desk; } fix_ctx;
+static BOOL fix_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *vc)
 {
-    // the Start menu root (not just Programs): some DynaRun installs put their shortcut there
-    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_PROGRAMS, CSIDL_APPDATA },
-                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_STARTMENU, CSIDL_COMMON_PROGRAMS };
-    WCHAR d[MAX_PATH]; int i, desk = 0, n = common ? 3 : 4, csidl;
+    fix_ctx *c = vc; int n = scan(dir, deep, c->backup);
+    if (id == SF_DESKTOP) c->desk = n;
+    return TRUE;
+}
+
+static int fix_shortcuts(BOOL common, HKEY backup)     // returns the number of DynaRun shortcuts on the Desktop
+{
+    fix_ctx c;
     HMODULE msi = load_system_dll(L"msi.dll");
     if (msi) {
         pMsiGetShortcutTarget = (MsiGetShortcutTargetW_t)GetProcAddress(msi, "MsiGetShortcutTargetW");
         pMsiGetComponentPath = (MsiGetComponentPathW_t)GetProcAddress(msi, "MsiGetComponentPathW");
         if (!pMsiGetComponentPath) pMsiGetShortcutTarget = NULL;
     }
-    for (i = 0; i < n; i++) {
-        csidl = common ? all[i] : user[i];
-        if (!SHGetSpecialFolderPathW(NULL, d, csidl, FALSE)) continue;
-        if (csidl == CSIDL_APPDATA) lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");  // incl. pinned taskbar items
-        if (i == 0) desk = scan(d, FALSE, backup);
-        else scan(d, csidl != CSIDL_STARTMENU && csidl != CSIDL_COMMON_STARTMENU, backup);  // Programs is scanned on its own
-    }
-    return desk;
+    c.backup = backup; c.desk = 0;
+    shortcut_folders(SFU_FIX, common ? SF_COMMON : SF_USER, fix_folder, &c);
+    return c.desk;
 }
 
 // restore_shortcuts writes files at paths that come from the registry. A path is used only when it is a .lnk file below one of the
-// shell folders the backups were made from (user: Desktop, Start menu, Programs, Quick Launch, %APPDATA%\DynaRunFix; all users: the
-// common ones), with no ".." component and no link (junction) as its folder. When this process is elevated and the backups are in
+// shortcut folders the backups were made from (SF[]: the rows that list SFU_RESTORE; user's or all users', as the backup is), with no ".."
+// component and no link (junction) as its folder. When this process is elevated and the backups are in
 // HKCU, which a program of the same user can write, the file must also be below the user's profile folder.
 static BOOL under_dir(const WCHAR *path, const WCHAR *dir)
 {
@@ -1014,12 +1079,22 @@ static void long_form(WCHAR *d)
     if (n && n < MAX_PATH) lstrcpyW(d, t);
 }
 
+typedef struct { WCHAR dirs[10][MAX_PATH]; const WCHAR *list[10]; int n; } restore_dirs;
+static BOOL restore_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *vc)
+{
+    restore_dirs *r = vc;
+    lstrcpyW(r->dirs[r->n], dir); r->list[r->n] = r->dirs[r->n]; r->n++;
+    if (id != SF_OWN) {                          // (the folder of desktop_link() is listed as the shell reports it)
+        lstrcpyW(r->dirs[r->n], dir); long_form(r->dirs[r->n]);      // the backup may hold the long form of a folder that the shell reports in 8.3 form
+        r->list[r->n] = r->dirs[r->n]; r->n++;
+    }
+    return TRUE;
+}
+
 static BOOL lnk_path_ok(const WCHAR *name, BOOL common)
 {
-    static const int user[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_PROGRAMS, CSIDL_APPDATA },
-                     all[] = { CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_COMMON_STARTMENU, CSIDL_COMMON_PROGRAMS };
-    static WCHAR dirs[10][MAX_PATH]; const WCHAR *list[10];
-    WCHAR d[MAX_PATH], *e, par[MAX_PATH], lname[MAX_PATH]; int i, len = lstrlenW(name), n = common ? 3 : 4, nd = 0; DWORD a;
+    static restore_dirs rd;
+    WCHAR d[MAX_PATH], *e, par[MAX_PATH], lname[MAX_PATH]; int len = lstrlenW(name); DWORD a;
     if (len < 8 || len >= MAX_PATH) return FALSE;
     if (!common && is_admin()) {                                  // elevated: the user's own registry is not trusted beyond their profile
         if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_PROFILE, FALSE)) return FALSE;
@@ -1028,22 +1103,13 @@ static BOOL lnk_path_ok(const WCHAR *name, BOOL common)
             if (!under_dir(lname, d)) return FALSE;
         }
     }
-    for (i = 0; i < n; i++) {
-        if (!SHGetSpecialFolderPathW(NULL, d, common ? all[i] : user[i], FALSE)) continue;
-        if ((common ? all[i] : user[i]) == CSIDL_APPDATA) {
-            if (lstrlenW(d) + 50 >= MAX_PATH) continue;
-            lstrcpyW(dirs[nd], d); lstrcatW(dirs[nd], L"\\DynaRunFix"); list[nd] = dirs[nd]; nd++;          // desktop_link()
-            lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");
-        }
-        lstrcpyW(dirs[nd], d); list[nd] = dirs[nd]; nd++;
-        long_form(d);                                              // the backup may hold the long form of a folder that the shell reports in 8.3 form
-        lstrcpyW(dirs[nd], d); list[nd] = dirs[nd]; nd++;
-    }
+    rd.n = 0;
+    shortcut_folders(SFU_RESTORE, common ? SF_COMMON : SF_USER, restore_folder, &rd);
     lstrcpyW(par, name); for (e = par + len; e > par && *e != '\\'; e--); *e = 0;
-    if (!lnk_name_in_dirs(name, list, nd)) {
+    if (!lnk_name_in_dirs(name, rd.list, rd.n)) {
         lstrcpyW(lname, par); long_form(lname);                    // the same, with the folder of the file in long form
         if (!path_join(lname, MAX_PATH, lname, e + 1)) return FALSE;
-        if (!lnk_name_in_dirs(lname, list, nd)) return FALSE;
+        if (!lnk_name_in_dirs(lname, rd.list, rd.n)) return FALSE;
     }
     a = GetFileAttributesW(par);
     if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT)) return FALSE;
@@ -1074,37 +1140,34 @@ static void restore_shortcuts(HKEY root, const WCHAR *key)
 // the launcher (which is about to be deleted) are pointed back at DynaRun V3.exe instead. Only files that
 // are our shortcuts are rewritten, so a folder read from another user's registry can do no harm; reparse
 // points (junctions) are not followed.
+typedef struct { WCHAR p[2 * MAX_PATH]; BOOL recurse; } unret_walk;
+static void unretarget(const WCHAR *dir, BOOL recurse);
+static BOOL unret_lnk(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
+{
+    unret_walk *w = vc;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return TRUE;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (w->recurse) unretarget(p, TRUE); return TRUE; }
+    if (is_lnk(p) && g_exe[0] && classify(p) == LNK_OURS) relink(p, g_exe);
+    return TRUE;
+}
+
 static void unretarget(const WCHAR *dir, BOOL recurse)
 {
-    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f; WCHAR *ext;
-    if (!p) return;
-    f = lstrlenW(dir) + 3 > 2 * MAX_PATH ? INVALID_HANDLE_VALUE : FindFirstFileW(cat3(p, dir, L"\\*", NULL), &fd);
-    if (f != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-            if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 > 2 * MAX_PATH) continue;     // a path too long for the buffer
-            cat3(p, dir, L"\\", fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) unretarget(p, TRUE); continue; }
-            ext = p + lstrlenW(p) - 4;
-            if (ext >= p && !lstrcmpiW(ext, L".lnk") && g_exe[0] && classify(p) == LNK_OURS) relink(p, g_exe);
-        } while (FindNextFileW(f, &fd));
-        FindClose(f);
-    }
-    release(p);
+    unret_walk *w = alloc(sizeof(*w));
+    if (!w) return;
+    w->recurse = recurse;
+    dir_walk(dir, w->p, 2 * MAX_PATH, 2 * MAX_PATH + 1, unret_lnk, w);
+    release(w);
 }
 
 // What is left of our shortcuts in the shell folders after the backups were put back (a backup that is missing, as when an older version did
-// not record one, or was refused): they point to DynaRun V3.exe again instead of the launcher that is being removed.
+// not record one, or was refused): they point to DynaRun V3.exe again instead of the launcher that is being removed. The folders include the
+// pins the user made of the launcher (Quick Launch).
+static BOOL unret_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *ctx) { unretarget(dir, deep); return TRUE; }
 static void unretarget_shell(BOOL common)
 {
-    WCHAR d[MAX_PATH];
     if (!g_exe[0]) return;
-    if (SHGetSpecialFolderPathW(NULL, d, common ? CSIDL_COMMON_DESKTOPDIRECTORY : CSIDL_DESKTOPDIRECTORY, FALSE)) unretarget(d, FALSE);
-    if (SHGetSpecialFolderPathW(NULL, d, common ? CSIDL_COMMON_STARTMENU : CSIDL_STARTMENU, FALSE)) unretarget(d, FALSE);
-    if (SHGetSpecialFolderPathW(NULL, d, common ? CSIDL_COMMON_PROGRAMS : CSIDL_PROGRAMS, FALSE)) unretarget(d, TRUE);
-    if (!common && SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE) && lstrlenW(d) + 50 < MAX_PATH) {      // pins the user made of the launcher
-        lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch"); unretarget(d, TRUE);
-    }
+    shortcut_folders(SFU_UNRET, common ? SF_COMMON : SF_USER, unret_folder, NULL);
 }
 
 /* ---------- taskbar pin and sign-in start ---------- */
@@ -1175,8 +1238,8 @@ static void taskbar_policy(const install_opts *o, const WCHAR *sid, HKEY app)
 static BOOL pinned_ours(void)       // a shortcut to the launcher among the taskbar's pinned items (Windows 7+)
 {
     static WCHAR d[MAX_PATH], f[MAX_PATH];
-    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
-    lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar");
+    if (!sf_path(SF_QUICKLAUNCH, FALSE, d, FALSE)) return FALSE;
+    lstrcatW(d, L"\\User Pinned\\TaskBar");
     return find_ours(d, FALSE, f);
 }
 
@@ -1234,8 +1297,7 @@ static BOOL pin_taskbar(const WCHAR *lnk, int *res)
     static WCHAR d[MAX_PATH], v[MAX_PATH], sub[64]; DWORD ma, mi, b; HKEY k;
     os_ver(&ma, &mi, &b);
     if (ma == 5 || (ma == 6 && !mi)) {                  // XP, Vista: the Quick Launch toolbar
-        if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
-        lstrcatW(d, L"\\Microsoft\\Internet Explorer\\Quick Launch");
+        if (!sf_path(SF_QUICKLAUNCH, FALSE, d, FALSE)) return FALSE;
         CreateDirectoryW(d, NULL);
         if (!save_link(lstrcatW(d, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
         if (!RegOpenKeyExW(HKEY_CURRENT_USER, cat3(sub, USERKEY, L"\\Shortcuts", NULL), 0, KEY_SET_VALUE, &k)) {
@@ -1255,12 +1317,10 @@ static BOOL pin_taskbar(const WCHAR *lnk, int *res)
 
 static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to pin: desktop, Start menu, else a new one
 {
-    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
-    WCHAR d[MAX_PATH]; int i;
-    for (i = 0; i < 4; i++)
-        if (SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, out)) return TRUE;
-    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_APPDATA, FALSE)) return FALSE;
-    lstrcatW(d, L"\\DynaRunFix"); CreateDirectoryW(d, NULL);
+    WCHAR d[MAX_PATH];
+    if (find_our_shortcut(out)) return TRUE;
+    if (!sf_path(SF_OWN, FALSE, d, FALSE)) return FALSE;
+    CreateDirectoryW(d, NULL);
     if (!save_link(cat3(out, d, L"\\DynaRun V3.lnk", NULL), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
     RegSetValueExW(backup, out, 0, REG_BINARY, (const BYTE *)"", 0);
     return TRUE;
@@ -1325,11 +1385,8 @@ static void launch_normal(const WCHAR *file, const WCHAR *dir)
 // running the launcher directly. Falls back to the launcher with DynaRun's folder as working directory.
 void start_dynarun(void)
 {
-    static const int dirs[] = { CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_STARTMENU, CSIDL_COMMON_STARTMENU };
-    static WCHAR lnk[MAX_PATH], dir[MAX_PATH], d[MAX_PATH];
-    int i; WCHAR *q; BOOL have = FALSE;
-    for (i = 0; i < 4 && !have; i++)
-        have = SHGetSpecialFolderPathW(NULL, d, dirs[i], FALSE) && find_ours(d, i >= 2, lnk);
+    static WCHAR lnk[MAX_PATH], dir[MAX_PATH];
+    WCHAR *q; BOOL have = find_our_shortcut(lnk);
     if (!have && exists(cat3(lnk, g_dir, L"\\DynaRun V3.lnk", NULL))) have = TRUE;
     if (have) { launch_normal(lnk, NULL); return; }
     lstrcpyW(dir, g_exe); q = dir + lstrlenW(dir); while (q > dir && *q != '\\') q--; *q = 0;
@@ -1384,7 +1441,7 @@ static void unload_leftover_hives(void)
 static void unretarget_user(const WCHAR *sid, const WCHAR *profile)
 {
     static int seq;
-    static WCHAR p[FOLDER_CCH], sub[300], tmphive[80]; HKEY hive = NULL; BOOL loaded = FALSE;
+    static WCHAR p[FOLDER_CCH], sub[300], tmphive[80]; HKEY hive = NULL; BOOL loaded = FALSE; int id;
     wsprintfW(tmphive, HIVE_PREFIX L"-%lu-%lu-%d", GetCurrentProcessId(), GetTickCount(), seq++);     // unique: never a name another load uses
     if (lstrlenW(profile) + 12 >= MAX_PATH) return;                                  // (the caller checked; NTUSER.DAT must fit)
     if (RegOpenKeyExW(HKEY_USERS, sid, 0, KEY_READ | KEY_WRITE, &hive)) {          // not signed in: load their hive
@@ -1393,11 +1450,13 @@ static void unretarget_user(const WCHAR *sid, const WCHAR *profile)
             !RegOpenKeyExW(HKEY_USERS, tmphive, 0, KEY_READ | KEY_WRITE, &hive)) loaded = TRUE;
         else hive = NULL;
     }
-    user_folder(hive, profile, L"Desktop", L"Desktop", p, FOLDER_CCH - 64);                          if (p[0]) unretarget(p, FALSE);
-    user_folder(hive, profile, L"Start Menu", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu", p, FOLDER_CCH - 64); if (p[0]) unretarget(p, FALSE);
-    user_folder(hive, profile, L"Programs", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs", p, FOLDER_CCH - 64); if (p[0]) unretarget(p, TRUE);
-    user_folder(hive, profile, L"AppData", L"AppData\\Roaming", p, FOLDER_CCH - 64);
-    if (p[0]) { lstrcatW(p, L"\\Microsoft\\Internet Explorer\\Quick Launch");                       unretarget(p, TRUE); }
+    for (id = 0; id < SF_COUNT; id++) {                                               // the same folders as unretarget_shell, of their account
+        if (!(SF[id].uses & SFU_UNRET)) continue;
+        user_folder(hive, profile, SF[id].reg, SF[id].rel, p, FOLDER_CCH - 64);
+        if (!p[0]) continue;
+        if (SF[id].sub) lstrcatW(p, SF[id].sub);
+        unretarget(p, (SF[id].deep & SFU_UNRET) != 0);
+    }
     if (hive) {
         drop_run(hive, TRUE); drop_policy(hive);                                    // start at sign-in, Windows 11 pin
         // their backups are of no use any more
@@ -1798,9 +1857,9 @@ static void user_stage(const install_opts *o, install_result *res)
     RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk"); RegDeleteValueW(b, L"UpdateSkip");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
         int desk = fix_shortcuts(FALSE, s);
-        if (!desk && SHGetSpecialFolderPathW(NULL, p, CSIDL_COMMON_DESKTOPDIRECTORY, FALSE))
+        if (!desk && sf_path(SF_DESKTOP, TRUE, p, FALSE))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-        if (!desk && !o->keep && SHGetSpecialFolderPathW(NULL, p, CSIDL_DESKTOPDIRECTORY, FALSE) &&
+        if (!desk && !o->keep && sf_path(SF_DESKTOP, FALSE, p, FALSE) &&
             save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
         if (o->pin && !o->keep) {
