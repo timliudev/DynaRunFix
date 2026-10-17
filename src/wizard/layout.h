@@ -34,7 +34,6 @@ static void progress(BOOL marquee)
     SendMessageW(p, PBM_SETMARQUEE, marquee, 40);
     SendMessageW(p, PBM_SETRANGE32, 0, 1000);
     SendMessageW(p, PBM_SETPOS, 0, 0);
-    g_out.lastpct = -1;
     vis(ID_PROG, TRUE);
 }
 

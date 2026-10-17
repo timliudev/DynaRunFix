@@ -116,7 +116,7 @@ typedef struct {
 // What a job's worker produces: written only by the worker, read by the UI only after the join in job_done, which merges it into wz (JOBS[].merge).
 // start_job starts it as a copy of the matching fields of wz, so a field the job does not write keeps its value.
 typedef struct {
-    int lastpct;                                            // on_progress: the last percentage posted (also reset by the UI's progress())
+    int lastpct;                                            // on_progress: the last percentage posted (the worker's own: nobody else reads or resets it)
     DWORD neterr;
     WCHAR pkg[MAX_PATH]; BOOL pkg_found, pkg_ours;          // JOB_ACQUIRE for the DynaRun setup
     WCHAR drvzip[MAX_PATH]; int drv_how; WCHAR drv_hex[65]; ULONGLONG drv_size; WCHAR drv_rep[1500]; int drv_bl;   // JOB_ACQUIRE for the driver

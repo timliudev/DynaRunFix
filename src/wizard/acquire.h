@@ -112,8 +112,8 @@ static void enter_license(void)
     if (wz.note[0]) status(wz.note, TRUE);
 }
 
-// The progress callback of the worker (the downloads, the extraction, the driver check). It only posts; the percentage it compares with is g_out.lastpct
-// (set to -1 by start_job, and again by the UI's progress()).
+// The progress callback of the worker (the downloads, the extraction, the driver check). It only posts; the percentage it compares with is the worker's own
+// (g_out.lastpct, set to -1 by start_job): the UI never touches it.
 static void on_progress(DWORD done, DWORD total)
 {
     int pct = total ? MulDiv(done, 1000, total) : 0;
