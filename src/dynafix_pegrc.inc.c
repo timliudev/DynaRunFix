@@ -181,7 +181,8 @@ static VOID NTAPI peg_ldr_note(ULONG reason, const ldrnote_t *d, PVOID ctx)
         for (j = 0; g_pegmods[k][j]; j++) w[j] = (WCHAR)g_pegmods[k][j];
         w[j] = 0;
         if (!lstrcmpiW(n, w)) {
-            // under the loader lock: never wait; when peg_check is patching (on any thread) it is left to peg_check, no log here
+            // under the loader lock: the busy flag is never waited for - when peg_check is patching (on any thread) it is left to peg_check, no log here.
+            // The branch that wins the flag does wait, but only a bounded time: logf takes the log mutex (at most 2 s) and patch_base reads and patches memory.
             if (InterlockedCompareExchange(&g_pegbusy, 1, 0)) { InterlockedExchange(&g_pegdefer, 1); continue; }
             logf("PEGRC32D: loader notification for %s %u %u\r\n", (DWORD)(UINT_PTR)g_pegmods[k], 0, 0);
             patch_base((BYTE *)d->DllBase, g_pegmods[k], "peg-note", g_peg_hooks);
