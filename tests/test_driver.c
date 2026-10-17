@@ -762,19 +762,36 @@ static void test_check(void)
 /* ---------- a regression guard on the wizard's job table ---------- */
 
 // Once a comment after the call in `case JOB_DRV_PREP: rc = driver_prep(...);  // ... break;` swallowed the break, and the install ran right after
-// the prep (no restart in between). Every `case JOB_...:` of job_proc in src\wizard.c must have a break outside of comments before the next one.
+// the prep (no restart in between). Every `case JOB_...:` of job_proc in the wizard's source must have a break outside of comments before the next one.
+// The wizard is src\wizard.c with its flow fragments src\wizard\*.h (one translation unit): the checks read them as one text, in the order they are included.
+static void *read_wizard(DWORD *n)
+{
+    static const WCHAR *const parts[] = { L"src\\wizard.c", L"src\\wizard\\layout.h", L"src\\wizard\\acquire.h", L"src\\wizard\\driver.h", L"src\\wizard\\main.h" };
+    void *piece[5]; DWORD len[5], total = 0; char *all, *d; int i;
+    for (i = 0; i < 5; i++) {
+        piece[i] = read_file(parts[i], &len[i]);
+        if (!piece[i]) { while (i-- > 0) release(piece[i]); return NULL; }
+        total += len[i] + 1;
+    }
+    all = (char *)alloc(total + 1);
+    for (i = 0, d = all; all && i < 5; i++) { CopyMemory(d, piece[i], len[i]); d += len[i]; *d++ = '\n'; }
+    for (i = 0; i < 5; i++) release(piece[i]);
+    *n = all ? total : 0;
+    return all;
+}
+
 static void test_job_table(void)
 {
-    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = read_file(L"src\\wizard.c", &n); int jobs = 0, rows = 0;
-    if (!f) { wprintf(L"info: src\\wizard.c not found from this folder: the job table is not checked\n"); return; }
+    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = (BYTE *)read_wizard(&n); int jobs = 0, rows = 0;
+    if (!f) { wprintf(L"info: src\\wizard.c and src\\wizard\\*.h not found from this folder: the job table is not checked\n"); return; }
     t = (char *)f;
     // every job has a row in JOBS[] with a proc (jp_*) and an on_done (jd_*); a job without a row would call a NULL pointer
     a = strstr(t, "enum { JOB_ACQUIRE"); end = a ? strchr(a, '}') : NULL;
-    CHECK(a && end, L"the JOB_* enum is in src\\wizard.c");
+    CHECK(a && end, L"the JOB_* enum is in the wizard source");
     for (c = a; c && end && c < end; c++) if (!strncmp(c, "JOB_", 4) && strncmp(c, "JOB_COUNT", 9)) { jobs++; while (c < end && *c != ',' && *c != ' ') c++; }
     CHECK(jobs >= 7, L"all seven jobs were looked at");
     a = strstr(t, "static const job_desc JOBS["); end = a ? strstr(a, "};") : NULL;
-    CHECK(a && end, L"the job table JOBS[] is in src\\wizard.c");
+    CHECK(a && end, L"the job table JOBS[] is in the wizard source");
     for (c = a ? strstr(a, "= {") : NULL, c = c ? strstr(c, "[JOB_") : NULL; c && c < end; c = next) {
         char *row_end; BOOL has_proc, has_done;
         next = strstr(c + 5, "[JOB_"); if (next && next >= end) next = NULL;
@@ -804,7 +821,7 @@ static void test_job_table(void)
     // g_opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
     // records that (g_close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
     a = strstr(t, "static void job_done"); end = a ? strstr(a, "JOBS[job].on_done") : NULL;
-    CHECK(a && end, L"job_done is in src\\wizard.c and hands the result to the job's on_done");
+    CHECK(a && end, L"job_done is in the wizard source and hands the result to the job's on_done");
     for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_opts.close = FALSE", 20)) break;
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
     for (c = t, jobs = 0; (c = strstr(c, "g_opts.close = TRUE")) != NULL; c += 19) jobs++;
