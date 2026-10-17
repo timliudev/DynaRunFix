@@ -16,6 +16,9 @@
 //   DynaRunFix-Setup.exe /driver              the Dyna Pro USB driver step on its own (driver.c; the wizard's last page)
 //   DynaRunFix-Setup.exe /driver-cancel       undo the driver step's preparation (task, start-up menu option, BitLocker)
 //   /driver-prep, /driver-install, /driver-continue   the driver step's own stages (elevated, or started by its scheduled task)
+//   /machine ... /with-driver <zip> [/unverified <sha256>]   (also /full) the elevated stage prepares the driver (driver.c, prep) right after the
+//                                             fix, in the same process: one UAC prompt for the fix and the driver; the exit code is the fix's if it
+//                                             failed, else the driver's (0, DRV_E_*, DRV_W_BDE)
 //
 // Install, in two stages so that per-user changes land in the right profile even when an
 // administrator's credentials are typed into the UAC prompt:
@@ -2126,47 +2129,64 @@ BOOL fix_current(void)
     return exists(g_launcher) && exists(cat3(d, g_dir, L"\\dynafix.dll", NULL));
 }
 
-int install_fix(void)
+// The wizard's one elevated stage may do the driver's preparation too (zip != NULL; see driver_prep_stage): the fix and the driver then share ONE UAC prompt.
+// The result: the fix's failure code, or, when the fix is installed (user stage done), 0 or the driver's code (DRV_E_*, DRV_W_BDE: >= DRV_E_HASH).
+#define FIX_DONE(rc) ((rc) == 0 || (rc) >= DRV_E_HASH)
+
+static void add_driver_args(WCHAR *args, const WCHAR *zip, const WCHAR *accept)   // the command line of the elevated stage
 {
-    static WCHAR sid[200], args[600]; int rc;
+    if (!zip) return;
+    lstrcatW(args, L" /with-driver \""); lstrcatW(args, zip); lstrcatW(args, L"\"");
+    if (accept && accept[0]) { lstrcatW(args, L" /unverified "); lstrcatW(args, accept); }
+}
+
+int install_fix_driver(const WCHAR *zip, const WCHAR *accept)
+{
+    static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
     if (!user_sid(sid, 200)) return 1;
     if (running_early(L"install (before elevation)")) return RC_RUNNING;   // before the UAC prompt; /quiet without /close ends here
     CoInitialize(NULL);
-    if (is_admin()) rc = machine_install(sid);
+    if (is_admin()) { rc = machine_install(sid); if (!rc && zip) rc = driver_prep_stage(sid, zip, accept); }
     else {
         wsprintfW(args, L"/machine %s \"%s\"", sid, g_exe);
+        add_driver_args(args, zip, accept);
         if ((rc = run_elevated(args, NULL)) == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
     }
-    if (rc) return rc;
+    if (!FIX_DONE(rc)) return rc;
     user_stage();
-    return 0;
+    return rc;
 }
 
-int install_all(const WCHAR *msi)
+int install_fix(void) { return install_fix_driver(NULL, NULL); }
+
+int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept)
 {
-    static WCHAR sid[200], args[MAX_PATH + 300]; int rc;
+    static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
     if (!user_sid(sid, 200)) return 1;
     if (running_early(L"full install (before elevation)")) return RC_RUNNING;
     CoInitialize(NULL);
     pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
-    if (is_admin()) rc = machine_full(sid, msi);
+    if (is_admin()) { rc = machine_full(sid, msi); if (!rc && zip) rc = driver_prep_stage(sid, zip, accept); }
     else {
         wsprintfW(args, L"/full %s \"%s\"", sid, msi);
+        add_driver_args(args, zip, accept);
         rc = run_elevated(args, NULL);
     }
-    if (rc == 3) {                      // over-the-shoulder elevation: setup as this user, then the fix
+    if (rc == 3) {                      // over-the-shoulder elevation: setup as this user, then the fix (and the driver)
         rc = run_msiexec(msi);
         if (rc == ERROR_INSTALL_USEREXIT) return 2;
         if (rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED) return 4;
         if (!locate_dynarun()) return 5;
-        return install_fix();
+        return install_fix_driver(zip, accept);
     }
     if (rc == 2) return 2;
-    if (rc) return rc;
+    if (!FIX_DONE(rc)) return rc;
     locate_dynarun();
     user_stage();
-    return 0;
+    return rc;
 }
+
+int install_all(const WCHAR *msi) { return install_all_driver(msi, NULL, NULL); }
 
 // The uninstall question's Yes / No buttons become "Fix only" / "Remove all".
 static HHOOK g_cbt;
@@ -2298,7 +2318,7 @@ void WinMainCRTStartup(void)
 {
     typedef BOOL (WINAPI *SetDefaultDllDirectories_t)(DWORD);
     SetDefaultDllDirectories_t sdd = (SetDefaultDllDirectories_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetDefaultDllDirectories");
-    int argc, i, rc; BOOL pin = FALSE; WCHAR **argv;
+    int argc, i, rc; BOOL pin = FALSE; WCHAR **argv; const WCHAR *dzip = NULL, *daccept = NULL;
     if (sdd) sdd(0x800);                    // LOAD_LIBRARY_SEARCH_SYSTEM32: no DLL is searched for in the exe's folder or the current folder
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
@@ -2310,15 +2330,19 @@ void WinMainCRTStartup(void)
         else if (!lstrcmpiW(argv[i], L"/noautostart")) g_autostart = FALSE;
         else if (!lstrcmpiW(argv[i], L"/pin")) pin = TRUE;
         else if (!lstrcmpiW(argv[i], L"/keep")) g_keep = TRUE;
+        else if (i >= 4 && !lstrcmpiW(argv[i], L"/with-driver") && i + 1 < argc) dzip = argv[++i];                                 // after the SID and the path: see install_fix_driver
+        else if (i >= 4 && !lstrcmpiW(argv[i], L"/unverified") && i + 1 < argc) { if (lstrlenW(argv[i + 1]) == 64) daccept = argv[i + 1]; i++; }
     }
     if (argc >= 2 && (!lstrcmpiW(argv[1], L"/machine") || !lstrcmpiW(argv[1], L"/full"))) g_pin = pin;   // the elevated stage: as asked
     if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
         lstrcpynW(g_exe, argv[3], MAX_PATH);
         CoInitialize(NULL);
         rc = machine_install(argv[2]);
+        if (!rc && dzip) rc = driver_prep_stage(argv[2], dzip, daccept);
     } else if (argc >= 4 && !lstrcmpiW(argv[1], L"/full")) {
         CoInitialize(NULL);
         rc = machine_full(argv[2], argv[3]);
+        if (!rc && dzip) rc = driver_prep_stage(argv[2], dzip, daccept);
     } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/unmachine")) {
         reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
         CoInitialize(NULL);

@@ -1256,6 +1256,14 @@ int driver_prep(const WCHAR *zip, const WCHAR *accept)
     return run_elevated(args, NULL);
 }
 
+// Called by the elevated install stage (setup.c, /machine /full ... /with-driver): the driver's preparation in the same process as the fix, so that
+// one UAC prompt serves both. sid: the user the stage was started for.
+int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
+{
+    if (!is_admin()) return 1;
+    return prep_locked(sid, zip, accept);
+}
+
 int driver_bitlocker(void)
 {
     WCHAR dr[4]; int ps; bde_info bi;
