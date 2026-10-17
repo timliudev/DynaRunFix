@@ -4,11 +4,22 @@
 #include <wininet.h>
 #include "errors.h"                         // RC_*, PK_*, PKC_*, DRV_E_* / DRV_W_*, FIX_DONE: the result codes
 
-extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
-extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
-extern BOOL g_autostart_later;                          // the driver follows: the sign-in start is registered once the driver steps are over (autostart_flush)
-extern BOOL g_keep;                                     // /keep: leave the pin, the sign-in start and the desktop shortcut as they are
-extern int g_pinresult;                                 // after the install: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
+extern BOOL g_zh;
+// What the user asked for. Built from the command line (setup.c) or by the wizard's pages (wizard.c) and handed down explicitly: the install, the
+// uninstall and run_elevated read nothing else. Only quiet, close, pin and keep reach the elevated stage (run_elevated forwards them as switches).
+typedef struct {
+    BOOL quiet;                             // /quiet: no message boxes
+    BOOL close;                             // close a running DynaRun before installing (/close, or the wizard's consent for one install job)
+    BOOL pin;                               // pin DynaRun to the taskbar (default on; /notaskbar)
+    BOOL autostart;                         // start it at sign-in (default on; /noautostart)
+    BOOL autostart_later;                   // the driver follows: the sign-in start is registered once the driver steps are over (autostart_flush)
+    BOOL keep;                              // /keep: leave the pin, the sign-in start and the desktop shortcut as they are
+} install_opts;
+void install_opts_default(install_opts *o);     // pin and autostart on, the rest off
+// What the install reports besides its exit code (written by the user stage, read by the wizard).
+typedef struct {
+    int pin;                                // PIN_*: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
+} install_result;
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
@@ -28,12 +39,12 @@ BOOL user_sid(WCHAR *out, int cch);
 BOOL fix_current(void);                      // the fix is installed and is the version of this setup (uninstall entry, launcher and dll there)
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
-int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. RC_OK, RC_CANCEL
-int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL
+int install_fix(const install_opts *o, install_result *res);                      // DynaRun is installed: elevated stage + user shortcuts. RC_OK, RC_CANCEL
+int install_all(const install_opts *o, install_result *res, const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL
 // The same, and the driver's preparation (driver_prep) in the SAME elevated stage: one UAC prompt for both. zip/accept as for driver_prep.
 // RC_OK; RC_CANCEL; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
-int install_fix_driver(const WCHAR *zip, const WCHAR *accept);
-int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept);
+int install_fix_driver(const install_opts *o, install_result *res, const WCHAR *zip, const WCHAR *accept);
+int install_all_driver(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *zip, const WCHAR *accept);
 // shared helpers (setup.c): used by setup.c, package.c, driver.c
 // out = "dir\name", when the result is short enough for a buffer of `limit` characters (it must be at least 2 characters shorter than limit: the old
 // `lstrlenW(dir) + lstrlenW(name) + 2 >= limit` test); FALSE and out untouched otherwise. out may be dir itself (not name).
@@ -58,7 +69,7 @@ BOOL app_key_create(BOOL machine, HKEY *k);
 // shared with driver.c
 void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth);   // a link is removed itself, never followed; in-use files go at the next restart
 BOOL same_file(const WCHAR *a, const WCHAR *b);
-int run_elevated(const WCHAR *args, const WCHAR *exe_path);   // "<exe or this program> <args>" with one UAC prompt; its exit code, RC_CANCEL = cancelled
+int run_elevated(const WCHAR *args, const WCHAR *exe_path, const install_opts *o);   // "<exe or this program> <args>[ /quiet][ /close][ /pin][ /keep]" (from *o) with one UAC prompt; its exit code, RC_CANCEL = cancelled
 BOOL valid_user_sid(const WCHAR *sid);      // a SID of a real account with a profile here
 BOOL path_user_writable(const WCHAR *path, const WCHAR *sid);   // could ordinary users (or the user sid) change what is at path (or is that unknown)
 BOOL enable_privilege(const WCHAR *name);
@@ -74,7 +85,7 @@ int update_run(const WCHAR *args);          // /update <launcher args>: asks, in
 void autostart_flush(void);                 // registers the sign-in start that user_stage deferred (HKCU AutostartPending); no-op otherwise
 
 /* wizard.c */
-int wizard(void);
+int wizard(const install_opts *init);       // init: the options the command line gave (the pages change them)
 
 
 /* package.c */
@@ -168,14 +179,14 @@ int driver_check(WCHAR *path, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep,
 const WCHAR *driver_pinned_sha256(void);    // the SHA-256 of the zip this program knows
 void driver_forget(const WCHAR *zip);       // deletes the zip when it is our own cache file in %TEMP%\DynaRunFix (a refused download), never a file of the user's
 BOOL driver_partial(DWORD *have);           // a partial driver download that driver_fetch can continue; *have: bytes so far
-int driver_prep(const WCHAR *zip, const WCHAR *accept);         // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
+int driver_prep(const install_opts *o, const WCHAR *zip, const WCHAR *accept);         // elevated: stage the driver, arm the restart menu and the task (zip "-": the staged copy); 0 or DRV_E_*, 2 = UAC cancelled
 int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept);   // elevated, inside the install stage (setup.c): driver_prep for sid, no further elevation
 int driver_bitlocker(void);                // BitLocker protection of the system drive, not elevated: 1 on, 0 off / none, -1 cannot be told (needs administrator rights)
-int driver_install(void);                   // elevated: pnputil, then clean up. 0 or DRV_E_*, 2 = UAC cancelled
-int driver_cancel(void);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
+int driver_install(const install_opts *o);                   // elevated: pnputil, then clean up. 0 or DRV_E_*, 2 = UAC cancelled
+int driver_cancel(const install_opts *o);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
 BOOL driver_reboot(void);                   // restarts Windows (not elevated)
 int driver_ci_state(void);                  // DRV_CI_*
-int driver_verb(int argc, WCHAR **argv);    // command line verbs; DRV_NOVERB when argv[1] is none of ours, else the exit code
+int driver_verb(int argc, WCHAR **argv, const install_opts *o);    // command line verbs; DRV_NOVERB when argv[1] is none of ours, else the exit code
 void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: the Start menu shortcut "Install Dyna Pro USB driver"
 int drv_file_count(void);                   // the files that get installed (pinned: name below "Dyna Pro USB\", size, SHA-256)
 int drv_file_find(const WCHAR *rel);        // index of that name (any case, / or \), or -1

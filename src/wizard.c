@@ -32,7 +32,10 @@ enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_PREP,
 
 static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
-static BOOL g_close_asked;                              // g_close was set by the "Close DynaRun and install" button: it covers that one install job only (job_done takes it back)
+static install_opts g_opts;                             // what the pages ask for (starts as the command line gave it); only the UI thread changes it
+static install_opts g_jobopts;                          // the copy a job runs with (start_job): the worker never reads g_opts while the pages may change it
+static install_result g_result;                         // what the install job reports besides its code (the pin hint); written by the worker, read once the job is done
+static BOOL g_close_asked;                              // g_opts.close was set by the "Close DynaRun and install" button: it covers that one install job only (job_done takes it back)
 static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_pkg_found, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static int g_nfound;   // packages pkg_find_local has handed us so far
 static HANDLE g_thread;
@@ -339,12 +342,12 @@ static void cat_to(WCHAR *d, int cap, const WCHAR *s)
     if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
 }
 
-// What is said about the taskbar pin (g_pinresult, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
+// What is said about the taskbar pin (g_result.pin, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
 // the install (g_fix_done: the page "Done" is skipped), on the restart page.
 static void pin_hint(WCHAR *b)
 {
-    if (g_pinresult == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-    if (g_pinresult == PIN_FAILED) lstrcatW(b, os_build() >= 22000
+    if (g_result.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (g_result.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
         ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
             L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
         : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
@@ -511,7 +514,7 @@ static void set_page(int p)
                       L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
                       L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
         pin_hint(b);
-        if (g_autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
+        if (g_opts.autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
         lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
         text(ID_BODY, b);
         buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
@@ -737,15 +740,15 @@ static DWORD WINAPI job_proc(LPVOID unused)
         }
         break;
     case JOB_EXTRACT:  rc = pkg_extract_checked(&g_zip, g_pw, g_msi, 400UL * 1024UL * 1024UL, on_progress, &g_cancel); SecureZeroMemory(g_pw, sizeof(g_pw)); break;   // a size cap, and a free target (shared with the driver)   // the password is not needed any more
-    case JOB_INSTALL_ALL: rc = g_pre ? install_all_driver(g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(g_msi); break;   // g_pre: the driver's preparation in the same elevated stage
-    case JOB_INSTALL_FIX: rc = g_pre ? install_fix_driver(g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(); break;
+    case JOB_INSTALL_ALL: rc = g_pre ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); break;   // g_pre: the driver's preparation in the same elevated stage
+    case JOB_INSTALL_FIX: rc = g_pre ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); break;
     case JOB_DRV_PREP:
         // "install anyway" accepts exactly this zip (its SHA-256), nothing else. (No comment after the call on the line of a break: it once swallowed the
         // break, and the install followed the prep at once, without the restart.)
-        rc = driver_prep(g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
+        rc = driver_prep(&g_jobopts, g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
         break;
-    case JOB_DRV_INSTALL: rc = driver_install(); break;
-    case JOB_DRV_CANCEL: rc = driver_cancel(); break;
+    case JOB_DRV_INSTALL: rc = driver_install(&g_jobopts); break;
+    case JOB_DRV_CANCEL: rc = driver_cancel(&g_jobopts); break;
     }
     PostMessageW(g_hwnd, WM_JOBDONE, g_job, rc);
     (void)unused;
@@ -769,6 +772,7 @@ static void start_job(int job, int page)
     g_job = job; g_cancel = 0; g_busy = TRUE;
     if (job == JOB_ACQUIRE && g_dlacq != g_acq) { g_dlacq = g_acq; g_dltotal = g_dlhave = 0; }   // a resume of the same download keeps what is known
     set_page(page);
+    g_jobopts = g_opts;                              // the job runs with the options as they are now
     g_thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
     if (job == JOB_INSTALL_ALL || job == JOB_INSTALL_FIX || job >= JOB_DRV_PREP) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
 }
@@ -806,7 +810,7 @@ static void go_install(int job)
 static void skip_driver(void)
 {
     user_log(L"driver: skipped, the fix is installed without it");
-    g_drv = FALSE; g_autostart_later = FALSE; g_pre = FALSE;
+    g_drv = FALSE; g_opts.autostart_later = FALSE; g_pre = FALSE;
     install(g_inst_job);
 }
 
@@ -1019,7 +1023,7 @@ static void drv_start(void)
     }
     g_drv_have = driver_installed();
     if (g_drvmode == DRV_MODE_CONTINUE) {
-        if (g_drv_have) { if (is_admin()) driver_cancel(); set_page(P_DRV_DONE); }       // installed meanwhile: the waiting task goes
+        if (g_drv_have) { if (is_admin()) driver_cancel(&g_opts); set_page(P_DRV_DONE); }       // installed meanwhile: the waiting task goes
         else set_page(driver_ci_state() == DRV_CI_ENFORCED ? P_DRV_RETRY : P_DRV_WARN);
     } else set_page(g_drv_have ? P_DRV_DONE : P_DRV_INTRO);
 }
@@ -1187,7 +1191,7 @@ static void choose_driver_source(void)
 static void job_done(int job, int rc)
 {
     WaitForSingleObject(g_thread, INFINITE); CloseHandle(g_thread); g_thread = NULL; g_busy = FALSE;
-    if (g_close_asked) { g_close = FALSE; g_close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
+    if (g_close_asked) { g_opts.close = FALSE; g_close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
     if (g_closing) { DestroyWindow(g_hwnd); return; }
     switch (job) {
     case JOB_ACQUIRE: acq_done(rc); break;
@@ -1258,11 +1262,11 @@ static void on_primary(void)
 {
     switch (g_page) {
     case P_HELLO:
-        g_pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        g_autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        if (g_driver_only) { g_drv = TRUE; g_autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
+        g_opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (g_driver_only) { g_drv = TRUE; g_opts.autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
         g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        g_autostart_later = g_drv;                   // the driver restart comes first: the sign-in start is registered after it
+        g_opts.autostart_later = g_drv;              // the driver restart comes first: the sign-in start is registered after it
         if (g_installed) go_install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
         break;
     case P_FAIL: acq_start(g_acq); break;                                             // Retry / Continue download
@@ -1277,7 +1281,7 @@ static void on_primary(void)
     case P_CHECK: set_page(P_LICENSE); break;
     case P_LICENSE: go_install(JOB_INSTALL_ALL); break;
     case P_RUNNING:
-        if (!g_close) { g_close = TRUE; g_close_asked = TRUE; }   // the elevated stage closes DynaRun (see close_programs in setup.c), for this job only
+        if (!g_opts.close) { g_opts.close = TRUE; g_close_asked = TRUE; }   // the elevated stage closes DynaRun (see close_programs in setup.c), for this job only
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
@@ -1312,7 +1316,7 @@ static void on_close(void)
     if (g_page == P_INSTALL || g_page == P_DRV_PREP || g_page == P_DRV_INSTALL) return;   // msiexec / registry / system tool work must not be interrupted
     if (g_busy) { g_closing = TRUE; InterlockedExchange(&g_cancel, 1); return; }
     // after the restart: closing the window ends the installation like "Cancel" (done at once when this runs elevated, as the task does)
-    if (g_drvmode == DRV_MODE_CONTINUE && (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) && is_admin()) driver_cancel();
+    if (g_drvmode == DRV_MODE_CONTINUE && (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) && is_admin()) driver_cancel(&g_opts);
     if (g_page == P_DRV_BDE) { start_job(JOB_DRV_CANCEL, P_DRV_PREP); return; }       // the task, the menu flag and the suspension were armed: take them back first
     DestroyWindow(g_hwnd);
 }
@@ -1336,10 +1340,10 @@ static void on_third(void)
 {
     if (g_page == P_FAIL) { if (g_acq == &ACQ_DRIVER) choose_driver_source(); else choose_file(); }
     else if (g_page == P_HELLO && g_hint) {                       // "Download new version": the same acquire flow, then the normal install (the MSI upgrades DynaRun)
-        g_pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        g_autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_drv = !g_driver_only && g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        g_autostart_later = g_drv;
+        g_opts.autostart_later = g_drv;
         user_log(L"DynaRun update hint: the user chose to download the new version");
         g_acq_fresh = TRUE;                                       // an older package found on this computer would not be the new version
         acq_start(&ACQ_SETUP);
@@ -1379,8 +1383,8 @@ static void create_controls(void)
     SendMessageW(H(ID_DRV), BM_SETCHECK, BST_CHECKED, 0);
     SetWindowTextW(H(ID_PIN), T(L"Pin DynaRun to the &taskbar", L"釘選到工作列(&T)"));
     SetWindowTextW(H(ID_AUTO), T(L"Start DynaRun when Windows &starts", L"開機時自動啟動 DynaRun(&S)"));
-    SendMessageW(H(ID_PIN), BM_SETCHECK, g_pin ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(H(ID_AUTO), BM_SETCHECK, g_autostart ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(H(ID_PIN), BM_SETCHECK, g_opts.pin ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(H(ID_AUTO), BM_SETCHECK, g_opts.autostart ? BST_CHECKED : BST_UNCHECKED, 0);
     SetWindowTextW(H(ID_CHECK), T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
     add(PROGRESS_CLASSW, 0, ID_PROG);
     add(L"STATIC", SS_NOPREFIX, ID_STATUS);
@@ -1657,10 +1661,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcW(h, m, w, l);
 }
 
-int wizard(void)
+int wizard(const install_opts *init)
 {
     INITCOMMONCONTROLSEX icc; WNDCLASSW wc; NONCLIENTMETRICSW nm; RECT r; MSG msg; HDC dc; LOGFONTW lf;
     static WCHAR title[100];
+    g_opts = *init;                                  // the command line's options; the pages change this copy
     icc.dwSize = sizeof(icc); icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
     dc = GetDC(NULL); g_dpi = GetDeviceCaps(dc, LOGPIXELSY); ReleaseDC(NULL, dc);

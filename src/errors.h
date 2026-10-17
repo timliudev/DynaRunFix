@@ -50,5 +50,5 @@ enum {
 /* ---- 5. Smaller answers ---- */
 enum { RM_NONE = -1 };                              // remove_dynarun(): DynaRun V3 is not installed (else the msiexec exit code)
 enum { BL_UNKNOWN = -1, BL_OFF = 0, BL_ON = 1 };    // driver_bitlocker(): BitLocker protection of the system drive (not elevated: cannot be told)
-enum { PIN_NOT_ASKED = 0, PIN_DONE = 1, PIN_NEXT_SIGNIN = 2, PIN_FAILED = 3 };   // g_pinresult: after the install, 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
+enum { PIN_NOT_ASKED = 0, PIN_DONE = 1, PIN_NEXT_SIGNIN = 2, PIN_FAILED = 3 };   // install_result.pin: after the install, 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
 enum { HINT_NONE = 0, HINT_NEWER = 1, HINT_ZIPDIFF = 2 };   // pkg_update_hint: nothing to say, the site names a newer version, the site's zip differs from the last download

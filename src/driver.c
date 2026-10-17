@@ -1238,14 +1238,14 @@ static int install_locked(void)
 
 /* ---------- from the wizard (not elevated): run the elevated parts ---------- */
 
-int driver_prep(const WCHAR *zip, const WCHAR *accept)
+int driver_prep(const install_opts *o, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 300];
     if (!user_sid(sid, 200)) return RC_FAIL;
     if (is_admin()) return prep_locked(sid, zip, accept);
     if (accept && accept[0]) wsprintfW(args, L"/driver-prep %s \"%s\" /unverified %s", sid, zip, accept);
     else wsprintfW(args, L"/driver-prep %s \"%s\"", sid, zip);
-    return run_elevated(args, NULL);
+    return run_elevated(args, NULL, o);
 }
 
 // Called by the elevated install stage (setup.c, /machine /full ... /with-driver): the driver's preparation in the same process as the fix, so that
@@ -1266,17 +1266,17 @@ int driver_bitlocker(void)
     return drv_bde_suspend(ps, bi.conv, bi.nprot) ? BL_ON : BL_OFF;                   // the same rule as prep's, so the hint on the restart page agrees with what will happen
 }
 
-int driver_install(void)
+int driver_install(const install_opts *o)
 {
     if (is_admin()) return install_locked();
-    return run_elevated(L"/driver-install", NULL);
+    return run_elevated(L"/driver-install", NULL, o);
 }
 
-int driver_cancel(void)
+int driver_cancel(const install_opts *o)
 {
     static WCHAR base[MAX_PATH];
     if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return RC_OK; }
-    return run_elevated(L"/driver-cancel", NULL);
+    return run_elevated(L"/driver-cancel", NULL, o);
 }
 
 /* ---------- Start menu shortcut, uninstall ---------- */
@@ -1326,14 +1326,14 @@ static const WCHAR *prep_accept_arg(int argc, WCHAR **argv)
     return argc >= 6 && !lstrcmpiW(argv[4], L"/unverified") && lstrlenW(argv[5]) == 64 ? argv[5] : NULL;
 }
 
-int driver_verb(int argc, WCHAR **argv)
+int driver_verb(int argc, WCHAR **argv, const install_opts *o)
 {
     const WCHAR *v = argv[1];
-    if (!lstrcmpiW(v, L"/driver")) { g_drvmode = DRV_MODE_STANDALONE; return wizard(); }
-    if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(); }
+    if (!lstrcmpiW(v, L"/driver")) { g_drvmode = DRV_MODE_STANDALONE; return wizard(o); }
+    if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(o); }
     if (lstrcmpiW(v, L"/driver-prep") && lstrcmpiW(v, L"/driver-install") && lstrcmpiW(v, L"/driver-cancel")) return DRV_NOVERB;
     if (!is_admin()) return RC_FAIL;                                           // the elevated parts: only with the rights they need
     if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], prep_accept_arg(argc, argv)) : RC_FAIL;
     if (!lstrcmpiW(v, L"/driver-install")) return install_locked();
-    return driver_cancel();
+    return driver_cancel(o);
 }

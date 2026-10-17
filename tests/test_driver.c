@@ -14,7 +14,7 @@
 #include <stdio.h>
 
 // what setup.c calls elsewhere and the tests do not need
-int wizard(void) { return 0; }
+int wizard(const install_opts *init) { (void)init; return 0; }
 int update_check(void) { return 0; }
 int update_offer(void) { return 0; }
 int update_run(const WCHAR *a) { (void)a; return 0; }
@@ -776,14 +776,14 @@ static void test_job_table(void)
         if (!(next && next < end)) break;
     }
     CHECK(labels >= 7, L"all seven jobs were looked at");
-    // g_close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
+    // g_opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
     // records that (g_close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
     a = strstr(t, "static void job_done"); end = a ? strstr(a, "switch (job)") : NULL;
     CHECK(a && end, L"job_done is in src\\wizard.c");
-    for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_close = FALSE", 15)) break;
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_opts.close = FALSE", 20)) break;
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
-    for (c = t, labels = 0; (c = strstr(c, "g_close = TRUE")) != NULL; c += 14) labels++;
-    CHECK(labels == 1 && strstr(t, "g_close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_close only together with g_close_asked");
+    for (c = t, labels = 0; (c = strstr(c, "g_opts.close = TRUE")) != NULL; c += 19) labels++;
+    CHECK(labels == 1 && strstr(t, "g_opts.close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_opts.close only together with g_close_asked");
     release(f);
 }
 
@@ -896,6 +896,7 @@ static void test_real_zip(void)
 // value and drops one that is not 64 characters long: there a bad value is consumed, here it simply is not at argv[4].
 // The verb itself: /driver and /driver-continue open the wizard (not run here); /driver-prep, /driver-install and /driver-cancel need an
 // administrator (return 1 otherwise) and /driver-prep needs argc >= 4 (return 1 otherwise); anything else is DRV_NOVERB.
+static int driver_verb_o(int argc, WCHAR **argv) { install_opts o; install_opts_default(&o); return driver_verb(argc, argv, &o); }
 static void test_cmdline(void)
 {
     WCHAR h64[80], h63[80], h65[80];
@@ -934,24 +935,24 @@ static void test_cmdline(void)
     CHECK(prep_accept_arg(4, a9) == NULL, L"accept: nothing after the zip: NULL");
 
     // the verb dispatch; only what is safe to run in any account
-    CHECK(driver_verb(2, n1) == DRV_NOVERB, L"verb: unknown verb is DRV_NOVERB");
-    CHECK(driver_verb(4, n2) == DRV_NOVERB, L"verb: /machine is not a driver verb");
-    CHECK(driver_verb(2, n3) == DRV_NOVERB, L"verb: exact match only (/driver-prepx)");
-    CHECK(driver_verb(2, n4) == DRV_NOVERB, L"verb: no slash, no verb");
-    CHECK(driver_verb(2, n5) == DRV_NOVERB, L"verb: /uninstall is setup.c's");
-    CHECK(driver_verb(2, p1) == 1, L"verb: /driver-prep without arguments returns 1 (not admin: 1 as well)");
-    CHECK(driver_verb(3, p2) == 1, L"verb: /DRIVER-PREP <sid> without a zip returns 1 (case-insensitive verb)");
+    CHECK(driver_verb_o(2, n1) == DRV_NOVERB, L"verb: unknown verb is DRV_NOVERB");
+    CHECK(driver_verb_o(4, n2) == DRV_NOVERB, L"verb: /machine is not a driver verb");
+    CHECK(driver_verb_o(2, n3) == DRV_NOVERB, L"verb: exact match only (/driver-prepx)");
+    CHECK(driver_verb_o(2, n4) == DRV_NOVERB, L"verb: no slash, no verb");
+    CHECK(driver_verb_o(2, n5) == DRV_NOVERB, L"verb: /uninstall is setup.c's");
+    CHECK(driver_verb_o(2, p1) == 1, L"verb: /driver-prep without arguments returns 1 (not admin: 1 as well)");
+    CHECK(driver_verb_o(3, p2) == 1, L"verb: /DRIVER-PREP <sid> without a zip returns 1 (case-insensitive verb)");
     if (!is_admin()) {
         // elevated verbs refuse a normal process before doing anything
-        CHECK(driver_verb(2, i1) == 1, L"verb: /driver-install not elevated returns 1");
-        CHECK(driver_verb(2, c1) == 1, L"verb: /driver-cancel not elevated returns 1");
-        CHECK(driver_verb(6, a1) == 1, L"verb: /driver-prep with arguments, not elevated, returns 1");
+        CHECK(driver_verb_o(2, i1) == 1, L"verb: /driver-install not elevated returns 1");
+        CHECK(driver_verb_o(2, c1) == 1, L"verb: /driver-cancel not elevated returns 1");
+        CHECK(driver_verb_o(6, a1) == 1, L"verb: /driver-prep with arguments, not elevated, returns 1");
     } else wprintf(L"  (info: running elevated - /driver-install, /driver-cancel and /driver-prep with arguments are not called)\n");
 }
 
 int wmain(void)
 {
-    g_quiet = TRUE; g_zh = FALSE;
+    g_zh = FALSE;
     setvbuf(stdout, NULL, _IONBF, 0);
     GetTempPathW(MAX_PATH, g_base);
     { WCHAR lp[MAX_PATH]; DWORD n = GetLongPathNameW(g_base, lp, MAX_PATH); if (n && n < MAX_PATH) lstrcpyW(g_base, lp); }
