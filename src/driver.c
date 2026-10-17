@@ -1109,40 +1109,41 @@ static void cancel_locked(void)
 static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR base[MAX_PATH], p[MAX_PATH + 40], z[MAX_PATH + 40], args[2 * MAX_PATH + 80], hex[65], xml[3000], dr[4];
-    ULONGLONG size; volatile LONG nocancel = 0; int n, files, ps; BOOL bde_warn = FALSE, suspend, partly; bde_info bi;
+    ULONGLONG size; volatile LONG nocancel = 0; int n, files, ps, res = DRV_SUCCESS; BOOL bde_warn = FALSE, suspend, partly; bde_info bi;
     BOOL stage = lstrcmpW(zip, L"-") != 0, inside, fromdir = FALSE;
-    if (!valid_user_sid(sid)) return DRV_E_SID;
+    BOOL drop_staged = FALSE, undo = FALSE, resume = FALSE;                    // what the one exit has to do: remove base\driver, cancel_locked, bde_resume
+    if (!valid_user_sid(sid)) { res = DRV_E_SID; goto out; }
     if (stage) { DWORD fa = GetFileAttributesW(zip); fromdir = fa != INVALID_FILE_ATTRIBUTES && (fa & FILE_ATTRIBUTE_DIRECTORY) && !(fa & FILE_ATTRIBUTE_REPARSE_POINT); }
     base_dir(base);
-    if (lstrlenW(base) + 40 >= MAX_PATH) return DRV_E_DIR;
+    if (lstrlenW(base) + 40 >= MAX_PATH) { res = DRV_E_DIR; goto out; }
     lstrcpyW(p, base); lstrcatW(p, L"\\" SETUP_NAME);
     inside = !lstrcmpiW(g_self, p);
     if (stage) {
         static drv_check chk;
-        if (!make_base(base, inside, sid)) return DRV_E_DIR;
+        if (!make_base(base, inside, sid)) { res = DRV_E_DIR; goto out; }
         log_in_base(base, sid);
         drv_log(L"prep: staging");
         lstrcpyW(args, base); lstrcatW(args, L"\\driver");
         if (fromdir) {                                                         // an already unpacked folder: the pinned files are copied from it
             drv_log(L"prep: staging from an unpacked folder:"); drv_log(zip);
-            if (!CreateDirectoryW(args, NULL)) return DRV_E_EXTRACT;           // make_base left the folder empty: this one is new
+            if (!CreateDirectoryW(args, NULL)) { res = DRV_E_EXTRACT; goto out; }   // make_base left the folder empty: this one is new
             n = stage_from_dir(zip, args, &files);
         } else {
             lstrcpyW(z, base); lstrcatW(z, L"\\driver.zip");
-            if (!CopyFileW(zip, z, TRUE)) return DRV_E_COPY;                  // our own copy, in the administrators-only folder: what is read is this copy
-            if (!pkg_sha256(z, hex, &size)) { DeleteFileW(z); return DRV_E_HASH; }
+            if (!CopyFileW(zip, z, TRUE)) { res = DRV_E_COPY; goto out; }          // our own copy, in the administrators-only folder: what is read is this copy
+            if (!pkg_sha256(z, hex, &size)) { DeleteFileW(z); res = DRV_E_HASH; goto out; }
             drv_log2(L"prep: sha256 of the zip", hex, 0);
-            if (!CreateDirectoryW(args, NULL)) { DeleteFileW(z); return DRV_E_EXTRACT; }     // make_base left the folder empty: this one is new
+            if (!CreateDirectoryW(args, NULL)) { DeleteFileW(z); res = DRV_E_EXTRACT; goto out; }     // make_base left the folder empty: this one is new
             n = stage_files(z, args, &nocancel, &files);                       // only the pinned files, into folders made here; files: how many are missing
             DeleteFileW(z);
         }
         drv_log2(L"prep: pinned files missing in the source", NULL, files);
-        if (n != PK_OK || files) { delete_tree(args, NULL, 0); return DRV_E_EXTRACT; }
+        if (n != PK_OK || files) { drop_staged = TRUE; res = DRV_E_EXTRACT; goto out; }
         // what is hashed now are the staged copies, and those are what pnputil installs: there is no second extraction between the check and the install
         check_files(args, NULL, &chk);
         if (fromdir) {                                                         // no zip hash: the digest of the staged files' hashes is what "install anyway" is bound to
             lstrcpyW(z, base); lstrcatW(z, L"\\digest.tmp");
-            if (!digest_of(&chk, z, hex)) { delete_tree(args, NULL, 0); return DRV_E_HASH; }
+            if (!digest_of(&chk, z, hex)) { drop_staged = TRUE; res = DRV_E_HASH; goto out; }
         }
         drv_log2(L"prep: staged files that are the pinned ones", NULL, chk.ok);
         if (chk.ok == DRV_NFILES) {
@@ -1154,16 +1155,15 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
             WCHAR rep[1500];
             drv_log(L"prep: the staged files are not the pinned ones and were not accepted:");
             check_report(&chk, rep, 1500); drv_log(rep);
-            delete_tree(args, NULL, 0);
-            return DRV_E_HASH;
+            drop_staged = TRUE; res = DRV_E_HASH; goto out;
         }
-        if (!staged_ok(base)) return DRV_E_INF;
+        if (!staged_ok(base)) { res = DRV_E_INF; goto out; }
     } else {                                                                   // a retry: the staged driver must still be ours
-        if (!exists(base) || path_user_writable(base, sid)) return DRV_E_DIR;
+        if (!exists(base) || path_user_writable(base, sid)) { res = DRV_E_DIR; goto out; }
         log_in_base(base, sid);
-        if (!staged_ok(base)) return DRV_E_INF;
+        if (!staged_ok(base)) { res = DRV_E_INF; goto out; }
     }
-    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) return DRV_E_COPY;     // the task starts this copy
+    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) { res = DRV_E_COPY; goto out; }     // the task starts this copy
     // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
     // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry suspends again and starts the count over.
     // "Not encrypted" is not an error.
@@ -1206,16 +1206,21 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
         // Everything else is armed; the wizard lets the user decide (DRV_W_BDE). "Not readable / no BitLocker" with a failing manage-bde is no warning.
         if ((ps == BDE_PS_ON || ps == BDE_PS_UNKNOWN) && (rc != 0 || after == BDE_PS_ON || after == BDE_PS_UNKNOWN)) bde_warn = TRUE;
     }
-    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { bde_resume(); return DRV_E_BCD; }
+    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { resume = TRUE; res = DRV_E_BCD; goto out; }
     n = drv_task_xml(xml, 3000, sid, p);
     lstrcpyW(z, base); lstrcatW(z, L"\\task.xml");
-    if (n < 0 || !write_utf16_file(z, xml, n)) { cancel_locked(); return DRV_E_TASK; }
+    if (n < 0 || !write_utf16_file(z, xml, n)) { undo = TRUE; res = DRV_E_TASK; goto out; }
     lstrcpyW(args, L"/create /tn " TASK_NAME L" /xml \""); lstrcatW(args, z); lstrcatW(args, L"\" /f");
     n = (int)run_tool(L"schtasks.exe", args);
     DeleteFileW(z);
-    if (n != 0) { cancel_locked(); return DRV_E_TASK; }
+    if (n != 0) { undo = TRUE; res = DRV_E_TASK; goto out; }
     drv_log(bde_warn ? L"prep: done, but BitLocker could not be suspended" : L"prep: done");
-    return bde_warn ? DRV_W_BDE : DRV_SUCCESS;
+    res = bde_warn ? DRV_W_BDE : DRV_SUCCESS;
+out:
+    if (drop_staged) { lstrcpyW(args, base); lstrcatW(args, L"\\driver"); delete_tree(args, NULL, 0); }
+    if (undo) cancel_locked();
+    if (resume) bde_resume();
+    return res;
 }
 
 static int install_locked(void)
