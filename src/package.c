@@ -9,7 +9,10 @@
 #include <msi.h>
 #include <msiquery.h>
 #include <netlistmgr.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_util.h"
+#include "drf_package.h"
+#include "drf_package_internal.h"
 #include "version.h"
 #include "miniz.h"     // inflate only (third_party/miniz, built with the MINIZ_NO_* options in build.cmd)
 

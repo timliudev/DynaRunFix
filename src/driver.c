@@ -30,7 +30,12 @@
 #include <sddl.h>
 #include <aclapi.h>
 #include <wbemidl.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_util.h"
+#include "drf_package.h"
+#include "drf_driver.h"
+#include "drf_driver_internal.h"
+#include "drf_wizard.h"
 
 // SHA-256 of "Dyna Pro USB.zip" as served by Dyna Pro on 2026-10-15 (2335114 bytes; Last-Modified 2026-05-09). A different file is never installed.
 #define DRIVER_ZIP_SHA256 L"c3ae487018956767d65a08e3d5cd8434da42cdce81988753515ee0f72c49e943"

@@ -52,7 +52,12 @@
 #include <aclapi.h>
 #include <tlhelp32.h>
 #include <delayimp.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_util.h"
+#include "drf_package.h"
+#include "drf_driver.h"
+#include "drf_update.h"
+#include "drf_wizard.h"
 #include "version.h"
 
 // The rest of this file is split by topic into src\setup\*.h. They are fragments of THIS translation unit (static functions and file-local

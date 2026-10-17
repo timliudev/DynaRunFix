@@ -20,6 +20,7 @@ static BOOL WINAPI test_ShellExecuteExW(SHELLEXECUTEINFOW *se)
 }
 #define ShellExecuteExW test_ShellExecuteExW
 #include "../src/setup.c"
+#include "../src/drf_package_internal.h"
 static trust_ctx g_tc;      // the user SID and the exe trust of the checks below (a stage of the installer makes its own)
 #include "promote_com.h"
 #include <stdio.h>

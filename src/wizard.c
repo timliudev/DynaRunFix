@@ -15,7 +15,9 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <commdlg.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_package.h"
+#include "drf_driver.h"
 #include "version.h"
 
 #define WIDEN2(x) L##x
