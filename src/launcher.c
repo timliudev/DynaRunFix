@@ -2,7 +2,7 @@
 // Usage: DynaRunFix.exe ["path\to\DynaRun V3.exe"]
 #include <windows.h>
 #include <tlhelp32.h>
-#include <sddl.h>
+#include "applog.h"
 #include "version.h"
 
 #define DEFAULT_EXE "C:\\Program Files (x86)\\Dyna Pro Dynamometers\\DynaRun V3.exe"
@@ -95,27 +95,7 @@ static ULONGLONG tick64(void)
     return ((ULONGLONG)hi << 32) | t;
 }
 
-// Security attributes for the objects shared with dynafix.dll (the log mutex, the ready event): full access for the current
-// user, SYSTEM and Administrators only (no NULL DACL: every other user and any low-integrity process could otherwise open them).
-// Free *psd with LocalFree. FALSE: no explicit DACL could be built, the caller then takes the default one.
-static BOOL make_sa(SECURITY_ATTRIBUTES *sa, PSECURITY_DESCRIPTOR *psd)
-{
-    HANDLE tk; DWORD buf[64], n = 0; char *sid = NULL, sddl[200]; BOOL ok = FALSE;
-    *psd = NULL;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tk)) return FALSE;
-    if (GetTokenInformation(tk, TokenUser, buf, sizeof(buf), &n) && ConvertSidToStringSidA(((TOKEN_USER *)buf)->User.Sid, &sid)) {
-        if (lstrlenA(sid) < 120) {
-            wsprintfA(sddl, "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;%s)", sid);
-            ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl, SDDL_REVISION_1, psd, NULL);
-        }
-        LocalFree(sid);
-    }
-    CloseHandle(tk);
-    if (ok) { sa->nLength = sizeof(*sa); sa->lpSecurityDescriptor = *psd; sa->bInheritHandle = FALSE; }
-    return ok;
-}
-
-// Local\dynafix_ready_<pid>: the dll signals it when it is in place in DynaRun (explicit DACL, see make_sa)
+// Local\dynafix_ready_<pid>: the dll signals it when it is in place in DynaRun (explicit DACL, see make_sa in applog.h)
 static HANDLE ready_event(DWORD pid)
 {
     char ev[64]; SECURITY_ATTRIBUTES sa; PSECURITY_DESCRIPTOR sd; HANDLE e; BOOL have;
@@ -129,28 +109,6 @@ static HANDLE ready_event(DWORD pid)
 static BOOL g_elevated;    // this launcher process runs with an elevated token (normally only on the way to the relaunch; also true in the
                            // relaunched copy when the desktop shell itself is elevated)
 
-// dynafix.dll and the launcher both append to dynafix.log (and any number of threads in each). One named mutex
-// ("Local\DynaRunFix.dynafix.log", DACL: current user, SYSTEM, Administrators) is held around every append and around the
-// trim. It waits at most 2 s: a line is then written anyway (an append is atomic by itself), but the log is never trimmed
-// without the lock. If the mutex cannot be created there is no locking at all.
-static HANDLE g_logmtx;
-
-static HANDLE log_lock(void)
-{
-    HANDLE m = g_logmtx; DWORD r;
-    if (!m) {
-        SECURITY_ATTRIBUTES sa; PSECURITY_DESCRIPTOR sd; HANDLE n; BOOL have = make_sa(&sa, &sd);
-        n = CreateMutexA(have ? &sa : NULL, FALSE, "Local\\DynaRunFix.dynafix.log");
-        if (sd) LocalFree(sd);
-        if (!n) n = INVALID_HANDLE_VALUE;
-        m = (HANDLE)InterlockedCompareExchangePointer((PVOID volatile *)&g_logmtx, n, NULL);   // lost the race: use the winner's
-        if (m) { if (n != INVALID_HANDLE_VALUE) CloseHandle(n); } else m = n;
-    }
-    if (m == INVALID_HANDLE_VALUE) return NULL;
-    r = WaitForSingleObject(m, 2000);
-    return r == WAIT_OBJECT_0 || r == WAIT_ABANDONED ? m : NULL;   // an abandoned mutex is ours now; the log itself is fine
-}
-
 // %TEMP%\dynafix.log into path (MAX_PATH). FALSE when TEMP is too long for that (or unusable): then nothing is logged.
 static BOOL log_path(char *path)
 {
@@ -161,17 +119,8 @@ static BOOL log_path(char *path)
     return TRUE;
 }
 
-// Opens the log. A reparse point (symbolic link, junction) is never followed: INVALID_HANDLE_VALUE then. An elevated process
-// also refuses a file with several hard links.
-static HANDLE open_log(const char *path, DWORD access, DWORD disp)
-{
-    HANDLE h = CreateFileA(path, access | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, disp, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-    BY_HANDLE_FILE_INFORMATION bi;
-    if (h == INVALID_HANDLE_VALUE) return h;
-    if (!GetFileInformationByHandle(h, &bi) || (bi.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
-        (g_elevated && bi.nNumberOfLinks > 1)) { CloseHandle(h); return INVALID_HANDLE_VALUE; }
-    return h;
-}
+// Opens the log (log_open, applog.h); an elevated process also refuses a file with several hard links.
+static HANDLE open_log(const char *path, DWORD access, DWORD disp) { return log_open(path, access, disp, g_elevated); }
 
 // above 10 MB, dynafix.log is cut to its newest 8 MB, from a full line on (dynafix.dll does the same; whichever runs first).
 // Never when elevated.
@@ -203,17 +152,14 @@ static void trim_log(void)
 // one line in %TEMP%\dynafix.log, next to what dynafix.dll writes from inside DynaRun
 static void llog(const char *fmt, DWORD a, DWORD b)
 {
-    char path[MAX_PATH], line[LOG_MAX + 100]; DWORD n; HANDLE h, m; SYSTEMTIME t;
+    char path[MAX_PATH], line[LOG_MAX + 100]; DWORD n; SYSTEMTIME t;
     if (!log_path(path)) return;
     GetLocalTime(&t);
     n = wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     wsprintfA(line + n, fmt, a, b);
     n = lstrlenA(line);
     if (n > LOG_MAX) { lstrcpyA(line + LOG_MAX - 5, "...\r\n"); n = LOG_MAX; }
-    m = log_lock();
-    h = open_log(path, FILE_APPEND_DATA, OPEN_ALWAYS);   // one WriteFile per line: appended atomically
-    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, line, n, &n, NULL); CloseHandle(h); }
-    if (m) ReleaseMutex(m);
+    log_append(path, line, n, g_elevated);   // one WriteFile per line: appended atomically
 }
 
 // the log line for this start: how we were called and by whom
@@ -226,7 +172,7 @@ static void log_start(const char *cmd)
     if (Process32First(s, &pe)) do { if (pe.th32ProcessID == me) pp = pe.th32ParentProcessID; } while (!pp && Process32Next(s, &pe));
     if (pp && Process32First(s, &pe)) do { if (pe.th32ProcessID == pp) lstrcpynA(parent, pe.szExeFile, sizeof(parent)); } while (lstrcmpA(parent, "?") == 0 && Process32Next(s, &pe));
     CloseHandle(s);
-    { char *c = (char *)cmd; while (prefix(&c, "/noupdate")); if (prefix(&c, "/autostart")) how = "/autostart"; else if (prefix(&c, "/restart")) how = "/restart"; }
+    { char *c = (char *)cmd; while (prefix(&c, VERB_NOUPDATE)); if (prefix(&c, VERB_AUTOSTART)) how = VERB_AUTOSTART; else if (prefix(&c, VERB_RESTART)) how = VERB_RESTART; }
     lstrcpynA(args, cmd, sizeof(args));
     { volatile char *z = (volatile char *)&st; int i; for (i = 0; i < (int)sizeof(st); i++) z[i] = 0; } st.cb = sizeof(st); GetStartupInfoA(&st);
     if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) lstrcpyA(cwd, "?");
@@ -413,7 +359,7 @@ static int relaunch_non_elevated(void)
     while (*rest == ' ' || *rest == '\t') rest++;
     cmd = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (lstrlenW(self) + lstrlenW(rest) + 24) * sizeof(WCHAR));
     if (!cmd) { CloseHandle(tok); return 0; }
-    lstrcpyW(cmd, L"\""); lstrcatW(cmd, self); lstrcatW(cmd, L"\" /wasadmin "); lstrcatW(cmd, rest);
+    lstrcpyW(cmd, L"\""); lstrcatW(cmd, self); lstrcatW(cmd, L"\" " WIDEN(VERB_WASADMIN) L" "); lstrcatW(cmd, rest);
     env = token_env(tok);
     { volatile char *z = (volatile char *)&sw; for (i = 0; i < (int)sizeof(sw); i++) z[i] = 0; } sw.cb = sizeof(sw);
     ok = cpwt(tok, 0, self, cmd, env ? CREATE_UNICODE_ENVIRONMENT : 0, env, NULL, &sw, &pi);
@@ -465,7 +411,7 @@ static DWORD WINAPI notice_thread(LPVOID unused)
     ask = zh ? L"下次還要顯示這個通知嗎？" : L"Show this notice again next time?";
     lstrcpyW(msg, head); lstrcatW(msg, body); lstrcatW(msg, ask);
     if (MessageBoxW(NULL, msg, L"DynaRunFix", MB_YESNO | MB_DEFBUTTON2 | MB_ICONINFORMATION | MB_SETFOREGROUND) == IDNO &&
-        !RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL)) {
+        !RegCreateKeyExA(HKEY_CURRENT_USER, APP_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL)) {
         DWORD one = 1; RegSetValueExA(k, notice_value(), 0, REG_DWORD, (const BYTE *)&one, 4); RegCloseKey(k);
     }
     return 0;
@@ -474,7 +420,7 @@ static void show_notice(int kind)
 {
     HKEY k; DWORD v = 0, n = 4, id;
     g_notice_kind = kind;
-    if (!RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) {
+    if (!RegOpenKeyExA(HKEY_CURRENT_USER, APP_KEY, 0, KEY_QUERY_VALUE, &k)) {
         if (RegQueryValueExA(k, notice_value(), NULL, NULL, (BYTE *)&v, &n)) v = 0;
         RegCloseKey(k);
     }
@@ -549,14 +495,6 @@ static void early_hook(HMODULE hd, DWORD pid, DWORD tid, HANDLE proc)
     if (hd) FreeLibrary(hd);
 }
 
-static ULONGLONG now(void)
-{
-    FILETIME f; ULARGE_INTEGER u;
-    GetSystemTimeAsFileTime(&f);
-    u.LowPart = f.dwLowDateTime; u.HighPart = f.dwHighDateTime;
-    return u.QuadPart;
-}
-
 static ULONGLONG reg_time(HKEY k, const char *name)
 {
     ULONGLONG t = 0; DWORD n = sizeof(t), type;
@@ -593,9 +531,9 @@ static BOOL env_on(const char *name)
 static void check_update(void)
 {
     HKEY k; ULONGLONG t = 0, n = now();
-    if (!RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) { t = reg_time(k, "UpdateChecked"); RegCloseKey(k); }
-    if (t <= n && n - t < 864000000000ULL) return;
-    llog("launcher: looking for an update (0 no setup, 1 started): %u %u\r\n", run_setup("/checkupdate", "", 0, "the last check is more than a day old"), 0);
+    if (!RegOpenKeyExA(HKEY_CURRENT_USER, APP_KEY, 0, KEY_QUERY_VALUE, &k)) { t = reg_time(k, RV_UPDATE_CHECKED); RegCloseKey(k); }
+    if (t <= n && n - t < DAY) return;
+    llog("launcher: looking for an update (0 no setup, 1 started): %u %u\r\n", run_setup(VERB_CHECKUPDATE, "", 0, "the last check is more than a day old"), 0);
 }
 
 // DynaRun has been started by this launcher (and hooked): only now is an update dealt with, so that DynaRun never waits for
@@ -606,16 +544,16 @@ static void update_after_start(void)
 {
     char v[64], s[64]; DWORD n = sizeof(v), m = sizeof(s), type; HKEY k; BOOL has, skipped; ULONGLONG ask, next, t = now();
     if (env_on("DYNAFIX_NOUPDATE")) { llog("launcher: update check skipped (DYNAFIX_NOUPDATE) %u %u\r\n", 0, 0); return; }
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\DynaRunFix", 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &k)) { check_update(); return; }
-    has = !RegQueryValueExA(k, "UpdateVersion", NULL, &type, (BYTE *)v, &n) && type == REG_SZ && n > 1;
-    skipped = has && !RegQueryValueExA(k, "UpdateSkip", NULL, &type, (BYTE *)s, &m) && type == REG_SZ && !lstrcmpA(s, v);
-    ask = reg_time(k, "UpdateAsk");
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, APP_KEY, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &k)) { check_update(); return; }
+    has = !RegQueryValueExA(k, RV_UPDATE_VERSION, NULL, &type, (BYTE *)v, &n) && type == REG_SZ && n > 1;
+    skipped = has && !RegQueryValueExA(k, RV_UPDATE_SKIP, NULL, &type, (BYTE *)s, &m) && type == REG_SZ && !lstrcmpA(s, v);
+    ask = reg_time(k, RV_UPDATE_ASK);
     if (has && !skipped && t >= ask) {
-        next = t + 864000000000ULL;
-        RegSetValueExA(k, "UpdateAsk", 0, REG_QWORD, (const BYTE *)&next, 8);   // not again today
+        next = t + DAY;
+        RegSetValueExA(k, RV_UPDATE_ASK, 0, REG_QWORD, (const BYTE *)&next, 8);   // not again today
         RegCloseKey(k);
         llog("launcher: offering the update to %s after DynaRun was started %u\r\n", (DWORD_PTR)v, 0);
-        run_setup("/offer", "", 0, "a newer release is noted, not skipped, not asked today; DynaRun is already running");
+        run_setup(VERB_OFFER, "", 0, "a newer release is noted, not skipped, not asked today; DynaRun is already running");
         return;
     }
     RegCloseKey(k);
@@ -685,7 +623,7 @@ void WinMainCRTStartup(void)
     while (*cmd == ' ') cmd++;
     // "/wasadmin": this is the copy an elevated launcher started with the shell's token (see relaunch_non_elevated). Only
     // believed when this process is not elevated (see below); an elevated process that is given it ignores it.
-    wasadmin = prefix(&cmd, "/wasadmin");
+    wasadmin = prefix(&cmd, VERB_WASADMIN);
     {   // An elevated launcher starts nothing but its copy with the shell's token: no DynaRun, no LEProc, no updater.
         HANDLE tk;
         g_elevated = !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tk) || (i = token_elevated(tk), CloseHandle(tk), i);
@@ -710,15 +648,15 @@ void WinMainCRTStartup(void)
     trim_log();
     log_start(cmd);
     ask = TRUE;
-    while (flag(&cmd, "/noupdate")) ask = FALSE;   // from the setup's /update: it has just asked
+    while (flag(&cmd, VERB_NOUPDATE)) ask = FALSE;   // from the setup's /update: it has just asked
     // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
     // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
-    if (flag(&cmd, "/autostart")) {
+    if (flag(&cmd, VERB_AUTOSTART)) {
         ask = FALSE;   // an unattended start (sign-in) never goes near the updater
         if (!running()) wait_desktop();
     }
     // "/restart <pid>" (from dynafix.dll after the first-time setup): wait for that DynaRun to end, then start normally
-    if (prefix(&cmd, "/restart")) {
+    if (prefix(&cmd, VERB_RESTART)) {
         DWORD old = 0; HANDLE h0;
         p = cmd;
         while (*p >= '0' && *p <= '9') old = old * 10 + (*p++ - '0');
