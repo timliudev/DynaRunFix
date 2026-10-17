@@ -758,70 +758,81 @@ static void zk_init(zkeys *z, const char *pw)
 static BOOL read_at(HANDLE f, DWORD off, void *b, DWORD n)
 { DWORD r; return SetFilePointer(f, off, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER && ReadFile(f, b, n, &r, NULL) && r == n; }
 
-int zip_open(const WCHAR *zip, zipent *e)
+// The one place that finds the central directory: the end-of-central-directory record (searched backwards in the last 64 KB), then the directory itself
+// read into z->cd (cdsize + 1 bytes). z->zip64: one of the EOCD fields holds the Zip64 marker. The readers below add their own rules on top of this.
+typedef struct { BYTE *cd; DWORD cdsize, count, adj; BOOL zip64; } zipcd;
+
+static BOOL zipcd_load(HANDLE f, zipcd *z)
 {
-    HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD size, tail, i, cdoff, cdsize, adj, lho, nl, xl; BYTE *t = NULL, *cd = NULL, *p, lh[30]; int rc = PK_FORMAT;
-    if (f == INVALID_HANDLE_VALUE) return PK_IO;
+    DWORD size, tail, i, cdoff; BYTE *t = NULL; BOOL ok = FALSE;
     crc_init();
-    zero(e, sizeof(*e)); lstrcpynW(e->path, zip, MAX_PATH);
+    zero(z, sizeof(*z));
     size = GetFileSize(f, NULL);
     tail = size < 65557 ? size : 65557;
     if (size < 22 || !(t = alloc(tail)) || !read_at(f, size - tail, t, tail)) goto out;
     for (i = tail - 22 + 1; i-- > 0;) if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) break;
     if (i == (DWORD)-1) goto out;
-    cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
+    z->count = U16(t + i + 10); z->cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
+    z->zip64 = z->count == 0xFFFF || z->cdsize == 0xFFFFFFFF || cdoff == 0xFFFFFFFF;
     // archives that start with the "PK00" spanning marker store offsets without those 4 bytes
-    adj = (cdoff + cdsize + (tail - i) == size) ? 0 : 4;
-    if (cdsize > size || !(cd = alloc(cdsize)) || !read_at(f, cdoff + adj, cd, cdsize)) goto out;
-    for (p = cd; p + 46 <= cd + cdsize && U32(p) == 0x02014b50; p += 46 + nl + U16(p + 30) + U16(p + 32)) {
+    z->adj = (cdoff + z->cdsize + (tail - i) == size) ? 0 : 4;
+    if (z->cdsize > size || !(z->cd = alloc(z->cdsize + 1)) || !read_at(f, cdoff + z->adj, z->cd, z->cdsize)) goto out;
+    ok = TRUE;
+out:
+    release(t);
+    if (!ok) { release(z->cd); z->cd = NULL; }
+    return ok;
+}
+
+// The fields of the central directory entry at p, and where its data starts (from the local header, which must be there).
+static BOOL zipent_fill(HANDLE f, const BYTE *p, DWORD adj, zipent *e)
+{
+    BYTE lh[30]; DWORD lho = U32(p + 42) + adj;
+    e->flags = U16(p + 8); e->method = U16(p + 10); e->dostime = U16(p + 12);
+    e->crc = U32(p + 16); e->csize = U32(p + 20); e->usize = U32(p + 24);
+    if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) return FALSE;
+    e->data = lho + 30 + U16(lh + 26) + U16(lh + 28);
+    return TRUE;
+}
+
+int zip_open(const WCHAR *zip, zipent *e)
+{
+    HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD nl; zipcd z; BYTE *p; int rc = PK_FORMAT;
+    if (f == INVALID_HANDLE_VALUE) return PK_IO;
+    zero(e, sizeof(*e)); lstrcpynW(e->path, zip, MAX_PATH);
+    if (!zipcd_load(f, &z)) goto out;
+    for (p = z.cd; p + 46 <= z.cd + z.cdsize && U32(p) == 0x02014b50; p += 46 + nl + U16(p + 30) + U16(p + 32)) {
         nl = U16(p + 28);
-        if (nl < 4 || p + 46 + nl > cd + cdsize) break;
+        if (nl < 4 || p + 46 + nl > z.cd + z.cdsize) break;
         if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, (char *)p + 46 + nl - 4, 4, ".msi", 4) != CSTR_EQUAL) continue;
-        e->flags = U16(p + 8); e->method = U16(p + 10); e->dostime = U16(p + 12);
-        e->crc = U32(p + 16); e->csize = U32(p + 20); e->usize = U32(p + 24); lho = U32(p + 42) + adj;
-        if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) break;
-        nl = U16(lh + 26); xl = U16(lh + 28);
-        e->data = lho + 30 + nl + xl;
+        if (!zipent_fill(f, p, z.adj, e)) break;
         rc = (e->method == 0 || e->method == 8) ? PK_OK : PK_FORMAT;
         break;
     }
 out:
-    release(t); release(cd); CloseHandle(f);
+    release(z.cd); CloseHandle(f);
     return rc;
 }
 
 int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx)
 {
     HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD size, tail, i, cdoff, cdsize, adj, lho, nl, count, seen = 0; BYTE *t = NULL, *cd = NULL, *p, lh[30]; int rc = PK_FORMAT; zipent e;
+    DWORD nl, seen = 0; zipcd z; BYTE *p; int rc = PK_FORMAT; zipent e;
     if (f == INVALID_HANDLE_VALUE) return PK_IO;
-    crc_init();
-    size = GetFileSize(f, NULL);
-    tail = size < 65557 ? size : 65557;
-    if (size < 22 || !(t = alloc(tail)) || !read_at(f, size - tail, t, tail)) goto out;
-    for (i = tail - 22 + 1; i-- > 0;) if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) break;
-    if (i == (DWORD)-1) goto out;
-    count = U16(t + i + 10); cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
-    if (count == 0xFFFF || cdsize == 0xFFFFFFFF || cdoff == 0xFFFFFFFF) goto out;      // Zip64
-    adj = (cdoff + cdsize + (tail - i) == size) ? 0 : 4;
-    if (cdsize > size || !(cd = alloc(cdsize + 1)) || !read_at(f, cdoff + adj, cd, cdsize)) goto out;
-    for (p = cd; seen < count; p += 46 + nl + U16(p + 30) + U16(p + 32), seen++) {
-        if (p + 46 > cd + cdsize || U32(p) != 0x02014b50) goto out;
+    if (!zipcd_load(f, &z) || z.zip64) goto out;                                       // Zip64 is not read
+    for (p = z.cd; seen < z.count; p += 46 + nl + U16(p + 30) + U16(p + 32), seen++) {
+        if (p + 46 > z.cd + z.cdsize || U32(p) != 0x02014b50) goto out;
         nl = U16(p + 28);
-        if (p + 46 + nl + U16(p + 30) + U16(p + 32) > cd + cdsize) goto out;
+        if (p + 46 + nl + U16(p + 30) + U16(p + 32) > z.cd + z.cdsize) goto out;
         zero(&e, sizeof(e)); lstrcpynW(e.path, zip, MAX_PATH);
-        e.flags = U16(p + 8); e.method = U16(p + 10); e.dostime = U16(p + 12);
-        e.crc = U32(p + 16); e.csize = U32(p + 20); e.usize = U32(p + 24); lho = U32(p + 42);
-        if (e.csize == 0xFFFFFFFF || e.usize == 0xFFFFFFFF || lho == 0xFFFFFFFF) goto out;
-        lho += adj;
-        if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) goto out;
-        e.data = lho + 30 + U16(lh + 26) + U16(lh + 28);
+        if (U32(p + 20) == 0xFFFFFFFF || U32(p + 24) == 0xFFFFFFFF || U32(p + 42) == 0xFFFFFFFF) goto out;
+        if (!zipent_fill(f, p, z.adj, &e)) goto out;
         if (!fn((const char *)p + 46, nl, &e, ctx)) { rc = PK_CANCEL; goto out; }
     }
     rc = PK_OK;
 out:
-    release(t); release(cd); CloseHandle(f);
+    release(z.cd); CloseHandle(f);
     return rc;
 }
 
