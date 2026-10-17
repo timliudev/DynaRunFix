@@ -100,9 +100,6 @@ int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx);
 // An entry name that may be created below a folder: relative, '/' separators, no "..", ".", empty, "x:" / backslash / control or
 // reserved characters, no device names, no trailing dot or space. *isdir: the name ends in '/'.
 BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir);
-// Extracts every entry (stored or deflate, not encrypted) below dest (which must exist); an unsafe name, a damaged entry or a zip
-// larger than the limits fails the whole call (PK_FORMAT). *nfiles: files written.
-int zip_extract_all(const WCHAR *zip, const WCHAR *dest, volatile LONG *cancel, int *nfiles);
 // The files of a package named in a pinned table (the driver's 18 files): safe unpacking / copying and checking (package.c). Used by the driver; the DynaRun setup
 // uses pkg_prepare_target / pkg_extract_checked. Nothing a zip says about a path is used, destinations are built from the table; links are refused; sizes capped.
 typedef struct { const WCHAR *rel; DWORD size; const WCHAR *sha; } pkg_file;   // name below the package folder ('/' separators), size, SHA-256 (lower case)

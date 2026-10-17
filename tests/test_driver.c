@@ -10,6 +10,7 @@
 #define WinMainCRTStartup setup_main_not_used_here
 #include "../src/setup.c"
 #include "../src/driver.c"
+#include "zip_extract_all.h"
 #include <stdio.h>
 
 // what setup.c calls elsewhere and the tests do not need

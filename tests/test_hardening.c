@@ -20,6 +20,7 @@ static BOOL WINAPI test_ShellExecuteExW(SHELLEXECUTEINFOW *se)
 }
 #define ShellExecuteExW test_ShellExecuteExW
 #include "../src/setup.c"
+#include "promote_com.h"
 #include <stdio.h>
 
 // what setup.c calls elsewhere and the tests do not need
