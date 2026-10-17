@@ -50,10 +50,19 @@ static DWORD g_neterr, g_total;
 static BOOL g_paused, g_pause_req;                      // download paused (worker ended, .part kept) / pause asked, worker still stopping
 static int g_hint;                                       // DynaRun update hint (pkg_update_hint): 0 none, 1 a newer version is published, 2 the site's zip differs from the last download
 static WCHAR g_hint_inst[40], g_hint_new[40];            // the installed and the published version (hint 1)
-static BOOL g_pre;                                        // the driver is ticked in the main flow: its package is fetched and checked BEFORE the install, and the one elevated stage installs the fix and prepares the driver (one UAC prompt)
-static int g_inst_job;                                    // the install job (JOB_INSTALL_ALL / JOB_INSTALL_FIX) that waits for the driver package while g_pre
-static BOOL g_fix_done;                                   // g_pre: the fix is installed (the driver step after it may still have failed)
-static BOOL g_driver_only;                                // DynaRun and its fix are installed (this version) and only the driver is missing: the first page offers just that
+// Which way through the pages this run takes. One value; it replaces the three flags (the driver ticked on the first page, the driver-only first page, the
+// /driver and /driver-continue command line) whose combinations were never all possible. It changes only in start (wizard), go_install, skip_driver and the
+// "Reinstall the fix..." link.
+//   FLOW_MAIN              the fix (and, when DynaRun is not installed, DynaRun itself): the first page, no driver in it. The default.
+//   FLOW_MAIN_WITH_DRIVER  the driver is ticked on the first page: its package is fetched and checked BEFORE the install, and the one elevated stage installs the
+//                          fix and prepares the driver (one UAC prompt). The user can still skip it (back to FLOW_MAIN).
+//   FLOW_DRIVER_ONLY       only the driver is the job: /driver (straight to the driver pages), or DynaRun and its fix are installed (this version) and only the
+//                          driver is missing (the first page offers just that, and "Reinstall the fix..." turns it into FLOW_MAIN).
+//   FLOW_DRIVER_CONTINUE   /driver-continue, the sign-in task after the restart: the driver pages that follow the restart.
+enum { FLOW_MAIN, FLOW_MAIN_WITH_DRIVER, FLOW_DRIVER_ONLY, FLOW_DRIVER_CONTINUE };
+static int g_flow = FLOW_MAIN;
+static int g_inst_job;                                    // the install job (JOB_INSTALL_ALL / JOB_INSTALL_FIX) that waits for the driver package in FLOW_MAIN_WITH_DRIVER
+static BOOL g_fix_done;                                   // progress, not flow: FLOW_MAIN_WITH_DRIVER, the fix is installed (the driver step after it may still have failed)
 static BOOL g_checking, g_marquee, g_drv_allow;          // the non-pausable "checking" phase / marquee bar (size unknown) / the user chose "install anyway" for a zip with another hash
 static int g_drv_how;                                    // DRV_SRC_*: the driver zip was downloaded, or found on this computer (nothing downloaded)
 static WCHAR g_drv_hex[65];                              // SHA-256 and size of a driver zip that is not the pinned file (the warning page shows them)
@@ -319,7 +328,7 @@ static int place_image(int x, int y, int w, int ah)
 // The "Start DynaRun" button is offered only when DynaRun is installed here and our launcher is in place (g_exe comes from locate_dynarun, which
 // the wizard runs at start in every mode, so this also holds in the process the sign-in task starts after the restart; g_launcher from init_paths).
 // The driver step may be skipped (the fix is installed without it) only in the main install flow, not when it is the whole job (the shortcut, /driver, or the driver-only first page).
-static BOOL can_skip_driver(void) { return g_drvmode == DRV_MODE_NONE && !g_driver_only; }
+static BOOL can_skip_driver(void) { return g_flow == FLOW_MAIN || g_flow == FLOW_MAIN_WITH_DRIVER; }
 
 // The line about a newer DynaRun on the first page, and its button. A hint only: nothing happens unless the button is clicked.
 static void hint_line(WCHAR *b)
@@ -373,7 +382,7 @@ static void set_page(int p)
     vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_DRV, FALSE); vis(ID_IMG, FALSE); vis(ID_INFO, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
     switch (p) {
     case P_HELLO:
-        if (g_driver_only) {
+        if (g_flow == FLOW_DRIVER_ONLY) {
             wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThe fix for Windows 10/11 is already installed (version %s). The Dyna Pro USB driver is not installed yet; "
                            L"without it this computer cannot talk to the dynamometer.\n\nThis installs the driver (one restart is needed). When Windows asks whether to allow changes, click \"Yes\".\n\n"
                            L"If DynaRun does not behave, \"Reinstall the fix...\" installs the fix again.",
@@ -544,7 +553,7 @@ static void set_page(int p)
                         L"廠商封裝中的驅動程式設定檔（INF）不在隨附的 Microsoft 簽署目錄檔中，Windows 無法驗證，所以只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
                         L"下次重新開機會自動恢復。\n\n"
                         L"如果這台電腦有啟用 BitLocker，保護會暫停到驅動程式安裝完成為止，之後會自動恢復（最多經過 3 次重新開機）。"));
-        if (g_pre) lstrcatW(b, T(L"\n\nDynaRun's fix is installed in the same step, just before the restart, so Windows asks for permission only once.",
+        if (g_flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"\n\nDynaRun's fix is installed in the same step, just before the restart, so Windows asks for permission only once.",
                                  L"\n\nDynaRun 的修正會在同一步、重新開機之前一起安裝，所以 Windows 只會詢問一次是否允許變更。"));
         text(ID_BODY, b);
         buttons(T(L"Next", L"下一步"), can_skip_driver() ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"), NULL);
@@ -563,7 +572,7 @@ static void set_page(int p)
                 lstrcatW(b, t);
             }
             if (!g_drv_allow && (g_drv_how & DRV_ZIPDIFF)) lstrcatW(b, T(L"The zip differs from the known version, but the driver files are identical: it can be installed.\n\n", L"壓縮檔和已知版本不同，但驅動程式檔案相同，可以安裝。\n\n"));
-            if (g_pre) lstrcatW(b, T(L"Click \"Install and restart\": DynaRun's fix is installed and the driver is prepared in one step (Windows asks for permission once), then the computer restarts.\n\n",
+            if (g_flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"Click \"Install and restart\": DynaRun's fix is installed and the driver is prepared in one step (Windows asks for permission once), then the computer restarts.\n\n",
                                      L"按「安裝並重新開機」後，會一次完成 DynaRun 修正的安裝和驅動程式的準備（Windows 只會詢問一次是否允許變更），接著電腦重新開機。\n\n"));
             lstrcatW(b, T(L"Tip: take a photo of this page with your phone.\nSave your work in other programs before you restart.",
                           L"建議用手機拍下這一頁。\n按「重新開機」前請先存好其他程式的資料。"));
@@ -574,7 +583,7 @@ static void set_page(int p)
             text(ID_BODY, b);
         }
         show_image(0);
-        if (g_pre) buttons(T(L"Install and restart", L"安裝並重新開機"), T(L"Cancel", L"取消"), NULL);   // nothing is installed yet
+        if (g_flow == FLOW_MAIN_WITH_DRIVER) buttons(T(L"Install and restart", L"安裝並重新開機"), T(L"Cancel", L"取消"), NULL);   // nothing is installed yet
         else buttons(T(L"Restart now", L"重新開機"), T(L"Later", L"稍後"), NULL);
         if (g_note[0]) status(g_note, TRUE);
         break;
@@ -747,8 +756,8 @@ static int jp_extract(void)
     SecureZeroMemory(g_pw, sizeof(g_pw));            // the password is not needed any more
     return rc;
 }
-static int jp_install_all(void) { return g_pre ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); }   // g_pre: the driver's preparation in the same elevated stage
-static int jp_install_fix(void) { return g_pre ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); }
+static int jp_install_all(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
+static int jp_install_fix(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); }
 static int jp_drv_prep(void)
 {
     // "install anyway" accepts exactly this zip (its SHA-256), nothing else.
@@ -836,10 +845,10 @@ static void install(int job)
 }
 
 // The install of the fix (job: JOB_INSTALL_ALL / JOB_INSTALL_FIX). With the driver ticked its package is fetched and checked first (the driver pages), and the
-// one elevated stage then does both: the UAC prompt comes once, before the restart. The driver-only first page (g_driver_only) has no install: it starts the prep itself.
+// one elevated stage then does both: the UAC prompt comes once, before the restart. The driver-only first page (FLOW_DRIVER_ONLY) has no install: it starts the prep itself.
 static void go_install(int job)
 {
-    if (g_drv && !g_driver_only && g_drvmode == DRV_MODE_NONE && !g_pre) { g_pre = TRUE; g_inst_job = job; g_note[0] = 0; set_page(P_DRV_INTRO); }
+    if (g_drv && g_flow == FLOW_MAIN) { g_flow = FLOW_MAIN_WITH_DRIVER; g_inst_job = job; g_note[0] = 0; set_page(P_DRV_INTRO); }
     else install(job);
 }
 
@@ -847,7 +856,7 @@ static void go_install(int job)
 static void skip_driver(void)
 {
     user_log(L"driver: skipped, the fix is installed without it");
-    g_drv = FALSE; g_opts.autostart_later = FALSE; g_pre = FALSE;
+    g_drv = FALSE; g_opts.autostart_later = FALSE; g_flow = FLOW_MAIN;
     install(g_inst_job);
 }
 
@@ -1059,7 +1068,7 @@ static void drv_start(void)
         return;
     }
     g_drv_have = driver_installed();
-    if (g_drvmode == DRV_MODE_CONTINUE) {
+    if (g_flow == FLOW_DRIVER_CONTINUE) {
         if (g_drv_have) { if (is_admin()) driver_cancel(&g_opts); set_page(P_DRV_DONE); }       // installed meanwhile: the waiting task goes
         else set_page(driver_ci_state() == DRV_CI_ENFORCED ? P_DRV_RETRY : P_DRV_WARN);
     } else set_page(g_drv_have ? P_DRV_DONE : P_DRV_INTRO);
@@ -1249,7 +1258,7 @@ static void jd_extract(int job, int rc)
 
 static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INSTALL_FIX
 {
-    if (g_pre && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
+    if (g_flow == FLOW_MAIN_WITH_DRIVER && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
         cleanup_files();
         g_fix_done = TRUE;
         if (rc == DRV_SUCCESS) drv_reboot_now();
@@ -1261,7 +1270,7 @@ static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INS
     if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
     if (rc == RC_CANCEL) {
         lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
-        set_page(g_pre ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // g_pre: the page with the button that started it
+        set_page(g_flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
         return;
     }
     wsprintfW(g_note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
@@ -1276,7 +1285,7 @@ static void jd_drv_prep(int job, int rc)
     if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); return; }      // armed, but BitLocker is still on: the user decides
     if (rc == RC_CANCEL) {
         lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
-        set_page(g_drvmode == DRV_MODE_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
+        set_page(g_flow == FLOW_DRIVER_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
         return;
     }
     drv_error(rc);
@@ -1314,7 +1323,7 @@ static void on_primary(void)
     case P_HELLO:
         g_opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        if (g_driver_only) { g_drv = TRUE; g_opts.autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
+        if (g_flow == FLOW_DRIVER_ONLY) { g_drv = TRUE; g_opts.autostart_later = FALSE; set_page(P_DRV_INTRO); break; }   // the fix is current: straight to the driver
         g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_opts.autostart_later = g_drv;              // the driver restart comes first: the sign-in start is registered after it
         if (g_installed) go_install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
@@ -1340,7 +1349,7 @@ static void on_primary(void)
         break;
     case P_ERROR: DestroyWindow(g_hwnd); break;
     case P_DRV_INTRO: acq_start(&ACQ_DRIVER); break;
-    case P_DRV_PRESS7: if (g_pre) install(g_inst_job); else start_job(JOB_DRV_PREP, P_DRV_PREP); break;   // g_pre: the fix and the driver preparation in one elevated stage
+    case P_DRV_PRESS7: if (g_flow == FLOW_MAIN_WITH_DRIVER) install(g_inst_job); else start_job(JOB_DRV_PREP, P_DRV_PREP); break;   // FLOW_MAIN_WITH_DRIVER: the fix and the driver preparation in one elevated stage
     case P_DRV_HASH: hash_choice(FALSE); break;                                       // "Cancel" is the default button
     case P_DRV_RETRY: g_drvzip[0] = 0; start_job(JOB_DRV_PREP, P_DRV_PREP); break;       // the staged driver is still there
     case P_DRV_WARN: start_job(JOB_DRV_INSTALL, P_DRV_INSTALL); break;
@@ -1366,7 +1375,7 @@ static void on_close(void)
     if (g_page == P_INSTALL || g_page == P_DRV_PREP || g_page == P_DRV_INSTALL) return;   // msiexec / registry / system tool work must not be interrupted
     if (g_busy) { g_closing = TRUE; InterlockedExchange(&g_cancel, 1); return; }
     // after the restart: closing the window ends the installation like "Cancel" (done at once when this runs elevated, as the task does)
-    if (g_drvmode == DRV_MODE_CONTINUE && (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) && is_admin()) driver_cancel(&g_opts);
+    if (g_flow == FLOW_DRIVER_CONTINUE && (g_page == P_DRV_RETRY || g_page == P_DRV_WARN) && is_admin()) driver_cancel(&g_opts);
     if (g_page == P_DRV_BDE) { start_job(JOB_DRV_CANCEL, P_DRV_PREP); return; }       // the task, the menu flag and the suspension were armed: take them back first
     DestroyWindow(g_hwnd);
 }
@@ -1392,7 +1401,7 @@ static void on_third(void)
     else if (g_page == P_HELLO && g_hint) {                       // "Download new version": the same acquire flow, then the normal install (the MSI upgrades DynaRun)
         g_opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        g_drv = !g_driver_only && g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_drv = g_flow != FLOW_DRIVER_ONLY && g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_opts.autostart_later = g_drv;
         user_log(L"DynaRun update hint: the user chose to download the new version");
         g_acq_fresh = TRUE;                                       // an older package found on this computer would not be the new version
@@ -1627,7 +1636,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (g_page == P_FAIL || g_page == P_FETCH || g_page == P_CHECK || g_page == P_LICENSE) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_DRV_BDE) ShellExecuteW(h, NULL, L"https://aka.ms/myrecoverykey", NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_PASSWORD) choose_file();
-            else if (g_page == P_HELLO) { if (g_driver_only) { g_driver_only = FALSE; set_page(P_HELLO); } else choose_exe(); }   // "Reinstall the fix..." / "Installed elsewhere..."
+            else if (g_page == P_HELLO) { if (g_flow == FLOW_DRIVER_ONLY) { g_flow = FLOW_MAIN; set_page(P_HELLO); } else choose_exe(); }   // "Reinstall the fix..." / "Installed elsewhere..."
             else if (g_page == P_DRV_ERROR) ShellExecuteW(h, NULL, DRIVER_DOC_URL, NULL, NULL, SW_SHOWNORMAL);
             else if (g_page == P_DRV_HASH) ShellExecuteW(h, NULL, DYNAPRO_PAGE, NULL, NULL, SW_SHOWNORMAL);   // after a failed driver download
             break;
@@ -1744,7 +1753,10 @@ int wizard(const install_opts *init)
     create_controls();
     g_installed = locate_dynarun();
     g_drv_avail = g_drvmode == DRV_MODE_NONE && driver_supported() && !driver_installed();
-    g_driver_only = g_installed && g_drv_avail && fix_current();           // the fix is there and current: only the driver is missing
+    // g_drvmode (set by cmd_driver / cmd_driver_continue before the wizard starts) is read here and nowhere else
+    if (g_drvmode == DRV_MODE_STANDALONE) g_flow = FLOW_DRIVER_ONLY;
+    else if (g_drvmode == DRV_MODE_CONTINUE) g_flow = FLOW_DRIVER_CONTINUE;
+    else g_flow = g_installed && g_drv_avail && fix_current() ? FLOW_DRIVER_ONLY : FLOW_MAIN;   // the fix is there and current: only the driver is missing
     if (g_drvmode != DRV_MODE_NONE) drv_start();
     else {
         DWORD tid;
