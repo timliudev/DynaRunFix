@@ -5,7 +5,7 @@
 #include "../src/update.c"
 #include <stdio.h>
 
-BOOL g_zh, g_quiet; HWND g_hwnd; WCHAR g_launcher[MAX_PATH];
+BOOL g_zh; HWND g_hwnd; WCHAR g_launcher[MAX_PATH];
 void zero(void *p, SIZE_T n) { memset(p, 0, n); }
 void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
 void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }

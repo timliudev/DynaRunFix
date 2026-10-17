@@ -9,7 +9,10 @@
 #include <msi.h>
 #include <msiquery.h>
 #include <netlistmgr.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_util.h"
+#include "drf_package.h"
+#include "drf_package_internal.h"
 #include "version.h"
 #include "miniz.h"     // inflate only (third_party/miniz, built with the MINIZ_NO_* options in build.cmd)
 
@@ -65,33 +68,37 @@ typedef struct { WCHAR path[MAX_PATH]; int score; FILETIME t; } candidate;
 
 // Ranking: a checked DynaRun MSI first, then a zip named like Dyna Pro's download, then any other
 // password-protected zip with an .msi inside; newest first within each. The name only orders the zips, it proves nothing.
+static void scan(const WCHAR *dir, BOOL subdirs, candidate *best);
+typedef struct { candidate *best; BOOL subdirs; } scan_ctx;
+
+static BOOL scan_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
+{
+    scan_ctx *c = vc; candidate *best = c->best; const WCHAR *e; int score; zipent z;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (c->subdirs && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) scan(p, FALSE, best);
+        return TRUE;
+    }
+    if (fd->dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) return TRUE;  // cloud-only: do not download it just to look
+    e = fd->cFileName + lstrlenW(fd->cFileName) - 4;
+    if (e < fd->cFileName) return TRUE;
+    if (!lstrcmpiW(e, L".msi")) score = 3;
+    else if (!lstrcmpiW(e, L".zip")) score = CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd->cFileName, 4, L"dyna", 4) == CSTR_EQUAL ? 2 : 1;
+    else return TRUE;
+    if (score < best->score || (score == best->score && CompareFileTime(&fd->ftLastWriteTime, &best->t) <= 0)) return TRUE;
+    if (rejected(p)) return TRUE;
+    // Dyna Pro's zip is password-protected: an unencrypted zip that happens to hold some .msi
+    // (another vendor's tool) is not offered unasked, only through "Other file..."
+    if (score == 3 ? msi_check(p, NULL, 0) != MSI_DYNARUN : zip_open(p, &z) != PK_OK || !(z.flags & 1)) return TRUE;
+    lstrcpyW(best->path, p); best->score = score; best->t = fd->ftLastWriteTime;
+    return TRUE;
+}
+
 static void scan(const WCHAR *dir, BOOL subdirs, candidate *best)
 {
-    WCHAR p[MAX_PATH * 2], *e; WIN32_FIND_DATAW fd; HANDLE f; int score; zipent z;
+    WCHAR p[MAX_PATH * 2]; scan_ctx c;
     if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) return;
-    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
-    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return;
-    do {
-        if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (subdirs && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) scan(p, FALSE, best);
-            continue;
-        }
-        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) continue;  // cloud-only: do not download it just to look
-        e = fd.cFileName + lstrlenW(fd.cFileName) - 4;
-        if (e < fd.cFileName) continue;
-        if (!lstrcmpiW(e, L".msi")) score = 3;
-        else if (!lstrcmpiW(e, L".zip")) score = CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd.cFileName, 4, L"dyna", 4) == CSTR_EQUAL ? 2 : 1;
-        else continue;
-        if (score < best->score || (score == best->score && CompareFileTime(&fd.ftLastWriteTime, &best->t) <= 0)) continue;
-        if (rejected(p)) continue;
-        // Dyna Pro's zip is password-protected: an unencrypted zip that happens to hold some .msi
-        // (another vendor's tool) is not offered unasked, only through "Other file..."
-        if (score == 3 ? msi_check(p, NULL, 0) != MSI_DYNARUN : zip_open(p, &z) != PK_OK || !(z.flags & 1)) continue;
-        lstrcpyW(best->path, p); best->score = score; best->t = fd.ftLastWriteTime;
-    } while (FindNextFileW(f, &fd));
-    FindClose(f);
+    c.best = best; c.subdirs = subdirs;
+    dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, scan_entry, &c);
 }
 
 // The folders a package the user already has is looked for in: 0 where this setup is, 1 Downloads (also one level into it), 2 Desktop, 3 Documents.
@@ -110,110 +117,122 @@ static void search_dirs(WCHAR dirs[4][MAX_PATH])
     SHGetSpecialFolderPathW(NULL, dirs[3], CSIDL_PERSONAL, FALSE);
 }
 
-typedef BOOL (*zip_accept_fn)(const WCHAR *path);
-
-// Where the search says what it looks at (the caller sets it; NULL = silent): one line per folder, and per zip that is skipped for its size.
-void (*g_pkg_log)(const WCHAR *line);
-static void plog(const WCHAR *a, const WCHAR *b)
+// Where the search says what it looks at (s->log, NULL = silent): one line per folder, and per zip that is skipped for its size.
+static void plog(const pkg_search *s, const WCHAR *a, const WCHAR *b)
 {
     static WCHAR l[2 * MAX_PATH + 80];
-    if (!g_pkg_log || lstrlenW(a) + lstrlenW(b) + 1 >= (int)(sizeof(l) / sizeof(l[0]))) return;
+    if (!s || !s->log || lstrlenW(a) + lstrlenW(b) + 1 >= (int)(sizeof(l) / sizeof(l[0]))) return;
     lstrcpyW(l, a); lstrcatW(l, b);
-    g_pkg_log(l);
+    s->log(l);
 }
 
 // Two modes. accept given: the first zip (at most maxsize bytes) that accept() approves - by its content, whatever it is called. prefix given
 // instead: the newest zip whose name starts with prefix, whatever it contains (*bt: its time, in/out).
-static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, zip_accept_fn accept, const WCHAR *prefix, FILETIME *bt, WCHAR *out)
+static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, const pkg_search *s, const WCHAR *prefix, FILETIME *bt, WCHAR *out);
+typedef struct { BOOL subdirs; DWORD maxsize; const pkg_search *s; const WCHAR *prefix; FILETIME *bt; WCHAR *out; BOOL found; int plen; } zipfind_ctx;
+
+static void zip_one(zipfind_ctx *c, const WCHAR *p, const WIN32_FIND_DATAW *fd)
 {
-    WCHAR p[MAX_PATH * 2]; WIN32_FIND_DATAW fd; HANDLE f; BOOL found = FALSE; int n, plen = prefix ? lstrlenW(prefix) : 0;
-    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) { plog(L"zip search: a folder with no usable path", L""); return FALSE; }
-    plog(prefix ? L"zip search by name in " : L"zip search by content in ", dir);
-    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
-    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) { plog(L"  the folder cannot be read or does not exist", L""); return FALSE; }
-    do {
-        if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (subdirs && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && find_zip_in(p, FALSE, maxsize, accept, prefix, bt, out)) found = TRUE;
-            continue;
-        }
-        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) continue;   // cloud-only: do not download it just to look
-        n = lstrlenW(fd.cFileName);
-        if (n < 4 || lstrcmpiW(fd.cFileName + n - 4, L".zip")) continue;
-        if (prefix) {
-            if (n < plen || CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd.cFileName, plen, prefix, plen) != CSTR_EQUAL) continue;
-            if (out[0] && CompareFileTime(&fd.ftLastWriteTime, bt) <= 0) continue;
-            lstrcpyW(out, p); *bt = fd.ftLastWriteTime; found = TRUE;
-            continue;
-        }
-        if (fd.nFileSizeHigh || fd.nFileSizeLow > maxsize) { plog(L"  skipped (too big for a driver package): ", p); continue; }   // the driver package is a few MB
-        if (accept(p)) { lstrcpyW(out, p); found = TRUE; }
-    } while ((prefix || !found) && FindNextFileW(f, &fd));
-    FindClose(f);
-    return found;
+    int n;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (c->subdirs && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && find_zip_in(p, FALSE, c->maxsize, c->s, c->prefix, c->bt, c->out)) c->found = TRUE;
+        return;
+    }
+    if (fd->dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) return;   // cloud-only: do not download it just to look
+    n = lstrlenW(fd->cFileName);
+    if (n < 4 || lstrcmpiW(fd->cFileName + n - 4, L".zip")) return;
+    if (c->prefix) {
+        if (n < c->plen || CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, fd->cFileName, c->plen, c->prefix, c->plen) != CSTR_EQUAL) return;
+        if (c->out[0] && CompareFileTime(&fd->ftLastWriteTime, c->bt) <= 0) return;
+        lstrcpyW(c->out, p); *c->bt = fd->ftLastWriteTime; c->found = TRUE;
+        return;
+    }
+    if (fd->nFileSizeHigh || fd->nFileSizeLow > c->maxsize) { plog(c->s, L"  skipped (too big for a driver package): ", p); return; }   // the driver package is a few MB
+    if (c->s->accept(p, c->s->ctx)) { lstrcpyW(c->out, p); c->found = TRUE; }
 }
 
-// The first zip (at most maxsize bytes) in the folders pkg_find_local looks in (and one level into Downloads) that accept() approves.
-BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out)
+// (the walk goes on after every entry, except once a zip is found when not looking for the newest by name)
+static BOOL zip_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
+{
+    zipfind_ctx *c = vc;
+    zip_one(c, p, fd);
+    return c->prefix || !c->found;
+}
+
+static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, const pkg_search *s, const WCHAR *prefix, FILETIME *bt, WCHAR *out)
+{
+    WCHAR p[MAX_PATH * 2]; zipfind_ctx c;
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) { plog(s, L"zip search: a folder with no usable path", L""); return FALSE; }
+    plog(s, prefix ? L"zip search by name in " : L"zip search by content in ", dir);
+    c.subdirs = subdirs; c.maxsize = maxsize; c.s = s; c.prefix = prefix; c.bt = bt; c.out = out; c.found = FALSE; c.plen = prefix ? lstrlenW(prefix) : 0;
+    if (dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, zip_entry, &c) == WALK_NOOPEN) { plog(s, L"  the folder cannot be read or does not exist", L""); return FALSE; }
+    return c.found;
+}
+
+// The first zip (at most maxsize bytes) in the folders pkg_find_local looks in (and one level into Downloads) that s->accept() approves.
+BOOL pkg_find_zip_if(DWORD maxsize, const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; int i;
     out[0] = 0;
     search_dirs(dirs);
-    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, maxsize, accept, NULL, NULL, out)) return TRUE;
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, maxsize, s, NULL, NULL, out)) return TRUE;
     return FALSE;
 }
 
 // The newest zip whose name starts with prefix in those folders (the candidate when no zip has the right content).
-BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out)
+BOOL pkg_find_zip_named(const WCHAR *prefix, const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; FILETIME bt; int i; BOOL found = FALSE;
     out[0] = 0; bt.dwLowDateTime = bt.dwHighDateTime = 0;
     search_dirs(dirs);
-    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, 0, NULL, prefix, &bt, out)) found = TRUE;
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, 0, s, prefix, &bt, out)) found = TRUE;
     return found;
 }
 
-// Depth-limited walk: accept(dir) for dir itself, then for its sub-folders down to `depth` levels (never into a link). *budget: the most folders
+// Depth-limited walk: s->accept(dir) for dir itself, then for its sub-folders down to `depth` levels (never into a link). *budget: the most folders
 // still to be looked at in all (so a big Documents folder cannot make it slow).
-static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, const pkg_search *s, WCHAR *out);
+typedef struct { int depth, *budget; const pkg_search *s; WCHAR *out; BOOL found; } dirfind_ctx;
+
+static BOOL dir_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
 {
-    WCHAR p[MAX_PATH * 2]; WIN32_FIND_DATAW fd; HANDLE f; BOOL found = FALSE;
-    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH || --*budget < 0) return FALSE;
-    if (accept(dir)) { lstrcpyW(out, dir); return TRUE; }
-    if (depth <= 0) return FALSE;
-    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
-    if ((f = FindFirstFileW(p, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
-    do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || fd.cFileName[0] == '.' ||
-            lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
-        found = find_dir_in(p, depth - 1, budget, accept, out);
-    } while (!found && *budget >= 0 && FindNextFileW(f, &fd));
-    FindClose(f);
-    return found;
+    dirfind_ctx *c = vc;
+    if ((fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        c->found = find_dir_in(p, c->depth - 1, c->budget, c->s, c->out);
+    return !c->found && *c->budget >= 0;
 }
 
-// The first folder that accept() approves, in the folders pkg_find_local looks in: the setup's folder, Desktop and Documents one level down,
+static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, const pkg_search *s, WCHAR *out)
+{
+    WCHAR p[MAX_PATH * 2]; dirfind_ctx c;
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH || --*budget < 0) return FALSE;
+    if (s->accept(dir, s->ctx)) { lstrcpyW(out, dir); return TRUE; }
+    if (depth <= 0) return FALSE;
+    c.depth = depth; c.budget = budget; c.s = s; c.out = out; c.found = FALSE;
+    dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, dir_entry, &c);
+    return c.found;
+}
+
+// The first folder that s->accept() approves, in the folders pkg_find_local looks in: the setup's folder, Desktop and Documents one level down,
 // Downloads two levels down (Downloads\Dyna Pro USB\64-Bit Drivers), at most 600 folders in all.
-BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+BOOL pkg_find_dirs(const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; int i, budget = 600;
     out[0] = 0;
     search_dirs(dirs);
     for (i = 0; i < 4; i++) {
-        plog(L"folder search in ", dirs[i]);
-        if (find_dir_in(dirs[i], i == 1 ? 2 : 1, &budget, accept, out)) return TRUE;
+        plog(s, L"folder search in ", dirs[i]);
+        if (find_dir_in(dirs[i], i == 1 ? 2 : 1, &budget, s, out)) return TRUE;
     }
     return FALSE;
 }
 
 // The same walk below one given folder (the folder the user picked).
-BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+BOOL pkg_find_dir_in(const WCHAR *root, int depth, const pkg_search *s, WCHAR *out)
 {
     int budget = 600;
     out[0] = 0;
-    return find_dir_in(root, depth, &budget, accept, out);
+    return find_dir_in(root, depth, &budget, s, out);
 }
 
 BOOL pkg_find_local(WCHAR *out)
@@ -416,7 +435,7 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
     if (pkg_net_state() == NET_NO) { *err = ERROR_INTERNET_DISCONNECTED; return PK_NET; }   // clearly no network at all (cable out, adapter off): the error page at once, no waiting
     lstrcpyW(part, out); lstrcatW(part, L".part");
     oldtag[0] = 0;
-    if (!RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
+    if (app_key_create(APP_USER, &k)) {
         tn = sizeof(oldtag) - 2;
         if (RegQueryValueExW(k, etagval, NULL, NULL, (BYTE *)oldtag, &tn)) oldtag[0] = 0;
         RegCloseKey(k);
@@ -451,7 +470,7 @@ int pkg_fetch(const WCHAR *url, const WCHAR *name, const WCHAR *etagval, const W
         if (status == 200) { have = 0; SetFilePointer(f, 0, NULL, FILE_BEGIN); SetEndOfFile(f); }
         else SetFilePointer(f, 0, NULL, FILE_END);
         if (query_str(h, HTTP_QUERY_ETAG, tag, 200) && lstrcmpW(tag, oldtag) &&
-            !RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {
+            app_key_create(APP_USER, &k)) {
             RegSetValueExW(k, etagval, 0, REG_SZ, (const BYTE *)tag, (lstrlenW(tag) + 1) * sizeof(WCHAR));
             RegCloseKey(k); lstrcpyW(oldtag, tag);
         }
@@ -488,7 +507,7 @@ again:
     if (rc == PK_NET) { if (first) *err = first; if (*cancel) rc = PK_CANCEL; }   // the first error of the failed run, not the last one; stopped by the user between attempts
     InternetCloseHandle(in);
     if (rc == PK_OK && !MoveFileExW(part, out, MOVEFILE_REPLACE_EXISTING)) { *err = GetLastError(); rc = PK_IO; }
-    if (rc == PK_OK && !RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) {   // what a completed download was (for the hint "the site has another file")
+    if (rc == PK_OK && app_key_create(APP_USER, &k)) {   // what a completed download was (for the hint "the site has another file")
         WCHAR rec[320], nm[80];
         if (lstrlenW(etagval) + 5 < 80) {
             wsprintfW(rec, L"%s|%lu|%s", tag, have, lmod); lstrcpyW(nm, etagval); lstrcatW(nm, L"Done");
@@ -648,7 +667,7 @@ static BOOL recorded_download(WCHAR *etag, DWORD *len, WCHAR *mod)
 {
     WCHAR v[320], *a, *b; HKEY k; DWORD n = sizeof(v) - 2; BOOL ok = FALSE;
     etag[0] = mod[0] = 0; *len = 0; v[0] = 0;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) {
+    if (app_key_open(APP_USER, KEY_QUERY_VALUE, &k)) {
         ok = !RegQueryValueExW(k, L"DownloadETagDone", NULL, NULL, (BYTE *)v, &n) && v[0];
         RegCloseKey(k);
     }
@@ -663,21 +682,21 @@ static BOOL recorded_download(WCHAR *etag, DWORD *len, WCHAR *mod)
 // zip is not the one the last download recorded: "there may be a newer one". Nothing is changed, nothing is asked; every outcome is one line in the log (log may be NULL).
 int pkg_update_hint(WCHAR *installed, WCHAR *latest, int cch, void (*log)(const WCHAR *line))
 {
-    static char page[262144]; DWORD len; WCHAR l[300], e1[200], m1[64], e2[200], m2[64]; DWORD l1, l2; int r = 0;
+    static char page[262144]; DWORD len; WCHAR l[300], e1[200], m1[64], e2[200], m2[64]; DWORD l1, l2; int r = HINT_NONE;
     latest[0] = 0;
-    if (!dynarun_version(installed, cch)) { if (log) log(L"DynaRun update hint: no installed DynaRun version (not installed by its MSI)"); return 0; }
-    if (pkg_net_state() == NET_NO) { if (log) log(L"DynaRun update hint: no network"); return 0; }
+    if (!dynarun_version(installed, cch)) { if (log) log(L"DynaRun update hint: no installed DynaRun version (not installed by its MSI)"); return HINT_NONE; }
+    if (pkg_net_state() == NET_NO) { if (log) log(L"DynaRun update hint: no network"); return HINT_NONE; }
     if (fetch_text(DYNAPRO_PAGE, page, sizeof(page), &len) && pkg_page_version(page, len, latest, cch)) {
-        r = ver_compare(latest, installed) > 0 ? 1 : 0;
+        r = ver_compare(latest, installed) > 0 ? HINT_NEWER : HINT_NONE;
         if (log) { wsprintfW(l, L"DynaRun update hint: installed %s, the website names %s: %s", installed, latest, r ? L"newer version available" : L"nothing newer"); log(l); }
         return r;
     }
     if (log) log(L"DynaRun update hint: the website names no version (or could not be read): comparing its zip with the last download");
-    if (!probe_zip(e1, &l1, m1) || !recorded_download(e2, &l2, m2)) { if (log) log(L"DynaRun update hint: nothing to compare"); return 0; }
+    if (!probe_zip(e1, &l1, m1) || !recorded_download(e2, &l2, m2)) { if (log) log(L"DynaRun update hint: nothing to compare"); return HINT_NONE; }
     if (e1[0] && e2[0]) r = lstrcmpW(e1, e2) != 0;
     else r = (l1 && l2 && l1 != l2) || (m1[0] && m2[0] && lstrcmpW(m1, m2));
     if (log) log(r ? L"DynaRun update hint: the zip on the site differs from the one downloaded last (there may be a newer version)" : L"DynaRun update hint: the zip on the site is the one downloaded last");
-    return r ? 2 : 0;
+    return r ? HINT_ZIPDIFF : HINT_NONE;
 }
 
 
@@ -690,7 +709,7 @@ BOOL pkg_partial(const WCHAR *name, const WCHAR *etagval, DWORD *have)
     static WCHAR p[MAX_PATH], tag[200]; HKEY k; DWORD tn = sizeof(tag) - 2; HANDLE f; LARGE_INTEGER sz; BOOL ok = FALSE;
     pkg_temp_dir(p); lstrcatW(p, L"\\"); lstrcatW(p, name); lstrcatW(p, L".part");
     tag[0] = 0;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\DynaRunFix", 0, KEY_QUERY_VALUE, &k)) {
+    if (app_key_open(APP_USER, KEY_QUERY_VALUE, &k)) {
         if (RegQueryValueExW(k, etagval, NULL, NULL, (BYTE *)tag, &tn)) tag[0] = 0;
         RegCloseKey(k);
     }
@@ -739,70 +758,81 @@ static void zk_init(zkeys *z, const char *pw)
 static BOOL read_at(HANDLE f, DWORD off, void *b, DWORD n)
 { DWORD r; return SetFilePointer(f, off, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER && ReadFile(f, b, n, &r, NULL) && r == n; }
 
-int zip_open(const WCHAR *zip, zipent *e)
+// The one place that finds the central directory: the end-of-central-directory record (searched backwards in the last 64 KB), then the directory itself
+// read into z->cd (cdsize + 1 bytes). z->zip64: one of the EOCD fields holds the Zip64 marker. The readers below add their own rules on top of this.
+typedef struct { BYTE *cd; DWORD cdsize, count, adj; BOOL zip64; } zipcd;
+
+static BOOL zipcd_load(HANDLE f, zipcd *z)
 {
-    HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD size, tail, i, cdoff, cdsize, adj, lho, nl, xl; BYTE *t = NULL, *cd = NULL, *p, lh[30]; int rc = PK_FORMAT;
-    if (f == INVALID_HANDLE_VALUE) return PK_IO;
+    DWORD size, tail, i, cdoff; BYTE *t = NULL; BOOL ok = FALSE;
     crc_init();
-    zero(e, sizeof(*e)); lstrcpynW(e->path, zip, MAX_PATH);
+    zero(z, sizeof(*z));
     size = GetFileSize(f, NULL);
     tail = size < 65557 ? size : 65557;
     if (size < 22 || !(t = alloc(tail)) || !read_at(f, size - tail, t, tail)) goto out;
     for (i = tail - 22 + 1; i-- > 0;) if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) break;
     if (i == (DWORD)-1) goto out;
-    cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
+    z->count = U16(t + i + 10); z->cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
+    z->zip64 = z->count == 0xFFFF || z->cdsize == 0xFFFFFFFF || cdoff == 0xFFFFFFFF;
     // archives that start with the "PK00" spanning marker store offsets without those 4 bytes
-    adj = (cdoff + cdsize + (tail - i) == size) ? 0 : 4;
-    if (cdsize > size || !(cd = alloc(cdsize)) || !read_at(f, cdoff + adj, cd, cdsize)) goto out;
-    for (p = cd; p + 46 <= cd + cdsize && U32(p) == 0x02014b50; p += 46 + nl + U16(p + 30) + U16(p + 32)) {
+    z->adj = (cdoff + z->cdsize + (tail - i) == size) ? 0 : 4;
+    if (z->cdsize > size || !(z->cd = alloc(z->cdsize + 1)) || !read_at(f, cdoff + z->adj, z->cd, z->cdsize)) goto out;
+    ok = TRUE;
+out:
+    release(t);
+    if (!ok) { release(z->cd); z->cd = NULL; }
+    return ok;
+}
+
+// The fields of the central directory entry at p, and where its data starts (from the local header, which must be there).
+static BOOL zipent_fill(HANDLE f, const BYTE *p, DWORD adj, zipent *e)
+{
+    BYTE lh[30]; DWORD lho = U32(p + 42) + adj;
+    e->flags = U16(p + 8); e->method = U16(p + 10); e->dostime = U16(p + 12);
+    e->crc = U32(p + 16); e->csize = U32(p + 20); e->usize = U32(p + 24);
+    if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) return FALSE;
+    e->data = lho + 30 + U16(lh + 26) + U16(lh + 28);
+    return TRUE;
+}
+
+int zip_open(const WCHAR *zip, zipent *e)
+{
+    HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD nl; zipcd z; BYTE *p; int rc = PK_FORMAT;
+    if (f == INVALID_HANDLE_VALUE) return PK_IO;
+    zero(e, sizeof(*e)); lstrcpynW(e->path, zip, MAX_PATH);
+    if (!zipcd_load(f, &z)) goto out;
+    for (p = z.cd; p + 46 <= z.cd + z.cdsize && U32(p) == 0x02014b50; p += 46 + nl + U16(p + 30) + U16(p + 32)) {
         nl = U16(p + 28);
-        if (nl < 4 || p + 46 + nl > cd + cdsize) break;
+        if (nl < 4 || p + 46 + nl > z.cd + z.cdsize) break;
         if (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, (char *)p + 46 + nl - 4, 4, ".msi", 4) != CSTR_EQUAL) continue;
-        e->flags = U16(p + 8); e->method = U16(p + 10); e->dostime = U16(p + 12);
-        e->crc = U32(p + 16); e->csize = U32(p + 20); e->usize = U32(p + 24); lho = U32(p + 42) + adj;
-        if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) break;
-        nl = U16(lh + 26); xl = U16(lh + 28);
-        e->data = lho + 30 + nl + xl;
+        if (!zipent_fill(f, p, z.adj, e)) break;
         rc = (e->method == 0 || e->method == 8) ? PK_OK : PK_FORMAT;
         break;
     }
 out:
-    release(t); release(cd); CloseHandle(f);
+    release(z.cd); CloseHandle(f);
     return rc;
 }
 
 int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx)
 {
     HANDLE f = CreateFileW(zip, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD size, tail, i, cdoff, cdsize, adj, lho, nl, count, seen = 0; BYTE *t = NULL, *cd = NULL, *p, lh[30]; int rc = PK_FORMAT; zipent e;
+    DWORD nl, seen = 0; zipcd z; BYTE *p; int rc = PK_FORMAT; zipent e;
     if (f == INVALID_HANDLE_VALUE) return PK_IO;
-    crc_init();
-    size = GetFileSize(f, NULL);
-    tail = size < 65557 ? size : 65557;
-    if (size < 22 || !(t = alloc(tail)) || !read_at(f, size - tail, t, tail)) goto out;
-    for (i = tail - 22 + 1; i-- > 0;) if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) break;
-    if (i == (DWORD)-1) goto out;
-    count = U16(t + i + 10); cdsize = U32(t + i + 12); cdoff = U32(t + i + 16);
-    if (count == 0xFFFF || cdsize == 0xFFFFFFFF || cdoff == 0xFFFFFFFF) goto out;      // Zip64
-    adj = (cdoff + cdsize + (tail - i) == size) ? 0 : 4;
-    if (cdsize > size || !(cd = alloc(cdsize + 1)) || !read_at(f, cdoff + adj, cd, cdsize)) goto out;
-    for (p = cd; seen < count; p += 46 + nl + U16(p + 30) + U16(p + 32), seen++) {
-        if (p + 46 > cd + cdsize || U32(p) != 0x02014b50) goto out;
+    if (!zipcd_load(f, &z) || z.zip64) goto out;                                       // Zip64 is not read
+    for (p = z.cd; seen < z.count; p += 46 + nl + U16(p + 30) + U16(p + 32), seen++) {
+        if (p + 46 > z.cd + z.cdsize || U32(p) != 0x02014b50) goto out;
         nl = U16(p + 28);
-        if (p + 46 + nl + U16(p + 30) + U16(p + 32) > cd + cdsize) goto out;
+        if (p + 46 + nl + U16(p + 30) + U16(p + 32) > z.cd + z.cdsize) goto out;
         zero(&e, sizeof(e)); lstrcpynW(e.path, zip, MAX_PATH);
-        e.flags = U16(p + 8); e.method = U16(p + 10); e.dostime = U16(p + 12);
-        e.crc = U32(p + 16); e.csize = U32(p + 20); e.usize = U32(p + 24); lho = U32(p + 42);
-        if (e.csize == 0xFFFFFFFF || e.usize == 0xFFFFFFFF || lho == 0xFFFFFFFF) goto out;
-        lho += adj;
-        if (!read_at(f, lho, lh, 30) || U32(lh) != 0x04034b50) goto out;
-        e.data = lho + 30 + U16(lh + 26) + U16(lh + 28);
+        if (U32(p + 20) == 0xFFFFFFFF || U32(p + 24) == 0xFFFFFFFF || U32(p + 42) == 0xFFFFFFFF) goto out;
+        if (!zipent_fill(f, p, z.adj, &e)) goto out;
         if (!fn((const char *)p + 46, nl, &e, ctx)) { rc = PK_CANCEL; goto out; }
     }
     rc = PK_OK;
 out:
-    release(t); release(cd); CloseHandle(f);
+    release(z.cd); CloseHandle(f);
     return rc;
 }
 
@@ -842,57 +872,6 @@ BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir)
         }
     }
     return TRUE;
-}
-
-#define ZIP_MAX_FILES 500
-#define ZIP_MAX_ENTRY (32UL * 1024UL * 1024UL)
-#define ZIP_MAX_TOTAL (96UL * 1024UL * 1024UL)
-
-typedef struct { const WCHAR *dest; volatile LONG *cancel; int files, entries; DWORD total; int rc; } xall;
-
-static BOOL make_dirs(WCHAR *path, int from)        // creates every folder of path beyond the first `from` characters
-{
-    int i;
-    for (i = from; path[i]; i++) {
-        if (path[i] != '\\') continue;
-        path[i] = 0;
-        if (!CreateDirectoryW(path, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) { path[i] = '\\'; return FALSE; }
-        path[i] = '\\';
-    }
-    return TRUE;
-}
-
-static BOOL xall_visit(const char *name, DWORD nlen, const zipent *e, void *ctx)
-{
-    xall *x = (xall *)ctx; static WCHAR path[MAX_PATH]; BOOL isdir; int dl = lstrlenW(x->dest), n, i; DWORD a;
-    if (*x->cancel) { x->rc = PK_CANCEL; return FALSE; }
-    if (!zip_name_safe(name, nlen, &isdir) || (e->flags & 1) || (e->method != 0 && e->method != 8) ||
-        ++x->entries > ZIP_MAX_FILES || e->usize > ZIP_MAX_ENTRY || (x->total += e->usize) > ZIP_MAX_TOTAL ||
-        dl + 2 + (int)nlen >= MAX_PATH - 1) { x->rc = PK_FORMAT; return FALSE; }
-    lstrcpyW(path, x->dest); path[dl] = '\\';
-    n = MultiByteToWideChar((e->flags & 0x800) ? CP_UTF8 : CP_OEMCP, 0, name, isdir ? (int)nlen - 1 : (int)nlen, path + dl + 1, MAX_PATH - dl - 2);
-    if (n <= 0) { x->rc = PK_FORMAT; return FALSE; }
-    path[dl + 1 + n] = 0;
-    for (i = dl + 1; path[i]; i++) if (path[i] == '/') path[i] = '\\';
-    if (!make_dirs(path, dl + 1) || (isdir && !CreateDirectoryW(path, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)) { x->rc = PK_IO; return FALSE; }
-    if (isdir) return TRUE;
-    a = GetFileAttributesW(path);
-    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) { x->rc = PK_FORMAT; return FALSE; }   // a file named like a folder made earlier
-    x->rc = zip_extract(e, "", path, NULL, x->cancel);
-    if (x->rc == PK_PASSWORD) x->rc = PK_FORMAT;              // CRC or size mismatch: the entry is damaged
-    if (x->rc != PK_OK) return FALSE;
-    x->files++;
-    return TRUE;
-}
-
-int zip_extract_all(const WCHAR *zip, const WCHAR *dest, volatile LONG *cancel, int *nfiles)
-{
-    xall x; int rc;
-    zero(&x, sizeof(x)); x.dest = dest; x.cancel = cancel; x.rc = PK_OK;
-    rc = zip_walk(zip, xall_visit, &x);
-    if (nfiles) *nfiles = x.files;
-    if (rc == PK_CANCEL) return x.rc != PK_OK ? x.rc : PK_CANCEL;
-    return rc;
 }
 
 /* ---------- the files of a package named in a pinned table: safe unpacking, copying and checking ---------- */
@@ -1053,9 +1032,9 @@ void pkg_check_files(const WCHAR *dir, const WCHAR *sub, const pkg_file *t, int 
     WCHAR p[MAX_PATH]; ULONGLONG sz; int i; DWORD a;
     zero(c, sizeof(*c));
     for (i = 0; i < n; i++) {
-        if (!pkg_file_path(p, dir, sub, t, i) || (a = GetFileAttributesW(p)) == INVALID_FILE_ATTRIBUTES) { c->st[i] = 2; c->missing++; continue; }
-        if ((a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || !pkg_sha256(p, c->hex[i], &sz)) { c->st[i] = 1; c->differ++; c->hex[i][0] = 0; continue; }
-        if (lstrcmpiW(c->hex[i], expect ? expect[i] : t[i].sha)) { c->st[i] = 1; c->differ++; continue; }
+        if (!pkg_file_path(p, dir, sub, t, i) || (a = GetFileAttributesW(p)) == INVALID_FILE_ATTRIBUTES) { c->st[i] = PKC_MISSING; c->missing++; continue; }
+        if ((a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || !pkg_sha256(p, c->hex[i], &sz)) { c->st[i] = PKC_DIFFER; c->differ++; c->hex[i][0] = 0; continue; }
+        if (lstrcmpiW(c->hex[i], expect ? expect[i] : t[i].sha)) { c->st[i] = PKC_DIFFER; c->differ++; continue; }
         c->ok++;
     }
 }
@@ -1304,15 +1283,11 @@ WCHAR *msi_external_files(const WCHAR *msi)
 int run_msiexec(const WCHAR *msi)
 {
     static WCHAR exe[MAX_PATH], cmd[MAX_PATH * 2 + 64];
-    STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = 1;
+    DWORD rc = 1;
     GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
     wsprintfW(cmd, L"\"%s\" /i \"%s\" /qb! REBOOT=ReallySuppress", exe, msi);
-    zero(&si, sizeof(si)); si.cb = sizeof(si);
     AllowSetForegroundWindow(ASFW_ANY);   // msiexec's progress window may come to the front
-    if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &rc);
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if (run_process(exe, cmd, NULL, 0, FALSE, INFINITE, &rc) == PROC_NOSTART) return (int)GetLastError();
     return (int)rc;
 }
 
@@ -1322,20 +1297,16 @@ BOOL dynarun_product(WCHAR *out)
     return !MsiEnumRelatedProductsW(L"" DYNARUN_UPGRADE_CODE, 0, 0, out);
 }
 
-// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; -1 = not installed.
+// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; RM_NONE = not installed.
 int remove_dynarun(void)
 {
     static WCHAR exe[MAX_PATH], cmd[MAX_PATH + 96], prod[40];
-    STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = 1;
-    if (!dynarun_product(prod)) return -1;
+    DWORD rc = 1;
+    if (!dynarun_product(prod)) return RM_NONE;
     GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
     wsprintfW(cmd, L"\"%s\" /x %s /qb! REBOOT=ReallySuppress", exe, prod);
-    zero(&si, sizeof(si)); si.cb = sizeof(si);
     AllowSetForegroundWindow(ASFW_ANY);
-    if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return (int)GetLastError();
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &rc);
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if (run_process(exe, cmd, NULL, 0, FALSE, INFINITE, &rc) == PROC_NOSTART) return (int)GetLastError();
     return (int)rc;
 }
 
@@ -1348,29 +1319,32 @@ static BOOL name_listed(const WCHAR *list, const WCHAR *name)
     return FALSE;
 }
 
-static int hydrate_tree(const WCHAR *dir, const WCHAR *names)
+static int hydrate_tree(const WCHAR *dir, const WCHAR *names);
+typedef struct { const WCHAR *names; int count; } hydrate_ctx;
+
+static BOOL hydrate_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
 {
     static BYTE buf[CHUNK];
-    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); WIN32_FIND_DATAW fd; HANDLE f, h; DWORD n; int count = 0;
+    hydrate_ctx *c = vc; HANDLE h; DWORD n;
+    if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { c->count += hydrate_tree(p, c->names); return TRUE; }
+    if (!(fd->dwFileAttributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE))) return TRUE;
+    if (!name_listed(c->names, fd->cFileName)) return TRUE;
+    h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (h == INVALID_HANDLE_VALUE) return TRUE;
+    while (ReadFile(h, buf, sizeof(buf), &n, NULL) && n) ;
+    CloseHandle(h);
+    c->count++;
+    return TRUE;
+}
+
+static int hydrate_tree(const WCHAR *dir, const WCHAR *names)
+{
+    WCHAR *p = alloc(2 * MAX_PATH * sizeof(WCHAR)); hydrate_ctx c;
     if (!p) return 0;
-    lstrcpyW(p, dir); lstrcatW(p, L"\\*");
-    if ((f = FindFirstFileW(p, &fd)) != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == '.' || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-            lstrcpyW(p, dir); lstrcatW(p, L"\\"); lstrcatW(p, fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { count += hydrate_tree(p, names); continue; }
-            if (!(fd.dwFileAttributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE))) continue;
-            if (!name_listed(names, fd.cFileName)) continue;
-            h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-            if (h == INVALID_HANDLE_VALUE) continue;
-            while (ReadFile(h, buf, sizeof(buf), &n, NULL) && n) ;
-            CloseHandle(h);
-            count++;
-        } while (FindNextFileW(f, &fd));
-        FindClose(f);
-    }
+    c.names = names; c.count = 0;
+    dir_walk(dir, p, 2 * MAX_PATH, MAX_PATH, hydrate_entry, &c);
     release(p);
-    return count;
+    return c.count;
 }
 
 // The setup also installs manuals and example data to Documents\Dyna Pro Dynamometers. When Documents

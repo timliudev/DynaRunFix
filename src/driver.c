@@ -30,7 +30,12 @@
 #include <sddl.h>
 #include <aclapi.h>
 #include <wbemidl.h>
-#include "setup.h"
+#include "drf_app.h"
+#include "drf_util.h"
+#include "drf_package.h"
+#include "drf_driver.h"
+#include "drf_driver_internal.h"
+#include "drf_wizard.h"
 
 // SHA-256 of "Dyna Pro USB.zip" as served by Dyna Pro on 2026-10-15 (2335114 bytes; Last-Modified 2026-05-09). A different file is never installed.
 #define DRIVER_ZIP_SHA256 L"c3ae487018956767d65a08e3d5cd8434da42cdce81988753515ee0f72c49e943"
@@ -38,7 +43,6 @@
 #define TASK_NAME         L"DynaRunFix-DriverContinue"
 enum { BDE_PS_ERROR = -2, BDE_PS_NONE = -1, BDE_PS_OFF = 0, BDE_PS_ON = 1, BDE_PS_UNKNOWN = 2 };   // protection status (WMI values, plus ours)
 #define BDE_VALUE         L"DriverBitLockerSuspended"       // HKLM\SOFTWARE\DynaRunFix: 1 while we have BitLocker suspended until the driver is installed
-#define DRV_APPKEY        L"SOFTWARE\\DynaRunFix"
 #define SETUP_NAME        L"DynaRunFix-Setup.exe"
 #define BUS_INF_REL       L"\\driver\\Dyna Pro USB\\ftdibus.inf"
 #define PORT_INF_REL      L"\\driver\\Dyna Pro USB\\ftdiport.inf"
@@ -257,8 +261,7 @@ BOOL driver_installed(void)
     lstrcpyW(pat, dir); lstrcatW(pat, L"\\oem*.inf");
     if ((h = FindFirstFileW(pat, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
     do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(f, dir); lstrcatW(f, L"\\"); lstrcatW(f, fd.cFileName);
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !path_join(f, MAX_PATH, dir, fd.cFileName)) continue;
         if ((d = slurp(f, &n, 2 * 1024 * 1024))) { found = drv_inf_matches(d, n); release(d); }
     } while (!found && FindNextFileW(h, &fd));
     FindClose(h);
@@ -391,8 +394,8 @@ static void check_report(const drv_check *c, WCHAR *out, int cch)
     WCHAR line[200], a[17], e[17]; int i;
     out[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 0) continue;
-        if (c->st[i] == 2) wsprintfW(line, T(L"  %s: missing\n", L"  %s：缺少\n"), DRV_FILES[i].rel);
+        if (c->st[i] == PKC_OK) continue;
+        if (c->st[i] == PKC_MISSING) wsprintfW(line, T(L"  %s: missing\n", L"  %s：缺少\n"), DRV_FILES[i].rel);
         else {
             lstrcpynW(a, c->hex[i][0] ? c->hex[i] : L"?", 17); lstrcpynW(e, DRV_FILES[i].sha, 17);
             wsprintfW(line, T(L"  %s: %s... (expected %s...)\n", L"  %s：%s…（已知 %s…）\n"), DRV_FILES[i].rel, a, e);
@@ -452,23 +455,6 @@ static BOOL zip_scan(const WCHAR *zip, BOOL *known, BOOL *sane, WCHAR *rep, int 
 // For the search of the user's folders: a zip whose pinned files are all there and right, whatever the zip is called or how it was packed.
 static BOOL zip_has_all(const WCHAR *zip) { return pkg_zip_has(zip, DRV_FILES, DRV_NFILES, DRV_MAX_FILE) == DRV_NFILES; }   // cheap: only the central directory is read
 
-static BOOL zip_known_cb(const WCHAR *zip)
-{
-    static WCHAR l[2 * MAX_PATH + 300], hex[65], rep[1500]; WIN32_FILE_ATTRIBUTE_DATA fa; ULONGLONG sz = 0; BOOL known = FALSE, sane = FALSE, ok;
-    if (GetFileAttributesExW(zip, GetFileExInfoStandard, &fa)) sz = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
-    wsprintfW(l, L"driver zip candidate %s (%lu bytes): ", zip, (DWORD)sz);
-    if (!zip_has_all(zip)) { lstrcatW(l, L"not a driver package (not all of the 18 installed files are in it)"); user_log(l); return FALSE; }
-    ok = zip_scan(zip, &known, &sane, rep, 1500);
-    if (!ok) lstrcatW(l, L"the files could not be unpacked for the check");
-    else if (known) {
-        lstrcatW(l, L"all 18 installed files match the pinned ones");
-        if (pkg_sha256(zip, hex, &sz)) { lstrcatW(l, L"; zip SHA-256 "); lstrcatW(l, hex); lstrcatW(l, lstrcmpiW(hex, DRIVER_ZIP_SHA256) ? L" (not the official zip as a whole)" : L" (the official zip)"); }
-    } else lstrcatW(l, sane ? L"all 18 files are there but some differ from the pinned ones" : L"files differ or are missing");
-    user_log(l);
-    if (ok && !known && rep[0]) user_log(rep);
-    return ok && known;
-}
-
 /* ---------- an already unpacked driver folder ---------- */
 
 static BOOL write_utf16_file(const WCHAR *path, const WCHAR *text, int chars);
@@ -487,6 +473,8 @@ static BOOL dir_layout_ok(const WCHAR *dir)
     return TRUE;
 }
 
+static BOOL dir_layout_cb(const WCHAR *dir, void *ctx) { (void)ctx; return dir_layout_ok(dir); }
+
 static BOOL bus_inf_loose_at(const WCHAR *dir)
 {
     WCHAR p[MAX_PATH]; BYTE *d; DWORD n = 0; BOOL ok = FALSE;
@@ -502,7 +490,7 @@ static BOOL digest_of(const drv_check *c, const WCHAR *tmp, WCHAR *hex)
     static WCHAR t[DRV_MAXF * 100]; ULONGLONG sz; int i; BOOL ok;
     t[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 2 || !c->hex[i][0]) return FALSE;
+        if (c->st[i] == PKC_MISSING || !c->hex[i][0]) return FALSE;
         lstrcatW(t, L";"); lstrcatW(t, DRV_FILES[i].rel); lstrcatW(t, L"|"); lstrcatW(t, c->hex[i]);
     }
     if (!write_utf16_file(tmp, t, lstrlenW(t))) return FALSE;
@@ -511,18 +499,36 @@ static BOOL digest_of(const drv_check *c, const WCHAR *tmp, WCHAR *hex)
     return ok;
 }
 
-// For the search: a folder whose pinned files are all there and right (counts like a zip with the right content; no zip hash exists, only a log line).
-static WCHAR g_other_dir[MAX_PATH];                // the first folder met on the way with all 18 files of which some differ (see driver_fetch: no second walk)
+// What the search for a package on this computer carries along: whether the candidate is a folder (else a zip), and, for folders, the first one met
+// on the way with all 18 files of which some differ (kept so driver_fetch needs no second walk).
+typedef struct { BOOL isdir; WCHAR other[MAX_PATH]; } known_ctx;
 
-static BOOL dir_known_cb(const WCHAR *dir)
+// For the search of the user's folders: a zip, or an unpacked folder, whose pinned files are all there and right, whatever the zip is called or how it
+// was packed (a folder counts like a zip with the right content; no zip hash exists for it, only a log line).
+static BOOL known_cb(const WCHAR *path, void *vctx)
 {
-    static WCHAR l[2 * MAX_PATH + 200]; static drv_check c;
-    if (!dir_layout_ok(dir)) return FALSE;
-    check_files_at(dir, L"\\", NULL, &c);
-    wsprintfW(l, L"driver folder candidate %s: %d of 18 installed files match the pinned ones, %d differ, %d missing", dir, c.ok, c.differ, c.missing);
+    known_ctx *k = (known_ctx *)vctx;
+    static WCHAR l[2 * MAX_PATH + 300], hex[65], rep[1500]; static drv_check c; WIN32_FILE_ATTRIBUTE_DATA fa; ULONGLONG sz = 0; BOOL known = FALSE, sane = FALSE, ok;
+    if (k->isdir) {
+        if (!dir_layout_ok(path)) return FALSE;
+        check_files_at(path, L"\\", NULL, &c);
+        wsprintfW(l, L"driver folder candidate %s: %d of 18 installed files match the pinned ones, %d differ, %d missing", path, c.ok, c.differ, c.missing);
+        user_log(l);
+        if (c.ok != DRV_NFILES && !k->other[0] && c.missing == 0 && bus_inf_loose_at(path)) lstrcpyW(k->other, path);
+        return c.ok == DRV_NFILES;
+    }
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, &fa)) sz = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+    wsprintfW(l, L"driver zip candidate %s (%lu bytes): ", path, (DWORD)sz);
+    if (!zip_has_all(path)) { lstrcatW(l, L"not a driver package (not all of the 18 installed files are in it)"); user_log(l); return FALSE; }
+    ok = zip_scan(path, &known, &sane, rep, 1500);
+    if (!ok) lstrcatW(l, L"the files could not be unpacked for the check");
+    else if (known) {
+        lstrcatW(l, L"all 18 installed files match the pinned ones");
+        if (pkg_sha256(path, hex, &sz)) { lstrcatW(l, L"; zip SHA-256 "); lstrcatW(l, hex); lstrcatW(l, lstrcmpiW(hex, DRIVER_ZIP_SHA256) ? L" (not the official zip as a whole)" : L" (the official zip)"); }
+    } else lstrcatW(l, sane ? L"all 18 files are there but some differ from the pinned ones" : L"files differ or are missing");
     user_log(l);
-    if (c.ok != DRV_NFILES && !g_other_dir[0] && c.missing == 0 && bus_inf_loose_at(dir)) lstrcpyW(g_other_dir, dir);
-    return c.ok == DRV_NFILES;
+    if (ok && !known && rep[0]) user_log(rep);
+    return ok && known;
 }
 
 // For the search when nothing matched: a folder with all 18 files where some differ and the bus INF names the Dyna Pro device id ("install anyway" may be offered).
@@ -535,12 +541,12 @@ static BOOL dir_other_cb(const WCHAR *dir)
 }
 
 // No zip with the right content: the newest zip called "Dyna Pro USB*" (our own cache first). It goes the way of a download that differs.
-static BOOL driver_local_other(WCHAR *zip)
+static BOOL driver_local_other(WCHAR *zip, const pkg_search *s)
 {
     WCHAR own[MAX_PATH];
     pkg_temp_dir(own); lstrcatW(own, L"\\" DRIVER_ZIP_NAME);
     if (exists(own)) { lstrcpyW(zip, own); return TRUE; }
-    return pkg_find_zip_named(L"Dyna Pro USB", zip);
+    return pkg_find_zip_named(L"Dyna Pro USB", s, zip);
 }
 
 // Our own cache file is not the user's: a download that was refused (or that failed the checks) must not be offered again as a "local copy".
@@ -576,7 +582,8 @@ int driver_check(WCHAR *path, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep,
     if (a == INVALID_FILE_ATTRIBUTES) return DRV_E_HASH;
     if (a & FILE_ATTRIBUTE_DIRECTORY) {
         *how |= DRV_SRC_DIR;
-        if (!pkg_find_dir_in(path, 2, dir_layout_ok, d)) { zip_note(path, L"no ftdibus.inf with i386 and amd64 folders in it"); return DRV_E_HASH; }
+        static const pkg_search layout = { dir_layout_cb, NULL, NULL };
+        if (!pkg_find_dir_in(path, 2, &layout, d)) { zip_note(path, L"no ftdibus.inf with i386 and amd64 folders in it"); return DRV_E_HASH; }
         lstrcpyW(path, d);
         check_files_at(path, L"\\", NULL, &c);
         if (c.ok == DRV_NFILES) return PK_OK;
@@ -606,22 +613,25 @@ int driver_check(WCHAR *path, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep,
 int driver_fetch(WCHAR *zip, progress_fn cb, volatile LONG *cancel, DWORD *err, int *how, WCHAR *hex, ULONGLONG *size, WCHAR *rep, int repcch)
 {
     int rc, hw; BOOL skip_other = g_skip_other;                                 // kept for the whole run, so resume and retry do not offer the declined copy again
+    static known_ctx kz, kd;                                                   // the zip search and the folder search (kd.other: the walk's second result)
+    pkg_search sz, sd;
     *how = DRV_SRC_DOWNLOADED; hex[0] = 0; *size = 0; if (rep) rep[0] = 0;
-    g_pkg_log = user_log;                                                      // the folder search says which folders it looks in
-    g_other_dir[0] = 0;
+    zero(&kz, sizeof(kz)); zero(&kd, sizeof(kd)); kd.isdir = TRUE;
+    sz.accept = known_cb; sz.ctx = &kz; sz.log = user_log;                     // the searches say which folders they look in
+    sd.accept = known_cb; sd.ctx = &kd; sd.log = user_log;
     user_log(L"driver_fetch: looking for a copy of the driver on this computer");
     if (cb) cb((DWORD)-1, 2);                                                  // the page shows "looking" (a moving bar) until a download starts
     // 1. a copy whose driver files are the pinned ones (a zip of any name or packing, or an unpacked folder): nothing to download
     pkg_temp_dir(zip); lstrcatW(zip, L"\\" DRIVER_ZIP_NAME);
-    if (((exists(zip) && zip_known_cb(zip)) || pkg_find_zip_if(DRV_MAX_ZIP, zip_known_cb, zip)) ||
-        pkg_find_dirs(dir_known_cb, zip)) {
+    if (((exists(zip) && known_cb(zip, &kz)) || pkg_find_zip_if(DRV_MAX_ZIP, &sz, zip)) ||
+        pkg_find_dirs(&sd, zip)) {
         hw = driver_check(zip, how, hex, size, rep, repcch);
         if (hw == PK_OK) { zip_note(zip, L"found on this computer, its driver files match the pinned ones: nothing is downloaded"); return PK_OK; }
     }
     // 2. a zip called "Dyna Pro USB*", or a folder with all 18 files, whose files differ goes the way of a download that differs: sanity checks, then the
     //    user is asked. One that is not a usable driver package is skipped (logged) and the official site is tried.
     if (skip_other) user_log(L"the user declined a local copy that differs: not offered again, the official site is used");
-    if (!skip_other && (driver_local_other(zip) || (g_other_dir[0] && lstrcpyW(zip, g_other_dir)))) {   // (the folders were walked once, above)
+    if (!skip_other && (driver_local_other(zip, &sz) || (kd.other[0] && lstrcpyW(zip, kd.other)))) {   // (the folders were walked once, above)
         hw = driver_check(zip, how, hex, size, rep, repcch);
         if (hw == PK_OK || hw == DRV_W_HASH) return hw;
         zip_note(zip, L"differs from the pinned files and is not a usable driver package: skipped");
@@ -674,29 +684,24 @@ static void drv_log2(const WCHAR *what, const WCHAR *arg, DWORD v)
 }
 
 // "tool args", hidden, waited for; its exit code, or (DWORD)-1 when it could not be started or did not finish in 3 minutes.
-static DWORD g_tool_ok_code;                       // an exit code that is not an error for the next run_tool (and what it means), see cancel_locked
-static const WCHAR *g_tool_ok_text;
-
-static DWORD run_tool(const WCHAR *tool, const WCHAR *args)
+// ok_text (NULL: none): what the exit code ok_code means when it is not an error (only the log line differs), see cancel_locked.
+static DWORD run_tool_ok(const WCHAR *tool, const WCHAR *args, DWORD ok_code, const WCHAR *ok_text)
 {
-    static WCHAR win[MAX_PATH], exe[MAX_PATH]; WCHAR *cmd; STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = (DWORD)-1;
+    static WCHAR win[MAX_PATH], exe[MAX_PATH]; WCHAR *cmd; DWORD rc = (DWORD)-1;
     if (!GetWindowsDirectoryW(win, MAX_PATH - 40) || !drv_sys_tool(win, is_wow64(), tool, exe, MAX_PATH) || !exists(exe)) { drv_log2(tool, L"not found", rc); return rc; }
     if (!(cmd = alloc((lstrlenW(exe) + lstrlenW(args) + 8) * sizeof(WCHAR)))) return rc;
     lstrcpyW(cmd, L"\""); lstrcatW(cmd, exe); lstrcatW(cmd, L"\" "); lstrcatW(cmd, args);
-    zero(&si, sizeof(si)); si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, win, &si, &pi)) {
-        if (WaitForSingleObject(pi.hProcess, 180000) != WAIT_OBJECT_0) TerminateProcess(pi.hProcess, 1);
-        else GetExitCodeProcess(pi.hProcess, &rc);
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    }
-    if (g_tool_ok_text && rc == g_tool_ok_code) {
+    run_process(exe, cmd, win, CREATE_NO_WINDOW, TRUE, 180000, &rc);     // (not started, or no end in 3 minutes: rc stays -1)
+    if (ok_text && rc == ok_code) {
         static WCHAR l[2 * MAX_PATH + 240];
-        lstrcpyW(l, tool); lstrcatW(l, L" "); lstrcatW(l, args); lstrcatW(l, L" -> "); lstrcatW(l, g_tool_ok_text);
+        lstrcpyW(l, tool); lstrcatW(l, L" "); lstrcatW(l, args); lstrcatW(l, L" -> "); lstrcatW(l, ok_text);
         drv_log(l);
     } else drv_log2(tool, args, rc);
     release(cmd);
     return rc;
 }
+
+static DWORD run_tool(const WCHAR *tool, const WCHAR *args) { return run_tool_ok(tool, args, 0, NULL); }
 
 // Recovery passwords: 8 groups of 6 digits separated by '-'. Found by that pattern (any run of at least two such groups), not by a label, so it
 // works in every language; the digits become '*', the '-' stay. Key protector IDs (GUIDs) are not touched.
@@ -841,8 +846,7 @@ static BOOL make_base(const WCHAR *base, BOOL keep_exe, const WCHAR *sid)
     if (!exists(base) || path_user_writable(base, sid)) { base_fail(L"the folder is not protected (owner or permissions)"); return FALSE; }
     if (keep_exe) {                                                              // the kept setup copy: its owner and permissions are ours too
         WCHAR f[MAX_PATH];
-        if (lstrlenW(base) + lstrlenW(KEEP) + 2 >= MAX_PATH) { base_fail(L"the path is too long"); return FALSE; }
-        lstrcpyW(f, base); lstrcatW(f, L"\\"); lstrcatW(f, KEEP);
+        if (!path_join(f, MAX_PATH, base, KEEP)) { base_fail(L"the path is too long"); return FALSE; }
         if (exists(f)) {
             if (!plain_single_file(f)) { base_fail(L"the kept setup file is a link or has several links"); return FALSE; }
             reset_security(f, SDDL_FILE);
@@ -881,7 +885,7 @@ static BOOL write_accepted(const WCHAR *base, const drv_check *c)
     static WCHAR t[DRV_MAXF * 100]; WCHAR f[MAX_PATH]; int i;
     t[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 2 || !c->hex[i][0]) return FALSE;
+        if (c->st[i] == PKC_MISSING || !c->hex[i][0]) return FALSE;
         lstrcatW(t, L";"); lstrcatW(t, DRV_FILES[i].rel); lstrcatW(t, L"|"); lstrcatW(t, c->hex[i]);
     }
     lstrcatW(t, L";");
@@ -1069,7 +1073,7 @@ static int bde_protection(const WCHAR *drive) { return bde_query(drive, NULL); }
 static BOOL bde_flag(void)
 {
     HKEY k; DWORD v = 0, n = 4;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, KEY_QUERY_VALUE, &k)) return FALSE;
+    if (!app_key_open(APP_MACHINE, KEY_QUERY_VALUE, &k)) return FALSE;
     if (RegQueryValueExW(k, BDE_VALUE, NULL, NULL, (BYTE *)&v, &n)) v = 0;
     RegCloseKey(k);
     return v == 1;
@@ -1079,8 +1083,8 @@ static void set_bde_flag(BOOL on)
 {
     HKEY k; DWORD v = 1;
     if (on) {
-        if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) { RegSetValueExW(k, BDE_VALUE, 0, REG_DWORD, (const BYTE *)&v, 4); RegCloseKey(k); }
-    } else if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, BDE_VALUE); RegCloseKey(k); }
+        if (app_key_create(APP_MACHINE, &k)) { RegSetValueExW(k, BDE_VALUE, 0, REG_DWORD, (const BYTE *)&v, 4); RegCloseKey(k); }
+    } else if (app_key_open(APP_MACHINE, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, BDE_VALUE); RegCloseKey(k); }
 }
 
 static void bde_resume(void)                    // BitLocker protection on again, if we are the ones who suspended it
@@ -1102,9 +1106,7 @@ static void bde_resume(void)                    // BitLocker protection on again
 static void cancel_locked(void)
 {
     run_tool(L"schtasks.exe", L"/delete /tn " TASK_NAME L" /f");
-    g_tool_ok_code = 1; g_tool_ok_text = L"not present (1: the start-up menu had already used the one-time option up): nothing to remove";
-    run_tool(L"bcdedit.exe", L"/deletevalue {current} onetimeadvancedoptions");
-    g_tool_ok_text = NULL;
+    run_tool_ok(L"bcdedit.exe", L"/deletevalue {current} onetimeadvancedoptions", 1, L"not present (1: the start-up menu had already used the one-time option up): nothing to remove");
     { WCHAR b[MAX_PATH], f[MAX_PATH]; base_dir(b); if (accept_path(f, b)) DeleteFileW(f); }   // an "install anyway" acceptance ends with the driver step
     bde_resume();
 }
@@ -1112,40 +1114,41 @@ static void cancel_locked(void)
 static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR base[MAX_PATH], p[MAX_PATH + 40], z[MAX_PATH + 40], args[2 * MAX_PATH + 80], hex[65], xml[3000], dr[4];
-    ULONGLONG size; volatile LONG nocancel = 0; int n, files, ps; BOOL bde_warn = FALSE, suspend, partly; bde_info bi;
+    ULONGLONG size; volatile LONG nocancel = 0; int n, files, ps, res = DRV_SUCCESS; BOOL bde_warn = FALSE, suspend, partly; bde_info bi;
     BOOL stage = lstrcmpW(zip, L"-") != 0, inside, fromdir = FALSE;
-    if (!valid_user_sid(sid)) return DRV_E_SID;
+    BOOL drop_staged = FALSE, undo = FALSE, resume = FALSE;                    // what the one exit has to do: remove base\driver, cancel_locked, bde_resume
+    if (!valid_user_sid(sid)) { res = DRV_E_SID; goto out; }
     if (stage) { DWORD fa = GetFileAttributesW(zip); fromdir = fa != INVALID_FILE_ATTRIBUTES && (fa & FILE_ATTRIBUTE_DIRECTORY) && !(fa & FILE_ATTRIBUTE_REPARSE_POINT); }
     base_dir(base);
-    if (lstrlenW(base) + 40 >= MAX_PATH) return DRV_E_DIR;
+    if (lstrlenW(base) + 40 >= MAX_PATH) { res = DRV_E_DIR; goto out; }
     lstrcpyW(p, base); lstrcatW(p, L"\\" SETUP_NAME);
     inside = !lstrcmpiW(g_self, p);
     if (stage) {
         static drv_check chk;
-        if (!make_base(base, inside, sid)) return DRV_E_DIR;
+        if (!make_base(base, inside, sid)) { res = DRV_E_DIR; goto out; }
         log_in_base(base, sid);
         drv_log(L"prep: staging");
         lstrcpyW(args, base); lstrcatW(args, L"\\driver");
         if (fromdir) {                                                         // an already unpacked folder: the pinned files are copied from it
             drv_log(L"prep: staging from an unpacked folder:"); drv_log(zip);
-            if (!CreateDirectoryW(args, NULL)) return DRV_E_EXTRACT;           // make_base left the folder empty: this one is new
+            if (!CreateDirectoryW(args, NULL)) { res = DRV_E_EXTRACT; goto out; }   // make_base left the folder empty: this one is new
             n = stage_from_dir(zip, args, &files);
         } else {
             lstrcpyW(z, base); lstrcatW(z, L"\\driver.zip");
-            if (!CopyFileW(zip, z, TRUE)) return DRV_E_COPY;                  // our own copy, in the administrators-only folder: what is read is this copy
-            if (!pkg_sha256(z, hex, &size)) { DeleteFileW(z); return DRV_E_HASH; }
+            if (!CopyFileW(zip, z, TRUE)) { res = DRV_E_COPY; goto out; }          // our own copy, in the administrators-only folder: what is read is this copy
+            if (!pkg_sha256(z, hex, &size)) { DeleteFileW(z); res = DRV_E_HASH; goto out; }
             drv_log2(L"prep: sha256 of the zip", hex, 0);
-            if (!CreateDirectoryW(args, NULL)) { DeleteFileW(z); return DRV_E_EXTRACT; }     // make_base left the folder empty: this one is new
+            if (!CreateDirectoryW(args, NULL)) { DeleteFileW(z); res = DRV_E_EXTRACT; goto out; }     // make_base left the folder empty: this one is new
             n = stage_files(z, args, &nocancel, &files);                       // only the pinned files, into folders made here; files: how many are missing
             DeleteFileW(z);
         }
         drv_log2(L"prep: pinned files missing in the source", NULL, files);
-        if (n != PK_OK || files) { delete_tree(args, NULL, 0); return DRV_E_EXTRACT; }
+        if (n != PK_OK || files) { drop_staged = TRUE; res = DRV_E_EXTRACT; goto out; }
         // what is hashed now are the staged copies, and those are what pnputil installs: there is no second extraction between the check and the install
         check_files(args, NULL, &chk);
         if (fromdir) {                                                         // no zip hash: the digest of the staged files' hashes is what "install anyway" is bound to
             lstrcpyW(z, base); lstrcatW(z, L"\\digest.tmp");
-            if (!digest_of(&chk, z, hex)) { delete_tree(args, NULL, 0); return DRV_E_HASH; }
+            if (!digest_of(&chk, z, hex)) { drop_staged = TRUE; res = DRV_E_HASH; goto out; }
         }
         drv_log2(L"prep: staged files that are the pinned ones", NULL, chk.ok);
         if (chk.ok == DRV_NFILES) {
@@ -1157,16 +1160,15 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
             WCHAR rep[1500];
             drv_log(L"prep: the staged files are not the pinned ones and were not accepted:");
             check_report(&chk, rep, 1500); drv_log(rep);
-            delete_tree(args, NULL, 0);
-            return DRV_E_HASH;
+            drop_staged = TRUE; res = DRV_E_HASH; goto out;
         }
-        if (!staged_ok(base)) return DRV_E_INF;
+        if (!staged_ok(base)) { drop_staged = TRUE; res = DRV_E_INF; goto out; }
     } else {                                                                   // a retry: the staged driver must still be ours
-        if (!exists(base) || path_user_writable(base, sid)) return DRV_E_DIR;
+        if (!exists(base) || path_user_writable(base, sid)) { res = DRV_E_DIR; goto out; }
         log_in_base(base, sid);
-        if (!staged_ok(base)) return DRV_E_INF;
+        if (!staged_ok(base)) { res = DRV_E_INF; goto out; }
     }
-    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) return DRV_E_COPY;     // the task starts this copy
+    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) { drop_staged = stage; res = DRV_E_COPY; goto out; }     // the task starts this copy (a first attempt ends here: nothing is armed, the next one stages again; a retry keeps the staged files)
     // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
     // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry suspends again and starts the count over.
     // "Not encrypted" is not an error.
@@ -1209,16 +1211,24 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
         // Everything else is armed; the wizard lets the user decide (DRV_W_BDE). "Not readable / no BitLocker" with a failing manage-bde is no warning.
         if ((ps == BDE_PS_ON || ps == BDE_PS_UNKNOWN) && (rc != 0 || after == BDE_PS_ON || after == BDE_PS_UNKNOWN)) bde_warn = TRUE;
     }
-    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { bde_resume(); return DRV_E_BCD; }
+    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { drop_staged = stage; resume = TRUE; res = DRV_E_BCD; goto out; }
     n = drv_task_xml(xml, 3000, sid, p);
     lstrcpyW(z, base); lstrcatW(z, L"\\task.xml");
-    if (n < 0 || !write_utf16_file(z, xml, n)) { cancel_locked(); return DRV_E_TASK; }
+    if (n < 0 || !write_utf16_file(z, xml, n)) { drop_staged = stage; undo = TRUE; res = DRV_E_TASK; goto out; }
     lstrcpyW(args, L"/create /tn " TASK_NAME L" /xml \""); lstrcatW(args, z); lstrcatW(args, L"\" /f");
     n = (int)run_tool(L"schtasks.exe", args);
     DeleteFileW(z);
-    if (n != 0) { cancel_locked(); return DRV_E_TASK; }
+    if (n != 0) { drop_staged = stage; undo = TRUE; res = DRV_E_TASK; goto out; }
     drv_log(bde_warn ? L"prep: done, but BitLocker could not be suspended" : L"prep: done");
-    return bde_warn ? DRV_W_BDE : DRV_SUCCESS;
+    res = bde_warn ? DRV_W_BDE : DRV_SUCCESS;
+out:
+    if (drop_staged) {                                                         // a first attempt that failed: neither the staged files nor an "install anyway" acceptance outlive it
+        lstrcpyW(args, base); lstrcatW(args, L"\\driver"); delete_tree(args, NULL, 0);
+        if (accept_path(z, base)) DeleteFileW(z);
+    }
+    if (undo) cancel_locked();
+    if (resume) bde_resume();
+    return res;
 }
 
 static int install_locked(void)
@@ -1246,45 +1256,45 @@ static int install_locked(void)
 
 /* ---------- from the wizard (not elevated): run the elevated parts ---------- */
 
-int driver_prep(const WCHAR *zip, const WCHAR *accept)
+int driver_prep(const install_opts *o, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 300];
-    if (!user_sid(sid, 200)) return 1;
+    if (!user_sid(sid, 200)) return RC_FAIL;
     if (is_admin()) return prep_locked(sid, zip, accept);
     if (accept && accept[0]) wsprintfW(args, L"/driver-prep %s \"%s\" /unverified %s", sid, zip, accept);
     else wsprintfW(args, L"/driver-prep %s \"%s\"", sid, zip);
-    return run_elevated(args, NULL);
+    return run_elevated(args, NULL, o);
 }
 
 // Called by the elevated install stage (setup.c, /machine /full ... /with-driver): the driver's preparation in the same process as the fix, so that
 // one UAC prompt serves both. sid: the user the stage was started for.
 int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
 {
-    if (!is_admin()) return 1;
+    if (!is_admin()) return RC_FAIL;
     return prep_locked(sid, zip, accept);
 }
 
 int driver_bitlocker(void)
 {
     WCHAR dr[4]; int ps; bde_info bi;
-    if (!is_admin()) return -1;                                                // WMI's BitLocker namespace refuses a process that is not elevated: do not even try (it can take many seconds)
+    if (!is_admin()) return BL_UNKNOWN;                                                // WMI's BitLocker namespace refuses a process that is not elevated: do not even try (it can take many seconds)
     sys_drive(dr);
     ps = bde_query(dr, &bi);
-    if (ps == BDE_PS_ERROR) return -1;                                         // not elevated: WMI refuses, nothing can be told
-    return drv_bde_suspend(ps, bi.conv, bi.nprot) ? 1 : 0;                   // the same rule as prep's, so the hint on the restart page agrees with what will happen
+    if (ps == BDE_PS_ERROR) return BL_UNKNOWN;                                         // not elevated: WMI refuses, nothing can be told
+    return drv_bde_suspend(ps, bi.conv, bi.nprot) ? BL_ON : BL_OFF;                   // the same rule as prep's, so the hint on the restart page agrees with what will happen
 }
 
-int driver_install(void)
+int driver_install(const install_opts *o)
 {
     if (is_admin()) return install_locked();
-    return run_elevated(L"/driver-install", NULL);
+    return run_elevated(L"/driver-install", NULL, o);
 }
 
-int driver_cancel(void)
+int driver_cancel(const install_opts *o)
 {
     static WCHAR base[MAX_PATH];
-    if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return 0; }
-    return run_elevated(L"/driver-cancel", NULL);
+    if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return RC_OK; }
+    return run_elevated(L"/driver-cancel", NULL, o);
 }
 
 /* ---------- Start menu shortcut, uninstall ---------- */
@@ -1294,8 +1304,7 @@ static const WCHAR *lnk_names[2] = { L"Install Dyna Pro USB driver.lnk", L"安�
 static BOOL lnk_path(WCHAR *out, int which)
 {
     WCHAR d[MAX_PATH];
-    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_COMMON_PROGRAMS, FALSE) || lstrlenW(d) + lstrlenW(lnk_names[which]) + 2 >= MAX_PATH) return FALSE;
-    lstrcpyW(out, d); lstrcatW(out, L"\\"); lstrcatW(out, lnk_names[which]);
+    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_COMMON_PROGRAMS, FALSE) || !path_join(out, MAX_PATH, d, lnk_names[which])) return FALSE;
     return TRUE;
 }
 
@@ -1329,14 +1338,26 @@ void driver_machine_uninstall(void)
 
 /* ---------- command line ---------- */
 
-int driver_verb(int argc, WCHAR **argv)
+// The driver's verbs of the table in setup.c. /driver-prep <sid> <zip> [/unverified <sha256>] takes the accepted hash only as argv[4] /unverified argv[5]
+// with a 64 character value (c->daccept4, set by cmd_parse), else NULL (tests/test_driver.c locks this).
+int cmd_driver(cmdline *c) { g_drvmode = DRV_MODE_STANDALONE; return wizard(&c->opts); }
+int cmd_driver_continue(cmdline *c) { g_drvmode = DRV_MODE_CONTINUE; return wizard(&c->opts); }
+
+int cmd_driver_prep(cmdline *c)
 {
-    const WCHAR *v = argv[1];
-    if (!lstrcmpiW(v, L"/driver")) { g_drvmode = DRV_MODE_STANDALONE; return wizard(); }
-    if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(); }
-    if (lstrcmpiW(v, L"/driver-prep") && lstrcmpiW(v, L"/driver-install") && lstrcmpiW(v, L"/driver-cancel")) return DRV_NOVERB;
-    if (!is_admin()) return 1;                                                 // the elevated parts: only with the rights they need
-    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], argc >= 6 && !lstrcmpiW(argv[4], L"/unverified") && lstrlenW(argv[5]) == 64 ? argv[5] : NULL) : 1;
-    if (!lstrcmpiW(v, L"/driver-install")) return install_locked();
-    return driver_cancel();
+    if (!is_admin()) return RC_FAIL;                                           // the elevated parts: only with the rights they need
+    return c->argc >= 4 ? prep_locked(c->argv[2], c->argv[3], c->daccept4) : RC_FAIL;
+}
+
+int cmd_driver_install(cmdline *c)
+{
+    (void)c;
+    if (!is_admin()) return RC_FAIL;
+    return install_locked();
+}
+
+int cmd_driver_cancel(cmdline *c)
+{
+    if (!is_admin()) return RC_FAIL;
+    return driver_cancel(&c->opts);
 }

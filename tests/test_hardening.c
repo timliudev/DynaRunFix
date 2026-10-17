@@ -5,19 +5,40 @@
 // HKCU\Software\DynaRunFixTest-<pid> (deleted at the end). The real DynaRun and DynaRunFix installs, HKLM and the settings
 // of the machine are not changed; the one look at the machine is read-only (the ACL of an installed DynaRun folder, printed).
 #define WinMainCRTStartup setup_main_not_used_here
+// run_elevated is tested without a UAC prompt: its one ShellExecuteExW call is replaced by a recorder (setup.c calls it nowhere else)
+#define COBJMACROS
+#include <windows.h>
+#include <shellapi.h>
+static int g_se_calls, g_se_err = ERROR_CANCELLED; static WCHAR g_se_verb[64], g_se_file[MAX_PATH], g_se_params[2000];
+static BOOL WINAPI test_ShellExecuteExW(SHELLEXECUTEINFOW *se)
+{
+    g_se_calls++;
+    lstrcpynW(g_se_verb, se->lpVerb ? se->lpVerb : L"(null)", 64); lstrcpynW(g_se_file, se->lpFile ? se->lpFile : L"(null)", MAX_PATH);
+    lstrcpynW(g_se_params, se->lpParameters ? se->lpParameters : L"(null)", 2000);
+    SetLastError(g_se_err);
+    return FALSE;
+}
+#define ShellExecuteExW test_ShellExecuteExW
 #include "../src/setup.c"
+#include "../src/drf_package_internal.h"
+static trust_ctx g_tc;      // the user SID and the exe trust of the checks below (a stage of the installer makes its own)
+#include "promote_com.h"
 #include <stdio.h>
 
 // what setup.c calls elsewhere and the tests do not need
-int wizard(void) { return 0; }
+int wizard(const install_opts *init) { (void)init; return 0; }
 int update_check(void) { return 0; }
 int update_offer(void) { return 0; }
 int update_run(const WCHAR *a) { (void)a; return 0; }
 // driver.c is not part of this test (it would touch ProgramData and the Start menu): tests\test_driver.c covers it
-int driver_verb(int argc, WCHAR **argv) { (void)argc; (void)argv; return DRV_NOVERB; }
+int cmd_driver(cmdline *c) { (void)c; return 0; }
+int cmd_driver_continue(cmdline *c) { (void)c; return 0; }
+int cmd_driver_prep(cmdline *c) { (void)c; return 0; }
+int cmd_driver_install(cmdline *c) { (void)c; return 0; }
+int cmd_driver_cancel(cmdline *c) { (void)c; return 0; }
+int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }   // called by install_fix_driver / install_all_driver (not run here)
 void driver_machine_stage(const WCHAR *p) { (void)p; }
 void driver_machine_uninstall(void) { }
-int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }
 
 static int g_fail, g_pass;
 #define CHECK(c, what) do { if (c) { g_pass++; } else { g_fail++; wprintf(L"FAIL line %d: %s\n", __LINE__, what); } } while (0)
@@ -42,7 +63,7 @@ static void sh(const WCHAR *cmdline)
     }
 }
 
-static BOOL fake_writable(const WCHAR *p) { return wcsstr(p, L"\\writable") != NULL; }
+static BOOL fake_writable(const trust_ctx *t, const WCHAR *p) { (void)t; return wcsstr(p, L"\\writable") != NULL; }
 
 static void setup_tree(void)
 {
@@ -71,17 +92,17 @@ static void setup_tree(void)
 static void test_user_writable(void)
 {
     WCHAR c[1000], sid[200], pf[MAX_PATH];
-    CHECK(!user_writable(L"C:\\Windows\\System32\\kernel32.dll"), L"kernel32.dll is not user-writable");
-    CHECK(!user_writable(L"C:\\Windows\\System32"), L"System32 is not user-writable");
-    CHECK(user_writable(L"C:\\this\\does\\not\\exist.dll"), L"a path that cannot be read counts as writable");
-    user_sid(sid, 200); lstrcpyW(g_user_sid, sid);
+    CHECK(!user_writable(&g_tc, L"C:\\Windows\\System32\\kernel32.dll"), L"kernel32.dll is not user-writable");
+    CHECK(!user_writable(&g_tc, L"C:\\Windows\\System32"), L"System32 is not user-writable");
+    CHECK(user_writable(&g_tc, L"C:\\this\\does\\not\\exist.dll"), L"a path that cannot be read counts as writable");
+    user_sid(sid, 200); lstrcpyW(g_tc.user_sid, sid);
     // an Everyone ACE, whoever owns the folder
     wsprintfW(c, L"icacls \"%s\\sub\" /grant *S-1-1-0:(OI)(CI)M >nul", g_root); sh(c);
-    { WCHAR s[MAX_PATH]; wsprintfW(s, L"%s\\sub", g_root); CHECK(user_writable(s), L"folder with an Everyone-modify ACE is writable"); }
+    { WCHAR s[MAX_PATH]; wsprintfW(s, L"%s\\sub", g_root); CHECK(user_writable(&g_tc, s), L"folder with an Everyone-modify ACE is writable"); }
     // the folder of an installed DynaRun, read only: printed, not asserted
     if (SHGetSpecialFolderPathW(NULL, pf, CSIDL_PROGRAM_FILESX86, FALSE)) {
         lstrcatW(pf, L"\\Dyna Pro Dynamometers");
-        if (exists(pf)) wprintf(L"info: installed DynaRun folder: user_writable = %d\n", user_writable(pf));
+        if (exists(pf)) wprintf(L"info: installed DynaRun folder: user_writable = %d\n", user_writable(&g_tc, pf));
     }
 }
 
@@ -129,7 +150,7 @@ static void test_paths(void)
     for (i = 0; i < 590; i++) longp[i] = 'a'; longp[590] = 0;
     wsprintfW(r, L"%s\\%s.ocx", g_root, longp); CHECK(!com_path_ok(r, FALSE, roots, 2, &why), L"path far too long");
     // DynaRun's folder not trusted: only the system roots count (com_roots)
-    g_com_nfolder = 0; g_exe_trusted = FALSE; g_exe[0] = 0;
+    g_com_nfolder = 0; g_tc.exe_trusted = FALSE; g_exe[0] = 0;
     { WCHAR rr[3][MAX_PATH]; int n = com_roots(rr); CHECK(n >= 1 && under(rr[0], L"C:\\Windows") == under(rr[0], L"C:\\Windows") && g_com_nfolder == 0, L"no DynaRun root when untrusted"); }
     g_com_nfolder = 1;
     // the real check (not the fake): a file the current user created is not trusted by user_writable's owner rule unless elevated
@@ -360,20 +381,20 @@ static void test_check_exe(void)
     wsprintfW(bin, L"%s\\bin", g_base);
     g_is_writable = fake_writable;
     wsprintfW(g_exe, L"%s\\DynaRun V3.exe", bin);
-    CHECK(check_exe() && g_exe_trusted, L"a good exe in a folder users cannot change: trusted");
+    CHECK(check_exe(&g_tc) && g_tc.exe_trusted, L"a good exe in a folder users cannot change: trusted");
     g_is_writable = user_writable;
-    CHECK(check_exe() && (!g_exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
+    CHECK(check_exe(&g_tc) && (!g_tc.exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
     g_is_writable = fake_writable;
-    wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(), L"another file name is refused");
-    wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(), L"a missing exe is refused");
-    g_exe[0] = 0; CHECK(!check_exe(), L"an empty path is refused");
-    lstrcpyW(g_exe, L"DynaRun V3.exe"); CHECK(!check_exe(), L"a relative path is refused");
-    lstrcpyW(g_exe, L"\\\\localhost\\c$\\x\\DynaRun V3.exe"); CHECK(!check_exe(), L"a UNC path is refused");
+    wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(&g_tc), L"another file name is refused");
+    wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(&g_tc), L"a missing exe is refused");
+    g_exe[0] = 0; CHECK(!check_exe(&g_tc), L"an empty path is refused");
+    lstrcpyW(g_exe, L"DynaRun V3.exe"); CHECK(!check_exe(&g_tc), L"a relative path is refused");
+    lstrcpyW(g_exe, L"\\\\localhost\\c$\\x\\DynaRun V3.exe"); CHECK(!check_exe(&g_tc), L"a UNC path is refused");
     wsprintfW(c, L"mklink /J \"%s\\binlink\" \"%s\" >nul", g_base, bin); sh(c);
     wsprintfW(g_exe, L"%s\\binlink\\DynaRun V3.exe", g_base);
-    CHECK(check_exe() && !g_exe_trusted, L"a path through a junction is usable but not trusted");
+    CHECK(check_exe(&g_tc) && !g_tc.exe_trusted, L"a path through a junction is usable but not trusted");
     h = CreateFileW(L"C:\\Windows\\System32\\hostname.exe", 0, 7, NULL, OPEN_EXISTING, 0, NULL); CloseHandle(h);
-    g_exe[0] = 0; g_exe_trusted = FALSE;
+    g_exe[0] = 0; g_tc.exe_trusted = FALSE;
 }
 
 /* ---------- 6. delete_tree ---------- */
@@ -581,8 +602,7 @@ static void test_running(void)
     lstrcpyW(g_dir, g_base); lstrcatW(g_dir, L"\\no-such-folder");
     l[0].pid = 4242; l[0].bit = RUN_DYNARUN; l[0].sess = 7; l[0].why = JUDGE_OTHERSESSION; lstrcpyW(l[0].path, exe);
     l[1].pid = 4243; l[1].bit = RUN_LAUNCHER; l[1].sess = 7; l[1].why = JUDGE_NOPATH; l[1].path[0] = 0;
-    g_close = FALSE;
-    log_running(L"testing", l, 2, RUN_DYNARUN | RUN_LAUNCHER | RUN_NOCLOSE);
+    log_running(L"testing", l, 2, RUN_DYNARUN | RUN_LAUNCHER | RUN_NOCLOSE, FALSE);
     wsprintfW(logp, L"%s\\DynaRunFix-setup.log", g_base);
     log = read_file(logp, &n);
     CHECK(log != NULL, L"setup log written to %TEMP%");
@@ -613,13 +633,11 @@ static void test_running(void)
         r = scan_programs(l, 16, &cnt);
         CHECK((r & RUN_DYNARUN) && (r & RUN_NOCLOSE) && !(r & RUN_CANCLOSE), L"scan: DynaRun with its folder not known: in the way, not closable");
         lstrcpyW(g_exe, exe);
-        g_close = TRUE;
         close_programs();
         CHECK(WaitForSingleObject(p, 15000) == WAIT_OBJECT_0, L"close_programs ends the known DynaRun");
         CHECK(scan_programs(l, 16, &cnt) == 0, L"scan: nothing left");
         CloseHandle(p);
     } else CHECK(FALSE, L"could not start the DynaRun stand-in");
-    g_close = FALSE;
     lstrcpyW(g_exe, sv_exe); lstrcpyW(g_dir, sv_dir);
 }
 
@@ -775,11 +793,203 @@ static void test_shortcut_paths(void)
     CHECK(!launcher_path_like(L"DynaRunFix.exe"), L"no folder");
 }
 
+/* ---------- characterization tests: they lock what the code does TODAY (refactor safety net), odd or not ---------- */
+
+// run_elevated builds "<args>[ /quiet][ /close][ /pin][ /keep]" in this order, whatever the caller put in args. Only these four options are
+// forwarded: autostart and autostart_later (and the /notaskbar, /noautostart switches) never reach the elevated stage. The 1024 character
+// buffer is not checked (oddity: a longer args overflows it), so no test goes near that.
+static void test_run_elevated_args(void)
+{
+    install_opts o;
+    int m, au, rc; WCHAR want[400]; const WCHAR *base = L"/machine S-1-5-21-1-2-3-1001 \"C:\\Program Files\\DynaRun\\DynaRun V3.exe\"";
+    const WCHAR *hash = L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    for (m = 0; m < 16; m++) {
+        for (au = 0; au < 4; au++) {
+            o.quiet = (m & 1) != 0; o.close = (m & 2) != 0; o.pin = (m & 4) != 0; o.keep = (m & 8) != 0;
+            o.autostart = (au & 1) != 0; o.autostart_later = (au & 2) != 0;      // must not change the result
+            lstrcpyW(want, base);
+            if (m & 1) lstrcatW(want, L" /quiet");
+            if (m & 2) lstrcatW(want, L" /close");
+            if (m & 4) lstrcatW(want, L" /pin");
+            if (m & 8) lstrcatW(want, L" /keep");
+            g_se_calls = 0; g_se_err = ERROR_CANCELLED;
+            rc = run_elevated(base, L"C:\\x\\setup.exe", &o);
+            CHECK(g_se_calls == 1 && rc == 2, L"run_elevated: one call; a cancelled UAC prompt returns 2");
+            CHECK(!lstrcmpW(g_se_params, want), L"run_elevated: args then /quiet /close /pin /keep, in that order");
+            CHECK(!lstrcmpW(g_se_verb, L"runas") && !lstrcmpW(g_se_file, L"C:\\x\\setup.exe"), L"run_elevated: verb runas, the file given");
+        }
+    }
+    // the driver arguments stay where the caller put them: before the forwarded switches
+    o.quiet = TRUE; o.close = TRUE; o.pin = TRUE; o.keep = TRUE; o.autostart = FALSE; o.autostart_later = TRUE;
+    wsprintfW(want, L"%s /with-driver \"C:\\z\\Dyna Pro USB.zip\" /unverified %s", base, hash);
+    run_elevated(want, L"C:\\x\\setup.exe", &o);
+    wsprintfW(want, L"%s /with-driver \"C:\\z\\Dyna Pro USB.zip\" /unverified %s /quiet /close /pin /keep", base, hash);
+    CHECK(!lstrcmpW(g_se_params, want), L"run_elevated: /with-driver ... /unverified ... first, then the forwarded switches");
+    // no deduplication: a switch already in args is repeated
+    run_elevated(L"/driver-install /quiet /pin", L"C:\\x\\setup.exe", &o);
+    CHECK(!lstrcmpW(g_se_params, L"/driver-install /quiet /pin /quiet /close /pin /keep"), L"run_elevated: no deduplication of switches already in args");
+    // empty args: the switches follow a leading blank
+    o.quiet = TRUE; o.close = FALSE; o.pin = FALSE; o.keep = FALSE;
+    run_elevated(L"", L"C:\\x\\setup.exe", &o);
+    CHECK(!lstrcmpW(g_se_params, L" /quiet"), L"run_elevated: empty args give a leading blank");
+    // other failures of ShellExecuteEx return 1
+    g_se_err = ERROR_ACCESS_DENIED; g_se_calls = 0;
+    CHECK(run_elevated(L"/driver-cancel", L"C:\\x\\setup.exe", &o) == 1 && g_se_calls == 1, L"run_elevated: another ShellExecuteEx error returns 1");
+    g_se_err = ERROR_CANCELLED;
+}
+
+// parse_switches (the command line loop of WinMainCRTStartup, moved into a helper unchanged). Rules today:
+//  - every argument from argv[1] on is looked at, also the SID and the path of /machine (argv[2], argv[3]); argv[0] is not; compare is case-insensitive;
+//  - /with-driver and /unverified are honoured only at index 4 or later (after verb, SID, path) and only with a following argument;
+//  - they take the next argument as their value WHATEVER it is (oddity: "/unverified /quiet" swallows /quiet; so does "/with-driver /quiet");
+//  - /unverified keeps its value only when exactly 64 characters long, otherwise the value is consumed and dropped (no error);
+//  - unknown arguments are ignored; the last /with-driver wins; a later /unverified with a bad length does not clear an earlier good one.
+// (/driver-prep takes its hash by the narrower rule daccept4, see test_driver.c.) The verb table is test_verb_table.
+static install_opts g_po; static BOOL g_pin_seen; static const WCHAR *g_dz, *g_da, *g_da4;
+static void parse_case(int argc, WCHAR **argv)
+{
+    cmdline c;
+    c.argc = argc; c.argv = argv;
+    cmd_parse(&c);
+    g_po = c.opts; g_pin_seen = c.pin; g_dz = c.dzip; g_da = c.daccept; g_da4 = c.daccept4;
+}
+#define PARSE(...) do { WCHAR *av_[] = { __VA_ARGS__ }; parse_case((int)(sizeof(av_) / sizeof(av_[0])), av_); } while (0)
+static void test_parse_switches(void)
+{
+    WCHAR h64[80], h63[80];
+    lstrcpyW(h64, L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); lstrcpyW(h63, h64); h63[63] = 0;
+    CHECK(lstrlenW(h64) == 64 && lstrlenW(h63) == 63, L"parse: test hashes have 64 and 63 characters");
+
+    PARSE(L"setup.exe");
+    CHECK(!g_po.quiet && !g_po.close && g_po.pin && g_po.autostart && !g_po.keep && !g_pin_seen && !g_dz && !g_da, L"parse: no arguments change nothing");
+    PARSE(L"setup.exe", L"/quiet", L"/close", L"/keep", L"/pin");
+    CHECK(g_po.quiet && g_po.close && g_po.keep && g_pin_seen && g_po.pin && g_po.autostart, L"parse: /quiet /close /keep /pin");
+    PARSE(L"setup.exe", L"/notaskbar", L"/noautostart");
+    CHECK(!g_po.pin && !g_po.autostart && !g_pin_seen && !g_po.quiet, L"parse: /notaskbar clears pin, /noautostart clears autostart (the local pin stays FALSE)");
+    PARSE(L"setup.exe", L"/QUIET", L"/Close", L"/KEEP", L"/PIN", L"/NoTaskbar");
+    CHECK(g_po.quiet && g_po.close && g_po.keep && g_pin_seen && !g_po.pin, L"parse: case-insensitive");
+    PARSE(L"/quiet");
+    CHECK(!g_po.quiet, L"parse: argv[0] is never looked at");
+    PARSE(L"setup.exe", L"/frobnicate", L"quiet", L"-quiet", L"/quiet:1", L"/quiet ");
+    CHECK(!g_po.quiet && !g_po.close && !g_po.keep && !g_pin_seen, L"parse: unknown, dash and decorated switches are ignored (exact match only)");
+    PARSE(L"setup.exe", L"/machine", L"/quiet", L"/close");
+    CHECK(g_po.quiet && g_po.close, L"parse: switches are found at the SID and path positions too");
+
+    PARSE(L"s", L"/machine", L"S-1-5-21-1", L"C:\\e.exe", L"/with-driver", L"C:\\z.zip");
+    CHECK(g_dz && !lstrcmpW(g_dz, L"C:\\z.zip") && !g_da, L"parse: /with-driver at index 4 takes the zip");
+    PARSE(L"s", L"/machine", L"S-1-5-21-1", L"/with-driver", L"C:\\z.zip");
+    CHECK(!g_dz, L"parse: /with-driver at index 3 is ignored (index >= 4 only)");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/with-driver");
+    CHECK(!g_dz, L"parse: /with-driver as the last argument (no value) is ignored");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/unverified", h64);
+    CHECK(g_da && lstrlenW(g_da) == 64 && !lstrcmpW(g_da, h64), L"parse: /unverified at index 4 with a 64 character value");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/unverified", h63, L"/quiet");
+    CHECK(!g_da && g_po.quiet, L"parse: /unverified with a 63 character value: value consumed and dropped, the next switch still counts");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/unverified", L"/quiet");
+    CHECK(!g_da && !g_po.quiet, L"parse: ODDITY /unverified swallows a following switch as its value");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/with-driver", L"/quiet");
+    CHECK(g_dz && !lstrcmpW(g_dz, L"/quiet") && !g_po.quiet, L"parse: ODDITY /with-driver swallows a following switch as the zip");
+    PARSE(L"s", L"/machine", L"S-1", L"/unverified", h64);
+    CHECK(!g_da, L"parse: /unverified at index 3 is ignored");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/unverified", h64, L"/with-driver", L"z.zip", L"/pin");
+    CHECK(g_da && g_dz && !lstrcmpW(g_dz, L"z.zip") && g_pin_seen, L"parse: /unverified before /with-driver, then /pin");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/with-driver", L"a.zip", L"/with-driver", L"b.zip");
+    CHECK(g_dz && !lstrcmpW(g_dz, L"b.zip"), L"parse: the last /with-driver wins");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/unverified", h64, L"/unverified", h63);
+    CHECK(g_da && !lstrcmpW(g_da, h64), L"parse: a later short /unverified does not clear an earlier accepted one");
+    PARSE(L"s", L"/machine", L"S-1", L"e", L"/WITH-DRIVER", L"z", L"/UNVERIFIED", h64);
+    CHECK(g_da && g_dz, L"parse: the driver switches are case-insensitive too");
+    // the second rule, for /driver-prep: the same value, but only as argv[4] argv[5]
+    PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h64);
+    CHECK(g_da && !lstrcmpW(g_da, h64) && g_da4 == g_da, L"parse: /unverified at argv[4]: both rules have it");
+    PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/quiet", L"/unverified", h64);
+    CHECK(g_da && !lstrcmpW(g_da, h64) && !g_da4 && g_po.quiet, L"parse: DIVERGENCE /unverified at argv[5]: the install stage's rule takes it, the prep's does not");
+    {   WCHAR other[80];
+        lstrcpyW(other, h64); other[0] = L'f';
+        PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h64, L"/unverified", other);
+        CHECK(g_da && !lstrcmpW(g_da, other) && g_da4 && !lstrcmpW(g_da4, h64), L"parse: DIVERGENCE two valid /unverified: later one for the install stage, the one at argv[4] for the prep");
+        PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h63, L"/unverified", other);
+        CHECK(g_da && !g_da4, L"parse: a short /unverified at argv[4] is dropped for both, a valid later one counts for the install stage only");
+    }
+}
+
+// The verb table: argv[1] (any case, exact) and enough arguments. With too few arguments /machine and /full are no verb at all (the wizard or a /quiet
+// install runs instead), the elevated driver verbs and the others are taken with the verb alone. Only the lookup is called, nothing is run.
+static void test_verb_table(void)
+{
+    WCHAR *m3[] = { L"s", L"/machine", L"S-1" }; WCHAR *m4[] = { L"s", L"/MACHINE", L"S-1", L"e" };
+    WCHAR *f3[] = { L"s", L"/full", L"S-1" }; WCHAR *f4[] = { L"s", L"/full", L"S-1", L"m" };
+    WCHAR *u2[] = { L"s", L"/unmachine" }; WCHAR *d2[] = { L"s", L"/driver-prep" }; WCHAR *x2[] = { L"s", L"/driver-prepx" };
+    WCHAR *n1[] = { L"s" }; WCHAR *q2[] = { L"s", L"/quiet" }; WCHAR *p2[] = { L"s", L"driver" }; WCHAR *o2[] = { L"s", L"/offer" };
+    CHECK(verb_find(3, m3) == NULL && verb_find(4, m4) != NULL, L"verbs: /machine needs argc >= 4");
+    CHECK(verb_find(3, f3) == NULL && verb_find(4, f4) != NULL, L"verbs: /full needs argc >= 4");
+    CHECK(verb_find(2, u2) != NULL && verb_find(2, d2) != NULL && verb_find(2, o2) != NULL, L"verbs: /unmachine, /driver-prep, /offer need the verb only");
+    CHECK(verb_find(2, x2) == NULL && verb_find(2, q2) == NULL && verb_find(2, p2) == NULL && verb_find(1, n1) == NULL, L"verbs: exact match only, no verb without argv[1]");
+}
+
+// FIX_DONE(rc): the elevated install stage "installed the fix" = rc 0, or the driver step gave a code >= DRV_E_HASH (the fix is in place, the driver
+// step reports). Everything else (1..19, a negative, 2 = cancelled, 6 = RC_RUNNING) means the fix did not complete. Oddities: no upper bound
+// (1000 and any exit code above 19 count as done), negative numbers are not done, 31 (DRV_W_HASH) is a driver_check result, never an exit
+// code of the stage, but would count as done.
+static void test_result_codes(void)
+{
+    static const int done[41] = { 1,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1, 1 };
+    int rc;
+    for (rc = 0; rc <= 40; rc++) {
+        WCHAR w[60]; wsprintfW(w, L"FIX_DONE(%d) as today", rc);
+        CHECK(!!FIX_DONE(rc) == done[rc], w);
+    }
+    CHECK(!FIX_DONE(-1) && !FIX_DONE(DRV_NOVERB), L"FIX_DONE: negative codes are not done");
+    CHECK(FIX_DONE(41) && FIX_DONE(255) && FIX_DONE(1000), L"FIX_DONE: no upper bound");
+    CHECK(!FIX_DONE(2) && !FIX_DONE(RC_RUNNING) && !FIX_DONE(3) && !FIX_DONE(4) && !FIX_DONE(5) && !FIX_DONE(19), L"FIX_DONE: cancel, running, over-the-shoulder and the small failures are not done");
+
+    CHECK(PK_OK == 0 && PK_CANCEL == 1 && PK_NET == 2 && PK_HTTP == 3 && PK_IO == 4 && PK_FORMAT == 5 && PK_PASSWORD == 6 && PK_CERT == 7 && PK_URL == 8, L"PK_* values 0..8");
+    CHECK(RC_RUNNING == 6, L"RC_RUNNING is 6 (the same number as PK_PASSWORD: different domains, an exit code vs a download result)");
+    CHECK(DRV_SUCCESS == 0 && DRV_E_HASH == 20 && DRV_E_EXTRACT == 21 && DRV_E_INF == 22 && DRV_E_COPY == 23 && DRV_E_BCD == 24 &&
+          DRV_E_TASK == 25 && DRV_E_PNP == 26 && DRV_E_DIR == 27 && DRV_E_SID == 28 && DRV_E_ENFORCED == 29, L"DRV_E_* values 20..29");
+    CHECK(DRV_W_BDE == 30 && DRV_W_HASH == 31 && DRV_NOVERB == -1000, L"DRV_W_BDE 30, DRV_W_HASH 31, DRV_NOVERB -1000");
+    // Not named in the code, used as bare numbers: 1 = failure, 2 = cancelled (also PK_NET's value), 3 = machine stage asks for over-the-shoulder
+    // handling (install_all_driver), 4 = the DynaRun MSI failed, 5 = DynaRun not found after the MSI.
+}
+
+// sf_fit: the length check behind sf_path (the shell's folder path itself cannot be chosen here, so the check takes the path as given). A path that does not fit
+// leaves out unchanged and the folder is skipped; one that fits ends, with everything the callers append after it, within MAX_PATH including the terminator.
+static void test_sf_fit(void)
+{
+    static const struct { int row, extra, max_len; const WCHAR *what; } t[] = {
+        { SF_QUICKLAUNCH, SF_PINNED_LEN, 198, L"Quick Launch + \\User Pinned\\TaskBar (pinned_ours)" },
+        { SF_QUICKLAUNCH, SF_LNK_LEN,    203, L"Quick Launch + \\DynaRun V3.lnk (XP/Vista pin)" },
+        { SF_OWN,         SF_LNK_LEN,    209, L"\\DynaRunFix + \\DynaRun V3.lnk (desktop_link)" },
+        { SF_DESKTOP,     SF_LNK_LEN,    244, L"Desktop + \\DynaRun V3.lnk (user stage)" },
+        { SF_DESKTOP,     0,             259, L"Desktop alone" },
+    };
+    int i, j, k, n; WCHAR out[MAX_PATH + 32], w[200]; BOOL ok;
+    CHECK(SF_LNK_LEN == lstrlenW(L"\\DynaRun V3.lnk") && SF_PINNED_LEN == lstrlenW(L"\\User Pinned\\TaskBar"), L"sf_fit: the suffix lengths match the strings the callers append");
+    for (i = 0; i < (int)(sizeof t / sizeof t[0]); i++) {
+        const WCHAR *sub = SF[t[i].row].sub; int sublen = sub ? lstrlenW(sub) : 0;
+        for (k = -1; k <= 1; k++) {                         // just under, at, and just over the longest folder path that still fits
+            n = t[i].max_len + k;
+            for (j = 0; j < n; j++) out[j] = L'x';
+            out[n] = 0;
+            ok = sf_fit(out, sub, t[i].extra);
+            wsprintfW(w, L"sf_fit: %s, folder path of %d characters: %s", t[i].what, n, k <= 0 ? L"kept" : L"skipped");
+            CHECK(ok == (k <= 0), w);
+            if (ok) {
+                wsprintfW(w, L"sf_fit: %s, %d characters: sub folder appended, the whole path fits in MAX_PATH", t[i].what, n);
+                CHECK(lstrlenW(out) == n + sublen && lstrlenW(out) + t[i].extra < MAX_PATH, w);
+            } else {
+                wsprintfW(w, L"sf_fit: %s, %d characters: out unchanged when skipped", t[i].what, n);
+                CHECK(lstrlenW(out) == n, w);
+            }
+        }
+    }
+}
+
 int wmain(void)
 {
     HKEY k;
     if (wcsstr(GetCommandLineW(), L"--idle")) { Sleep(120000); return 0; }     // the DynaRun stand-in of test_running
-    g_quiet = TRUE; g_zh = FALSE;
+    g_zh = FALSE;
     setvbuf(stdout, NULL, _IONBF, 0);
     setup_tree();
     wprintf(L"[user_writable]\n"); test_user_writable();
@@ -797,6 +1007,11 @@ int wmain(void)
     wprintf(L"[append line]\n"); test_append_line();
     wprintf(L"[misc]\n"); test_misc();
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
+    wprintf(L"[run_elevated arguments]\n"); test_run_elevated_args();
+    wprintf(L"[command line switches]\n"); test_parse_switches();
+    wprintf(L"[verb table]\n"); test_verb_table();
+    wprintf(L"[shortcut folder lengths]\n"); test_sf_fit();
+    wprintf(L"[result codes]\n"); test_result_codes();
     {   // clean up
         WCHAR c[1000];
         wsprintfW(c, L"reg delete \"HKCU\\%s\" /f >nul 2>nul", g_testkey); sh(c);

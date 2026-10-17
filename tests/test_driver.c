@@ -10,10 +10,16 @@
 #define WinMainCRTStartup setup_main_not_used_here
 #include "../src/setup.c"
 #include "../src/driver.c"
+#include "../src/drf_package_internal.h"
+#include "zip_extract_all.h"
 #include <stdio.h>
 
+// the search callback of driver_fetch, called on one zip / one folder (no walk, nothing recorded)
+static BOOL zip_known_cb(const WCHAR *zip) { known_ctx k; zero(&k, sizeof(k)); return known_cb(zip, &k); }
+static BOOL dir_known_cb(const WCHAR *dir) { known_ctx k; zero(&k, sizeof(k)); k.isdir = TRUE; return known_cb(dir, &k); }
+
 // what setup.c calls elsewhere and the tests do not need
-int wizard(void) { return 0; }
+int wizard(const install_opts *init) { (void)init; return 0; }
 int update_check(void) { return 0; }
 int update_offer(void) { return 0; }
 int update_run(const WCHAR *a) { (void)a; return 0; }
@@ -486,9 +492,9 @@ static void test_misc(void)
     } else wprintf(L"info: could not create the protected folder here (%lu): ACL checks skipped\n", GetLastError());
 }
 
-static BOOL fake_ok(const WCHAR *p) { (void)p; return FALSE; }      // "not user-writable"
-static BOOL fake_bad(const WCHAR *p) { (void)p; return TRUE; }
-static BOOL fake_bad_exe(const WCHAR *p) { int n = lstrlenW(p); return n > 4 && !lstrcmpiW(p + n - 4, L".exe"); }   // only a file ending in .exe
+static BOOL fake_ok(const trust_ctx *t, const WCHAR *p) { (void)t; (void)p; return FALSE; }      // "not user-writable"
+static BOOL fake_bad(const trust_ctx *t, const WCHAR *p) { (void)t; (void)p; return TRUE; }
+static BOOL fake_bad_exe(const trust_ctx *t, const WCHAR *p) { int n = lstrlenW(p); return n > 4 && !lstrcmpiW(p + n - 4, L".exe"); }   // only a file ending in .exe
 
 static void mb_file(const WCHAR *dir, const WCHAR *name)
 {
@@ -503,7 +509,7 @@ static void test_make_base(void)
 {
     static const WCHAR SID[] = L"S-1-5-21-1-2-3-1001";
     WCHAR b[MAX_PATH], f[MAX_PATH], g[MAX_PATH]; HANDLE h;
-    BOOL (*saved)(const WCHAR *) = g_is_writable;
+    BOOL (*saved)(const trust_ctx *, const WCHAR *) = g_is_writable;
     g_is_writable = fake_ok;
     wsprintfW(b, L"%s\\mb_new", g_base);
     CHECK(make_base(b, FALSE, SID) && exists(b), L"no folder yet: created");
@@ -659,7 +665,8 @@ static void test_files(void)
 
 /* ---------- the folder walk, the layout test and driver_check (synthetic packages only) ---------- */
 
-static BOOL has_marker(const WCHAR *dir) { WCHAR p[MAX_PATH]; wsprintfW(p, L"%s\\marker.txt", dir); return exists(p); }
+static BOOL has_marker(const WCHAR *dir, void *ctx) { WCHAR p[MAX_PATH]; (void)ctx; wsprintfW(p, L"%s\\marker.txt", dir); return exists(p); }
+static const pkg_search s_marker = { has_marker, NULL, NULL };
 
 static void touch_file(const WCHAR *path)
 {
@@ -677,19 +684,19 @@ static void test_check(void)
     wsprintfW(b, L"%s\\b", a);    CreateDirectoryW(b, NULL);
     wsprintfW(c, L"%s\\c", b);    CreateDirectoryW(c, NULL);
     wsprintfW(p, L"%s\\marker.txt", c); touch_file(p);
-    CHECK(!pkg_find_dir_in(root, 0, has_marker, o) && !o[0], L"walk: depth 0 looks at the root only");
-    CHECK(!pkg_find_dir_in(root, 2, has_marker, o) && !o[0], L"walk: a folder three levels down is out of reach for depth 2");
-    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, c), L"walk: depth 3 finds it and returns its path");
+    CHECK(!pkg_find_dir_in(root, 0, &s_marker, o) && !o[0], L"walk: depth 0 looks at the root only");
+    CHECK(!pkg_find_dir_in(root, 2, &s_marker, o) && !o[0], L"walk: a folder three levels down is out of reach for depth 2");
+    CHECK(pkg_find_dir_in(root, 3, &s_marker, o) && !lstrcmpiW(o, c), L"walk: depth 3 finds it and returns its path");
     wsprintfW(p, L"%s\\marker.txt", b); touch_file(p);
-    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, b), L"walk: the nearest approved folder wins");
+    CHECK(pkg_find_dir_in(root, 3, &s_marker, o) && !lstrcmpiW(o, b), L"walk: the nearest approved folder wins");
     wsprintfW(p, L"%s\\marker.txt", root); touch_file(p);
-    CHECK(pkg_find_dir_in(root, 0, has_marker, o) && !lstrcmpiW(o, root), L"walk: the root itself can be approved");
+    CHECK(pkg_find_dir_in(root, 0, &s_marker, o) && !lstrcmpiW(o, root), L"walk: the root itself can be approved");
     wsprintfW(p, L"%s\\nothing", root);
-    CHECK(!pkg_find_dir_in(p, 2, has_marker, o) && !o[0], L"walk: a folder that does not exist finds nothing");
+    CHECK(!pkg_find_dir_in(p, 2, &s_marker, o) && !o[0], L"walk: a folder that does not exist finds nothing");
     {   // a name that leaves no room for the walk is refused, not overrun
         WCHAR longp[MAX_PATH + 40]; int i;
         lstrcpyW(longp, root); for (i = lstrlenW(longp); i < MAX_PATH; i++) longp[i] = 'x'; longp[MAX_PATH] = 0;
-        CHECK(!pkg_find_dir_in(longp, 2, has_marker, o), L"walk: a path that is too long is refused");
+        CHECK(!pkg_find_dir_in(longp, 2, &s_marker, o), L"walk: a path that is too long is refused");
     }
 
     // driver_layout_ok: ftdibus.inf (a file) with i386 and amd64 folders beside it
@@ -755,26 +762,73 @@ static void test_check(void)
 /* ---------- a regression guard on the wizard's job table ---------- */
 
 // Once a comment after the call in `case JOB_DRV_PREP: rc = driver_prep(...);  // ... break;` swallowed the break, and the install ran right after
-// the prep (no restart in between). Every `case JOB_...:` of job_proc in src\wizard.c must have a break outside of comments before the next one.
+// the prep (no restart in between). Every `case JOB_...:` of job_proc in the wizard's source must have a break outside of comments before the next one.
+// The wizard is src\wizard.c with its flow fragments src\wizard\*.h (one translation unit): the checks read them as one text, in the order they are included.
+static void *read_wizard(DWORD *n)
+{
+    static const WCHAR *const parts[] = { L"src\\wizard.c", L"src\\wizard\\layout.h", L"src\\wizard\\acquire.h", L"src\\wizard\\driver.h", L"src\\wizard\\main.h" };
+    void *piece[5]; DWORD len[5], total = 0; char *all, *d; int i;
+    for (i = 0; i < 5; i++) {
+        piece[i] = read_file(parts[i], &len[i]);
+        if (!piece[i]) { while (i-- > 0) release(piece[i]); return NULL; }
+        total += len[i] + 1;
+    }
+    all = (char *)alloc(total + 1);
+    for (i = 0, d = all; all && i < 5; i++) { CopyMemory(d, piece[i], len[i]); d += len[i]; *d++ = '\n'; }
+    for (i = 0; i < 5; i++) release(piece[i]);
+    *n = all ? total : 0;
+    return all;
+}
+
 static void test_job_table(void)
 {
-    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = read_file(L"src\\wizard.c", &n); int labels = 0;
-    if (!f) { wprintf(L"info: src\\wizard.c not found from this folder: the job table is not checked\n"); return; }
+    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = (BYTE *)read_wizard(&n); int jobs = 0, rows = 0;
+    if (!f) { wprintf(L"info: src\\wizard.c and src\\wizard\\*.h not found from this folder: the job table is not checked\n"); return; }
     t = (char *)f;
-    a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
-    CHECK(a && end, L"job_proc is in src\\wizard.c");
-    for (c = a ? strstr(a, "case JOB_") : NULL; c && c < end; c = next) {
-        char *p, *stop; BOOL has_break = FALSE;
-        next = strstr(c + 5, "case JOB_"); stop = next && next < end ? next : end;
-        for (p = c; p < stop && !has_break; p++) {
-            if (p[0] == '/' && p[1] == '/') { while (p < stop && *p != '\n') p++; continue; }       // a comment runs to the end of its line
-            if (!strncmp(p, "break;", 6)) has_break = TRUE;
-        }
-        CHECK(has_break, L"every case of job_proc ends with a break that is not inside a comment");
-        labels++;
-        if (!(next && next < end)) break;
+    // every job has a row in JOBS[] with a proc (jp_*) and an on_done (jd_*); a job without a row would call a NULL pointer
+    a = strstr(t, "enum { JOB_ACQUIRE"); end = a ? strchr(a, '}') : NULL;
+    CHECK(a && end, L"the JOB_* enum is in the wizard source");
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "JOB_", 4) && strncmp(c, "JOB_COUNT", 9)) { jobs++; while (c < end && *c != ',' && *c != ' ') c++; }
+    CHECK(jobs >= 7, L"all seven jobs were looked at");
+    a = strstr(t, "static const job_desc JOBS["); end = a ? strstr(a, "};") : NULL;
+    CHECK(a && end, L"the job table JOBS[] is in the wizard source");
+    for (c = a ? strstr(a, "= {") : NULL, c = c ? strstr(c, "[JOB_") : NULL; c && c < end; c = next) {
+        char *row_end; BOOL has_proc, has_done;
+        next = strstr(c + 5, "[JOB_"); if (next && next >= end) next = NULL;
+        row_end = next ? next : end;
+        has_proc = FALSE; has_done = FALSE;
+        for (a = c; a < row_end; a++) { if (!strncmp(a, "jp_", 3)) has_proc = TRUE; if (!strncmp(a, "jd_", 3)) has_done = TRUE; }
+        CHECK(has_proc && has_done, L"every row of JOBS[] names a proc (jp_*) and an on_done (jd_*)");
+        rows++;
+        if (!next) break;
     }
-    CHECK(labels >= 7, L"all seven jobs were looked at");
+    CHECK(rows == jobs, L"JOBS[] has exactly one row per job");
+    // each proc ends with a return that is not inside a comment (a comment once swallowed the break that ended a job's case)
+    for (c = t, rows = 0; (c = strstr(c, "static int jp_")) != NULL; c += 14) {
+        char *p, *stop; BOOL has_return = FALSE;
+        stop = strstr(c, "\nstatic "); if (!stop) stop = t + n;
+        for (p = c; p < stop && !has_return; p++) {
+            if (p[0] == '/' && p[1] == '/') { while (p < stop && *p != '\n') p++; continue; }       // a comment runs to the end of its line
+            if (!strncmp(p, "return ", 7)) has_return = TRUE;
+        }
+        CHECK(has_return, L"every job proc returns its result code outside of a comment");
+        // the worker reads g_in and writes g_out: the wizard_state (wz, owned by the UI thread) does not appear in a job proc
+        for (p = c; p < stop && strncmp(p, "wz.", 3); p++);
+        CHECK(p >= stop, L"no job proc touches the UI's wizard_state");
+        rows++;
+    }
+    CHECK(rows == jobs, L"every job has its own proc function");
+    // job_proc and job_done go through the table
+    a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
+    CHECK(a && end && strstr(a, "JOBS[g_in.job].proc()") && strstr(a, "JOBS[g_in.job].proc()") < end, L"job_proc runs the proc of the job's row");
+    // wz.opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
+    // records that (wz.close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
+    a = strstr(t, "static void job_done"); end = a ? strstr(a, "JOBS[job].on_done") : NULL;
+    CHECK(a && end, L"job_done is in the wizard source and hands the result to the job's on_done");
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "wz.opts.close = FALSE", 21)) break;
+    CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
+    for (c = t, jobs = 0; (c = strstr(c, "wz.opts.close = TRUE")) != NULL; c += 20) jobs++;
+    CHECK(jobs == 1 && strstr(t, "wz.opts.close = TRUE; wz.close_asked = TRUE"), L"the wizard sets wz.opts.close only together with wz.close_asked");
     release(f);
 }
 
@@ -879,9 +933,84 @@ static void test_real_zip(void)
     }
 }
 
+/* ---------- characterization tests of the command line of driver.c (lock today's behaviour) ---------- */
+
+// driver_verb: /driver-prep <sid> <zip> [/unverified <sha256>]. The accepted hash is taken ONLY as argv[4] == /unverified with argv[5] of exactly
+// 64 characters; anywhere else (or another length) it is silently NULL (the prep then asks for the exact hash by other means / refuses).
+// Differs from the install stage's rule in cmd_parse (setup.c; tests\test_hardening.c), which finds /unverified at any index >= 4, takes any following argument as its
+// value and drops one that is not 64 characters long: there a bad value is consumed, here it simply is not at argv[4].
+// The verb itself: /driver and /driver-continue open the wizard (not run here); /driver-prep, /driver-install and /driver-cancel need an
+// administrator (return 1 otherwise) and /driver-prep needs argc >= 4 (return 1 otherwise); anything else is DRV_NOVERB.
+// The driver's rows of the verb table (driver.c). Other verbs of the table (/machine, /uninstall: setup.c) are only looked up, never run here:
+// they are "not a driver verb" as driver_verb used to say (DRV_NOVERB).
+static BOOL is_driver_verb(const verb *e)
+{ return e && (e->run == cmd_driver || e->run == cmd_driver_continue || e->run == cmd_driver_prep || e->run == cmd_driver_install || e->run == cmd_driver_cancel); }
+static int driver_verb_o(int argc, WCHAR **argv)
+{
+    cmdline c; const verb *e = verb_find(argc, argv);
+    c.argc = argc; c.argv = argv; cmd_parse(&c);
+    return is_driver_verb(e) ? e->run(&c) : DRV_NOVERB;
+}
+// the accepted hash of /driver-prep (c.daccept4); setup_accept_arg: the install stage's rule (c.daccept) on the same command line
+static const WCHAR *prep_accept_arg(int argc, WCHAR **argv) { cmdline c; c.argc = argc; c.argv = argv; cmd_parse(&c); return c.daccept4; }
+static const WCHAR *setup_accept_arg(int argc, WCHAR **argv) { cmdline c; c.argc = argc; c.argv = argv; cmd_parse(&c); return c.daccept; }
+static void test_cmdline(void)
+{
+    WCHAR h64[80], h63[80], h65[80];
+    WCHAR *a1[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h64 };
+    WCHAR *a2[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h63 };
+    WCHAR *a3[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h65 };
+    WCHAR *a4[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/UNVERIFIED", h64 };
+    WCHAR *a5[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified" };
+    WCHAR *a6[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/quiet", L"/unverified", h64 };
+    WCHAR *a7[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", h64 };
+    WCHAR *a8[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/with-driver", h64 };
+    WCHAR *a9[] = { L"s", L"/driver-prep", L"S-1", L"z.zip" };
+    WCHAR *n1[] = { L"s", L"/nothing" };
+    WCHAR *n2[] = { L"s", L"/machine", L"S-1", L"e" };
+    WCHAR *n3[] = { L"s", L"/driver-prepx" };
+    WCHAR *n4[] = { L"s", L"driver-prep" };
+    WCHAR *n5[] = { L"s", L"/uninstall" };
+    WCHAR *p1[] = { L"s", L"/driver-prep" };
+    WCHAR *p2[] = { L"s", L"/DRIVER-PREP", L"S-1" };
+    WCHAR *i1[] = { L"s", L"/driver-install" };
+    WCHAR *c1[] = { L"s", L"/Driver-Cancel" };
+    const WCHAR *r;
+    lstrcpyW(h64, L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); lstrcpyW(h63, h64); h63[63] = 0;
+    lstrcpyW(h65, h64); lstrcatW(h65, L"0");
+    CHECK(lstrlenW(h64) == 64 && lstrlenW(h63) == 63 && lstrlenW(h65) == 65, L"cmdline: test hashes have 64, 63 and 65 characters");
+
+    // prep_accept_arg: the accepted hash of /driver-prep
+    r = prep_accept_arg(6, a1); CHECK(r == h64, L"accept: /unverified + 64 characters at argv[4], argv[5]");
+    CHECK(prep_accept_arg(6, a2) == NULL, L"accept: 63 characters: NULL");
+    CHECK(prep_accept_arg(6, a3) == NULL, L"accept: 65 characters: NULL");
+    CHECK(prep_accept_arg(6, a4) == h64, L"accept: /UNVERIFIED, case-insensitive");
+    CHECK(prep_accept_arg(5, a5) == NULL, L"accept: /unverified without a value: NULL");
+    CHECK(prep_accept_arg(7, a6) == NULL, L"accept: /unverified at argv[5] (not argv[4]): NULL (the install stage's rule takes it at index 5)");
+    CHECK(setup_accept_arg(7, a6) == h64 && setup_accept_arg(6, a1) == h64, L"accept: the install stage's rule (c.daccept) takes it at argv[5] too: the two rules differ, each verb keeps its own");
+    CHECK(prep_accept_arg(5, a7) == NULL, L"accept: a bare hash without /unverified: NULL");
+    CHECK(prep_accept_arg(6, a8) == NULL, L"accept: /with-driver is not understood here: NULL");
+    CHECK(prep_accept_arg(4, a9) == NULL, L"accept: nothing after the zip: NULL");
+
+    // the verb dispatch; only what is safe to run in any account
+    CHECK(driver_verb_o(2, n1) == DRV_NOVERB, L"verb: unknown verb is DRV_NOVERB");
+    CHECK(driver_verb_o(4, n2) == DRV_NOVERB, L"verb: /machine is not a driver verb");
+    CHECK(driver_verb_o(2, n3) == DRV_NOVERB, L"verb: exact match only (/driver-prepx)");
+    CHECK(driver_verb_o(2, n4) == DRV_NOVERB, L"verb: no slash, no verb");
+    CHECK(driver_verb_o(2, n5) == DRV_NOVERB, L"verb: /uninstall is setup.c's");
+    CHECK(driver_verb_o(2, p1) == 1, L"verb: /driver-prep without arguments returns 1 (not admin: 1 as well)");
+    CHECK(driver_verb_o(3, p2) == 1, L"verb: /DRIVER-PREP <sid> without a zip returns 1 (case-insensitive verb)");
+    if (!is_admin()) {
+        // elevated verbs refuse a normal process before doing anything
+        CHECK(driver_verb_o(2, i1) == 1, L"verb: /driver-install not elevated returns 1");
+        CHECK(driver_verb_o(2, c1) == 1, L"verb: /driver-cancel not elevated returns 1");
+        CHECK(driver_verb_o(6, a1) == 1, L"verb: /driver-prep with arguments, not elevated, returns 1");
+    } else wprintf(L"  (info: running elevated - /driver-install, /driver-cancel and /driver-prep with arguments are not called)\n");
+}
+
 int wmain(void)
 {
-    g_quiet = TRUE; g_zh = FALSE;
+    g_zh = FALSE;
     setvbuf(stdout, NULL, _IONBF, 0);
     GetTempPathW(MAX_PATH, g_base);
     { WCHAR lp[MAX_PATH]; DWORD n = GetLongPathNameW(g_base, lp, MAX_PATH); if (n && n < MAX_PATH) lstrcpyW(g_base, lp); }
@@ -902,6 +1031,7 @@ int wmain(void)
     wprintf(L"[job table]\n"); test_job_table();
     wprintf(L"[shared package machinery]\n"); test_shared();
     wprintf(L"[update hint]\n"); test_hint();
+    wprintf(L"[command line]\n"); test_cmdline();
     wprintf(L"[real zip]\n"); test_real_zip();
     delete_tree(g_base, NULL, 0);
     wprintf(L"\n%d passed, %d failed\n", g_pass, g_fail);
