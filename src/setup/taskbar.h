@@ -67,7 +67,7 @@ static void taskbar_policy(const install_opts *o, const WCHAR *sid, HKEY app)
 static BOOL pinned_ours(void)       // a shortcut to the launcher among the taskbar's pinned items (Windows 7+)
 {
     static WCHAR d[MAX_PATH], f[MAX_PATH];
-    if (!sf_path(SF_QUICKLAUNCH, FALSE, d)) return FALSE;
+    if (!sf_path(SF_QUICKLAUNCH, FALSE, d, SF_PINNED_LEN)) return FALSE;
     lstrcatW(d, L"\\User Pinned\\TaskBar");
     return find_ours(d, FALSE, f);
 }
@@ -126,7 +126,7 @@ static BOOL pin_taskbar(const WCHAR *lnk, int *res)
     static WCHAR d[MAX_PATH], v[MAX_PATH], sub[64]; DWORD ma, mi, b; HKEY k;
     os_ver(&ma, &mi, &b);
     if (ma == 5 || (ma == 6 && !mi)) {                  // XP, Vista: the Quick Launch toolbar
-        if (!sf_path(SF_QUICKLAUNCH, FALSE, d)) return FALSE;
+        if (!sf_path(SF_QUICKLAUNCH, FALSE, d, SF_LNK_LEN)) return FALSE;
         CreateDirectoryW(d, NULL);
         if (!save_link(lstrcatW(d, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
         if (!RegOpenKeyExW(HKEY_CURRENT_USER, cat3(sub, USERKEY, L"\\Shortcuts", NULL), 0, KEY_SET_VALUE, &k)) {
@@ -148,7 +148,7 @@ static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to p
 {
     WCHAR d[MAX_PATH];
     if (find_our_shortcut(out)) return TRUE;
-    if (!sf_path(SF_OWN, FALSE, d)) return FALSE;
+    if (!sf_path(SF_OWN, FALSE, d, SF_LNK_LEN)) return FALSE;
     CreateDirectoryW(d, NULL);
     if (!save_link(cat3(out, d, L"\\DynaRun V3.lnk", NULL), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
     RegSetValueExW(backup, out, 0, REG_BINARY, (const BYTE *)"", 0);

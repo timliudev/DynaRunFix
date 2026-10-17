@@ -9,9 +9,9 @@ static void user_stage(const install_opts *o, install_result *res)
     RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk"); RegDeleteValueW(b, L"UpdateSkip");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
         int desk = fix_shortcuts(FALSE, s);
-        if (!desk && sf_path(SF_DESKTOP, TRUE, p))
+        if (!desk && sf_path(SF_DESKTOP, TRUE, p, 0))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-        if (!desk && !o->keep && sf_path(SF_DESKTOP, FALSE, p) &&
+        if (!desk && !o->keep && sf_path(SF_DESKTOP, FALSE, p, SF_LNK_LEN) &&
             save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
         if (o->pin && !o->keep) {

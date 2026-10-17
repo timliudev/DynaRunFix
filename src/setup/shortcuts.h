@@ -104,13 +104,28 @@ static const shortcut_folder SF[SF_COUNT] = {
     { { CSIDL_APPDATA, 0 }, L"\\DynaRunFix", NULL, NULL, SFU_RESTORE, 0 },              // desktop_link(): the shortcut it creates when there is none
 };
 
-// The folder of row id (common: the all users' one) in out (MAX_PATH characters); FALSE when the shell has none or the path is too long for what goes below it.
-static BOOL sf_path(int id, BOOL common, WCHAR *out)
+// What callers of sf_path append to the folder themselves afterwards (their `extra`): the shortcut name, and below the Quick Launch folder the pinned items' folder.
+#define SF_LNK_LEN        15        // the length of: \DynaRun V3.lnk
+#define SF_PINNED_LEN     20        // the length of: \User Pinned\TaskBar
+
+// Appends sub to out (a folder path in a MAX_PATH buffer) when the result, `extra` more characters and the terminator still fit; a row with a sub folder keeps
+// 50 characters free for the names below it. FALSE (out unchanged) when it does not fit. Separate from sf_path so that a test can give it any length.
+static BOOL sf_fit(WCHAR *out, const WCHAR *sub, int extra)
+{
+    int need = extra;
+    if (sub) { need += lstrlenW(sub); if (need < 50) need = 50; }
+    if (lstrlenW(out) + need >= MAX_PATH) return FALSE;
+    if (sub) lstrcatW(out, sub);
+    return TRUE;
+}
+
+// The folder of row id (common: the all users' one) in out (MAX_PATH characters); FALSE when the shell has none or the path is too long for what goes below
+// it, including the `extra` characters the caller appends itself.
+static BOOL sf_path(int id, BOOL common, WCHAR *out, int extra)
 {
     const shortcut_folder *f = &SF[id]; int csidl = f->csidl[common ? 1 : 0];
     if (!csidl || !SHGetSpecialFolderPathW(NULL, out, csidl, FALSE)) return FALSE;
-    if (f->sub) { if (lstrlenW(out) + 50 >= MAX_PATH) return FALSE; lstrcatW(out, f->sub); }
-    return TRUE;
+    return sf_fit(out, f->sub, extra);
 }
 
 // fn(folder, row, common, deep, ctx) is called for each folder that the use (one SFU_*) lists, in the scope (SF_USER, SF_COMMON, SF_BOTH): a row's
@@ -123,7 +138,7 @@ static BOOL shortcut_folders(unsigned use, int scope, sf_fn fn, void *ctx)
         id = use == SFU_ICON && i < 2 ? 1 - i : i;              // the icon is looked for in the Start menu before the Desktop
         if (!(SF[id].uses & use)) continue;
         for (c = 0; c < 2; c++)
-            if ((scope & (1 << c)) && sf_path(id, c, d) && !fn(d, id, c, (SF[id].deep & use) != 0, ctx)) return TRUE;
+            if ((scope & (1 << c)) && sf_path(id, c, d, 0) && !fn(d, id, c, (SF[id].deep & use) != 0, ctx)) return TRUE;
     }
     return FALSE;
 }

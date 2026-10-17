@@ -952,6 +952,39 @@ static void test_result_codes(void)
     // handling (install_all_driver), 4 = the DynaRun MSI failed, 5 = DynaRun not found after the MSI.
 }
 
+// sf_fit: the length check behind sf_path (the shell's folder path itself cannot be chosen here, so the check takes the path as given). A path that does not fit
+// leaves out unchanged and the folder is skipped; one that fits ends, with everything the callers append after it, within MAX_PATH including the terminator.
+static void test_sf_fit(void)
+{
+    static const struct { int row, extra, max_len; const WCHAR *what; } t[] = {
+        { SF_QUICKLAUNCH, SF_PINNED_LEN, 198, L"Quick Launch + \\User Pinned\\TaskBar (pinned_ours)" },
+        { SF_QUICKLAUNCH, SF_LNK_LEN,    203, L"Quick Launch + \\DynaRun V3.lnk (XP/Vista pin)" },
+        { SF_OWN,         SF_LNK_LEN,    209, L"\\DynaRunFix + \\DynaRun V3.lnk (desktop_link)" },
+        { SF_DESKTOP,     SF_LNK_LEN,    244, L"Desktop + \\DynaRun V3.lnk (user stage)" },
+        { SF_DESKTOP,     0,             259, L"Desktop alone" },
+    };
+    int i, j, k, n; WCHAR out[MAX_PATH + 32], w[200]; BOOL ok;
+    CHECK(SF_LNK_LEN == lstrlenW(L"\\DynaRun V3.lnk") && SF_PINNED_LEN == lstrlenW(L"\\User Pinned\\TaskBar"), L"sf_fit: the suffix lengths match the strings the callers append");
+    for (i = 0; i < (int)(sizeof t / sizeof t[0]); i++) {
+        const WCHAR *sub = SF[t[i].row].sub; int sublen = sub ? lstrlenW(sub) : 0;
+        for (k = -1; k <= 1; k++) {                         // just under, at, and just over the longest folder path that still fits
+            n = t[i].max_len + k;
+            for (j = 0; j < n; j++) out[j] = L'x';
+            out[n] = 0;
+            ok = sf_fit(out, sub, t[i].extra);
+            wsprintfW(w, L"sf_fit: %s, folder path of %d characters: %s", t[i].what, n, k <= 0 ? L"kept" : L"skipped");
+            CHECK(ok == (k <= 0), w);
+            if (ok) {
+                wsprintfW(w, L"sf_fit: %s, %d characters: sub folder appended, the whole path fits in MAX_PATH", t[i].what, n);
+                CHECK(lstrlenW(out) == n + sublen && lstrlenW(out) + t[i].extra < MAX_PATH, w);
+            } else {
+                wsprintfW(w, L"sf_fit: %s, %d characters: out unchanged when skipped", t[i].what, n);
+                CHECK(lstrlenW(out) == n, w);
+            }
+        }
+    }
+}
+
 int wmain(void)
 {
     HKEY k;
@@ -977,6 +1010,7 @@ int wmain(void)
     wprintf(L"[run_elevated arguments]\n"); test_run_elevated_args();
     wprintf(L"[command line switches]\n"); test_parse_switches();
     wprintf(L"[verb table]\n"); test_verb_table();
+    wprintf(L"[shortcut folder lengths]\n"); test_sf_fit();
     wprintf(L"[result codes]\n"); test_result_codes();
     {   // clean up
         WCHAR c[1000];
