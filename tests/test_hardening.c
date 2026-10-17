@@ -17,6 +17,7 @@ int update_run(const WCHAR *a) { (void)a; return 0; }
 int driver_verb(int argc, WCHAR **argv) { (void)argc; (void)argv; return DRV_NOVERB; }
 void driver_machine_stage(const WCHAR *p) { (void)p; }
 void driver_machine_uninstall(void) { }
+int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }
 
 static int g_fail, g_pass;
 #define CHECK(c, what) do { if (c) { g_pass++; } else { g_fail++; wprintf(L"FAIL line %d: %s\n", __LINE__, what); } } while (0)
