@@ -11,7 +11,7 @@ static int status_need(void);
 // again, so the line is never cut off by the button bar and the flexible parts (license text, picture, info box) give way.
 static void status(const WCHAR *t, BOOL err)
 {
-    g_status_err = err; text(ID_STATUS, t);
+    wz.status_err = err; text(ID_STATUS, t);
     if (g_hwnd && !g_building && status_need() != g_sth) layout();
 }
 
@@ -34,7 +34,7 @@ static void progress(BOOL marquee)
     SendMessageW(p, PBM_SETMARQUEE, marquee, 40);
     SendMessageW(p, PBM_SETRANGE32, 0, 1000);
     SendMessageW(p, PBM_SETPOS, 0, 0);
-    g_lastpct = -1;
+    g_out.lastpct = -1;
     vis(ID_PROG, TRUE);
 }
 
@@ -207,8 +207,8 @@ static void create_controls(void)
     SendMessageW(H(ID_DRV), BM_SETCHECK, BST_CHECKED, 0);
     SetWindowTextW(H(ID_PIN), T(L"Pin DynaRun to the &taskbar", L"釘選到工作列(&T)"));
     SetWindowTextW(H(ID_AUTO), T(L"Start DynaRun when Windows &starts", L"開機時自動啟動 DynaRun(&S)"));
-    SendMessageW(H(ID_PIN), BM_SETCHECK, g_opts.pin ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(H(ID_AUTO), BM_SETCHECK, g_opts.autostart ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(H(ID_PIN), BM_SETCHECK, wz.opts.pin ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(H(ID_AUTO), BM_SETCHECK, wz.opts.autostart ? BST_CHECKED : BST_UNCHECKED, 0);
     SetWindowTextW(H(ID_CHECK), T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
     add(PROGRESS_CLASSW, 0, ID_PROG);
     add(L"STATIC", SS_NOPREFIX, ID_STATUS);

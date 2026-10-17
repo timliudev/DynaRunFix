@@ -4,7 +4,7 @@
 // The "Start DynaRun" button is offered only when DynaRun is installed here and our launcher is in place (g_exe comes from locate_dynarun, which
 // the wizard runs at start in every mode, so this also holds in the process the sign-in task starts after the restart; g_launcher from init_paths).
 // The driver step may be skipped (the fix is installed without it) only in the main install flow, not when it is the whole job (the shortcut, /driver, or the driver-only first page).
-static BOOL can_skip_driver(void) { return g_flow == FLOW_MAIN || g_flow == FLOW_MAIN_WITH_DRIVER; }
+static BOOL can_skip_driver(void) { return wz.flow == FLOW_MAIN || wz.flow == FLOW_MAIN_WITH_DRIVER; }
 
 static void enter_drv_intro(void)
 {
@@ -25,11 +25,11 @@ static void enter_drv_intro(void)
                     L"廠商封裝中的驅動程式設定檔（INF）不在隨附的 Microsoft 簽署目錄檔中，Windows 無法驗證，所以只有在這一次開機暫時關閉「驅動程式簽章檢查」時才肯安裝；"
                     L"下次重新開機會自動恢復。\n\n"
                     L"如果這台電腦有啟用 BitLocker，保護會暫停到驅動程式安裝完成為止，之後會自動恢復（最多經過 3 次重新開機）。"));
-    if (g_flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"\n\nDynaRun's fix is installed in the same step, just before the restart, so Windows asks for permission only once.",
+    if (wz.flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"\n\nDynaRun's fix is installed in the same step, just before the restart, so Windows asks for permission only once.",
                              L"\n\nDynaRun 的修正會在同一步、重新開機之前一起安裝，所以 Windows 只會詢問一次是否允許變更。"));
     text(ID_BODY, b);
     buttons(T(L"Next", L"下一步"), can_skip_driver() ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"), NULL);
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_drv_press7(void)
@@ -37,17 +37,17 @@ static void enter_drv_press7(void)
     WCHAR *b = pgbuf;
     text(ID_TITLE, T(L"After the restart you will see this: press 7", L"重新開機後會看到這個畫面，請按 7"));
     {
-        int bl = g_drv_bl;                          // asked in the worker (not elevated: -1 when WMI will not tell)
+        int bl = wz.drv_bl;                          // asked in the worker (not elevated: -1 when WMI will not tell)
         b[0] = 0;
-        if (g_drv_allow) lstrcatW(b, T(L"Note: this driver file is not the version DynaRunFix knows; you chose to install it.\n\n", L"注意：這個驅動程式檔和已知版本不同，是你確認要安裝的。\n\n"));
-        else if (g_drv_how & DRV_SRC_LOCAL) {
-            WCHAR nm[100], t[300]; lstrcpynW(nm, file_name(g_drvzip), 100);   // the longest text: ~95 chars + 99 of nm
-            if (g_drv_how & DRV_SRC_DIR) wsprintfW(t, T(L"The unpacked driver folder (%s) was found on this computer and checked: no need to download it.\n\n", L"在這台電腦上找到已解開的驅動程式資料夾（%s），檢查通過，不用重新下載。\n\n"), nm);
+        if (wz.drv_allow) lstrcatW(b, T(L"Note: this driver file is not the version DynaRunFix knows; you chose to install it.\n\n", L"注意：這個驅動程式檔和已知版本不同，是你確認要安裝的。\n\n"));
+        else if (wz.drv_how & DRV_SRC_LOCAL) {
+            WCHAR nm[100], t[300]; lstrcpynW(nm, file_name(wz.drvzip), 100);   // the longest text: ~95 chars + 99 of nm
+            if (wz.drv_how & DRV_SRC_DIR) wsprintfW(t, T(L"The unpacked driver folder (%s) was found on this computer and checked: no need to download it.\n\n", L"在這台電腦上找到已解開的驅動程式資料夾（%s），檢查通過，不用重新下載。\n\n"), nm);
             else wsprintfW(t, T(L"The driver (%s) was found on this computer and checked: no need to download it again.\n\n", L"在這台電腦上找到驅動程式（%s），檢查通過，不用重新下載。\n\n"), nm);
             lstrcatW(b, t);
         }
-        if (!g_drv_allow && (g_drv_how & DRV_ZIPDIFF)) lstrcatW(b, T(L"The zip differs from the known version, but the driver files are identical: it can be installed.\n\n", L"壓縮檔和已知版本不同，但驅動程式檔案相同，可以安裝。\n\n"));
-        if (g_flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"Click \"Install and restart\": DynaRun's fix is installed and the driver is prepared in one step (Windows asks for permission once), then the computer restarts.\n\n",
+        if (!wz.drv_allow && (wz.drv_how & DRV_ZIPDIFF)) lstrcatW(b, T(L"The zip differs from the known version, but the driver files are identical: it can be installed.\n\n", L"壓縮檔和已知版本不同，但驅動程式檔案相同，可以安裝。\n\n"));
+        if (wz.flow == FLOW_MAIN_WITH_DRIVER) lstrcatW(b, T(L"Click \"Install and restart\": DynaRun's fix is installed and the driver is prepared in one step (Windows asks for permission once), then the computer restarts.\n\n",
                                  L"按「安裝並重新開機」後，會一次完成 DynaRun 修正的安裝和驅動程式的準備（Windows 只會詢問一次是否允許變更），接著電腦重新開機。\n\n"));
         lstrcatW(b, T(L"Tip: take a photo of this page with your phone.\nSave your work in other programs before you restart.",
                       L"建議用手機拍下這一頁。\n按「重新開機」前請先存好其他程式的資料。"));
@@ -58,22 +58,22 @@ static void enter_drv_press7(void)
         text(ID_BODY, b);
     }
     show_image(0);
-    if (g_flow == FLOW_MAIN_WITH_DRIVER) buttons(T(L"Install and restart", L"安裝並重新開機"), T(L"Cancel", L"取消"), NULL);   // nothing is installed yet
+    if (wz.flow == FLOW_MAIN_WITH_DRIVER) buttons(T(L"Install and restart", L"安裝並重新開機"), T(L"Cancel", L"取消"), NULL);   // nothing is installed yet
     else buttons(T(L"Restart now", L"重新開機"), T(L"Later", L"稍後"), NULL);
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_drv_hash(void)   // a driver zip that is not the file this program knows: the user decides
 {
     WCHAR *b = pgbuf;
     static WCHAR src[2 * MAX_PATH + 40];
-    if (g_drv_how & DRV_SRC_LOCAL) { lstrcpyW(src, (g_drv_how & DRV_SRC_DIR) ? T(L"found on this computer (unpacked folder): ", L"在這台電腦上找到（已解開的資料夾）：") : T(L"found on this computer: ", L"在這台電腦上找到：")); lstrcatW(src, g_drvzip); }
+    if (wz.drv_how & DRV_SRC_LOCAL) { lstrcpyW(src, (wz.drv_how & DRV_SRC_DIR) ? T(L"found on this computer (unpacked folder): ", L"在這台電腦上找到（已解開的資料夾）：") : T(L"found on this computer: ", L"在這台電腦上找到：")); lstrcatW(src, wz.drvzip); }
     else lstrcpyW(src, T(L"downloaded from the Dyna Pro website (dynapro.co.uk)", L"從 Dyna Pro 官網下載"));
     text(ID_TITLE, T(L"The driver differs from the known version", L"驅動程式和已知版本不同"));
     // wsprintfW cuts its output at 1024 characters, so the text is put together with bounded appends (b holds 2600): the advice to
     // cancel comes before the details, and the list of files goes last so that only the end of the list can be lost
     b[0] = 0;
-    if (g_drv_how & DRV_SRC_DIR) {                  // an unpacked folder: there is no zip to show a size or hash of
+    if (wz.drv_how & DRV_SRC_DIR) {                  // an unpacked folder: there is no zip to show a size or hash of
         cat_to(b, 2600, T(L"The driver files in this folder are not the version DynaRunFix knows. Dyna Pro may have updated them, or the files may be damaged or tampered with.\n\n"
                           L"Install them only if you are sure that they come from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
                           L"這個資料夾裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
@@ -82,7 +82,7 @@ static void enter_drv_hash(void)   // a driver zip that is not the file this pro
         cat_to(b, 2600, L"\n\n");
     } else {
         WCHAR sz[24];
-        wsprintfW(sz, L"%lu", (DWORD)g_drv_size);
+        wsprintfW(sz, L"%lu", (DWORD)wz.drv_size);
         cat_to(b, 2600, T(L"The driver files in this package are not the version DynaRunFix knows. Dyna Pro may have updated them, or the file may be damaged or tampered with.\n\n"
                           L"Install it only if you are sure that it comes from Dyna Pro. If in doubt, click \"Cancel\".\n\nSource: ",
                           L"這個驅動程式包裡的驅動程式檔和 DynaRunFix 已知的版本不同。可能是 Dyna Pro 更新了驅動程式，也可能是檔案損毀或被竄改。\n\n"
@@ -91,7 +91,7 @@ static void enter_drv_hash(void)   // a driver zip that is not the file this pro
         cat_to(b, 2600, T(L"\nZip size: ", L"\n壓縮檔大小："));
         cat_to(b, 2600, sz);
         cat_to(b, 2600, T(L" bytes\nZip SHA-256: ", L" 位元組\n壓縮檔 SHA-256："));
-        cat_to(b, 2600, g_drv_hex);
+        cat_to(b, 2600, wz.drv_hex);
         cat_to(b, 2600, T(L"\nKnown zip SHA-256: ", L"\n已知的壓縮檔 SHA-256："));
         cat_to(b, 2600, driver_pinned_sha256());
         cat_to(b, 2600, L"\n\n");
@@ -99,7 +99,7 @@ static void enter_drv_hash(void)   // a driver zip that is not the file this pro
     cat_to(b, 2600, T(L"Files that differ (actual / expected):\n", L"不同的檔案（實際 / 已知）：\n"));
     {
         int room = 2600 - lstrlenW(b) - 48;        // keep room for the "and N more" line
-        const WCHAR *p = g_drv_rep;
+        const WCHAR *p = wz.drv_rep;
         int used = 0, more = 0;
         while (*p) {
             const WCHAR *e = p; int n;
@@ -118,7 +118,7 @@ static void enter_drv_hash(void)   // a driver zip that is not the file this pro
     text(ID_BODY, b);
     // "Cancel" is the default button (the right-most one, Enter); "Install anyway" is the second; the website is bottom-left
     buttons(T(L"Cancel", L"取消"), T(L"Install anyway", L"仍要安裝"), T(L"Open website", L"開啟官網"));
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_drv_bde(void)
@@ -142,20 +142,20 @@ static void enter_drv_prep(void)
 
 static void enter_drv_reboot(void)
 {
-    g_result = RC_OK;                                   // the driver step is prepared; the restart continues it
+    wz.result = RC_OK;                                   // the driver step is prepared; the restart continues it
     WCHAR *b = pgbuf;
-    text(ID_TITLE, g_drv_noreboot ? T(L"Please restart the computer", L"請重新開機") : T(L"Restarting", L"即將重新開機"));
-    lstrcpyW(b, g_drv_noreboot
+    text(ID_TITLE, wz.drv_noreboot ? T(L"Please restart the computer", L"請重新開機") : T(L"Restarting", L"即將重新開機"));
+    lstrcpyW(b, wz.drv_noreboot
         ? T(L"Everything is ready, but Windows would not restart by itself.\n\nPlease restart the computer yourself (Start, the power button, Restart). "
             L"When the menu appears, press 7. After you sign in, this program continues by itself.",
             L"都準備好了，但 Windows 沒有自動重新開機。\n\n請自己重新開機（開始 → 電源 → 重新啟動）。出現選單時請按 7；登入後本程式會自動繼續。")
         : T(L"The computer restarts now.\n\nWhen the menu appears, press 7. After you sign in, this program continues by itself.\n\n"
             L"If the computer does not restart (a program is waiting for you), save your work and restart it yourself.",
             L"電腦即將重新開機。\n\n出現選單時請按 7；登入後本程式會自動繼續。\n\n如果電腦沒有重新開機（有程式在等你回應），請存好資料後自己重新開機。"));
-    if (g_fix_done) pin_hint(b);                      // the fix was installed with the driver: the hints of the page "Done", which is skipped
+    if (wz.fix_done) pin_hint(b);                      // the fix was installed with the driver: the hints of the page "Done", which is skipped
     text(ID_BODY, b);
     buttons(T(L"Close", L"關閉"), NULL, NULL);
-    if (g_fix_done) acp_warning();
+    if (wz.fix_done) acp_warning();
 }
 
 static void enter_drv_retry(void)
@@ -166,7 +166,7 @@ static void enter_drv_retry(void)
                     L"剛才重新開機時沒有選到「停用驅動程式強制簽章」（按 7），所以 Windows 還在檢查簽章，驅動程式現在還不能安裝。\n\n"
                     L"要再試一次嗎？電腦會再重新開機一次，出現選單時請按 7。"));
     buttons(T(L"Retry", L"重試"), T(L"Cancel", L"取消"), NULL);
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_drv_warn(void)
@@ -176,7 +176,7 @@ static void enter_drv_warn(void)
                     L"這次開機已暫時關閉簽章檢查。接下來 Windows 會跳出像下面這樣的紅色安全性視窗兩次（兩個驅動程式檔各一次），請每次都按「仍然安裝此驅動程式軟體」。"));
     show_image(1);
     buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_drv_install(void)
@@ -190,9 +190,9 @@ static void enter_drv_install(void)
 
 static void enter_drv_done(void)
 {
-    g_result = RC_OK;                                   // the driver is installed (or was already)
-    text(ID_TITLE, g_drv_have ? T(L"The driver is already installed", L"驅動程式已安裝") : T(L"The driver is installed", L"驅動程式安裝完成"));
-    text(ID_BODY, g_drv_have
+    wz.result = RC_OK;                                   // the driver is installed (or was already)
+    text(ID_TITLE, wz.drv_have ? T(L"The driver is already installed", L"驅動程式已安裝") : T(L"The driver is installed", L"驅動程式安裝完成"));
+    text(ID_BODY, wz.drv_have
         ? T(L"The Dyna Pro USB driver is already installed on this computer. Nothing more to do.",
             L"這台電腦已經安裝過 Dyna Pro USB 驅動程式，不需要再裝。")
         : T(L"Connect the Dyna Pro dynamometer by USB and switch it on: Windows recognizes it by itself.\n\n"
@@ -205,27 +205,27 @@ static void enter_drv_done(void)
 
 static void enter_drv_error(void)
 {
-    g_result = RC_FAIL;                                 // the driver step failed
+    wz.result = RC_FAIL;                                 // the driver step failed
     text(ID_TITLE, T(L"The driver was not installed", L"驅動程式沒有安裝"));
-    text(ID_BODY, g_note);
+    text(ID_BODY, wz.note);
     buttons(T(L"Close", L"關閉"), NULL, T(L"Open the manual steps", L"開啟手動安裝說明"));
 }
 
 static int jp_drv_prep(void)
 {
     // "install anyway" accepts exactly this zip (its SHA-256), nothing else.
-    return driver_prep(&g_jobopts, g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
+    return driver_prep(&g_in.opts, g_in.drvzip[0] ? g_in.drvzip : L"-", g_in.drv_allow ? g_in.drv_hex : NULL);
 }
 
-static int jp_drv_install(void) { return driver_install(&g_jobopts); }
-static int jp_drv_cancel(void) { return driver_cancel(&g_jobopts); }
+static int jp_drv_install(void) { return driver_install(&g_in.opts); }
+static int jp_drv_cancel(void) { return driver_cancel(&g_in.opts); }
 
 // "Skip" on the driver pages of the main flow: the fix is installed without the driver (the sign-in start is then registered by the install itself).
 static void skip_driver(void)
 {
     user_log(L"driver: skipped, the fix is installed without it");
-    g_drv = FALSE; g_opts.autostart_later = FALSE; g_flow = FLOW_MAIN;
-    install(g_inst_job);
+    wz.drv = FALSE; wz.opts.autostart_later = FALSE; wz.flow = FLOW_MAIN;
+    install(wz.inst_job);
 }
 
 // The text of a failed driver step (rc: PK_* of the download, DRV_E_* of driver.c) and the error page.
@@ -233,25 +233,25 @@ static void drv_error(int rc)
 {
     switch (rc) {
     case DRV_E_HASH:
-        lstrcpyW(g_note, T(L"The downloaded file is not the one this program was made for (its SHA-256 differs), so it was not installed. Dyna Pro may have changed the file.",
+        lstrcpyW(wz.note, T(L"The downloaded file is not the one this program was made for (its SHA-256 differs), so it was not installed. Dyna Pro may have changed the file.",
                            L"下載到的檔案和這個程式預期的不一樣（SHA-256 不符），為了安全沒有安裝。可能是 Dyna Pro 更新了檔案。"));
         break;
-    case DRV_E_BCD: lstrcpyW(g_note, T(L"Windows could not be told to show its start-up menu at the next start (bcdedit failed).", L"無法設定「下次開機顯示進階選單」（bcdedit 失敗）。")); break;
-    case DRV_E_TASK: lstrcpyW(g_note, T(L"The task that continues the installation after the restart could not be created.", L"無法建立重新開機後繼續安裝的排程工作。")); break;
-    case DRV_E_DIR: lstrcpyW(g_note, T(L"The working folder %ProgramData%\\DynaRunFix could not be made safe (an old folder is still in use, or it can be changed by other users). Nothing was installed. Close other programs, restart the PC and try again.",
+    case DRV_E_BCD: lstrcpyW(wz.note, T(L"Windows could not be told to show its start-up menu at the next start (bcdedit failed).", L"無法設定「下次開機顯示進階選單」（bcdedit 失敗）。")); break;
+    case DRV_E_TASK: lstrcpyW(wz.note, T(L"The task that continues the installation after the restart could not be created.", L"無法建立重新開機後繼續安裝的排程工作。")); break;
+    case DRV_E_DIR: lstrcpyW(wz.note, T(L"The working folder %ProgramData%\\DynaRunFix could not be made safe (an old folder is still in use, or it can be changed by other users). Nothing was installed. Close other programs, restart the PC and try again.",
                                        L"無法把工作資料夾 %ProgramData%\\DynaRunFix 設為安全狀態（舊資料夾仍在使用中，或其他使用者可以修改它）。沒有安裝任何東西。請關閉其他程式、重新啟動電腦後再試一次。")); break;
-    case DRV_E_PNP: lstrcpyW(g_note, T(L"Windows did not accept the driver. Driver signature checking may still have been on.", L"Windows 沒有接受這個驅動程式，可能是簽章檢查還開著。")); break;
-    default: wsprintfW(g_note, T(L"The driver could not be prepared (code %d).", L"無法準備驅動程式（代碼 %d）。"), rc); break;
+    case DRV_E_PNP: lstrcpyW(wz.note, T(L"Windows did not accept the driver. Driver signature checking may still have been on.", L"Windows 沒有接受這個驅動程式，可能是簽章檢查還開著。")); break;
+    default: wsprintfW(wz.note, T(L"The driver could not be prepared (code %d).", L"無法準備驅動程式（代碼 %d）。"), rc); break;
     }
-    lstrcatW(g_note, T(L"\n\nYou can install the driver by hand instead: click \"Open the manual steps\".", L"\n\n也可以改用手動方式安裝，請按「開啟手動安裝說明」。"));
-    if (g_fix_done) lstrcatW(g_note, T(L"\n\nDynaRun's fix itself is installed. To try the driver again later, use \"Install Dyna Pro USB driver\" in the Start menu.",
+    lstrcatW(wz.note, T(L"\n\nYou can install the driver by hand instead: click \"Open the manual steps\".", L"\n\n也可以改用手動方式安裝，請按「開啟手動安裝說明」。"));
+    if (wz.fix_done) lstrcatW(wz.note, T(L"\n\nDynaRun's fix itself is installed. To try the driver again later, use \"Install Dyna Pro USB driver\" in the Start menu.",
                                        L"\n\nDynaRun 的修正本身已經安裝好了。之後想再試一次驅動程式，可以用開始功能表裡的「安裝 Dyna Pro USB 驅動程式」。"));
     set_page(P_DRV_ERROR);
 }
 
 static void drv_reboot_now(void)
 {
-    g_drv_noreboot = !driver_reboot();
+    wz.drv_noreboot = !driver_reboot();
     set_page(P_DRV_REBOOT);
 }
 
@@ -260,30 +260,30 @@ static void drv_start(void)
 {
     if (!driver_supported()) {
         DWORD b = os_build();         // 9200+: Windows 8 / 8.1, 6000+: Vista / 7, below: XP
-        lstrcpyW(g_note, T(L"This version of Windows is too old for the automatic installation (it needs Windows 10 or later). Install the driver by hand:\n\n",
+        lstrcpyW(wz.note, T(L"This version of Windows is too old for the automatic installation (it needs Windows 10 or later). Install the driver by hand:\n\n",
                            L"這個 Windows 版本太舊，無法自動安裝（需要 Windows 10 或更新版本）。請手動安裝：\n\n"));
         if (b >= 9200)
-            lstrcatW(g_note, T(L"Windows 8 / 8.1: hold Shift and click Restart, then Troubleshoot > Advanced options > Startup Settings > Restart, and press 7 (Disable driver signature enforcement; 32-bit editions do not enforce driver signing and only show the warning, so they can skip this). "
+            lstrcatW(wz.note, T(L"Windows 8 / 8.1: hold Shift and click Restart, then Troubleshoot > Advanced options > Startup Settings > Restart, and press 7 (Disable driver signature enforcement; 32-bit editions do not enforce driver signing and only show the warning, so they can skip this). "
                                L"Then install the driver in Device Manager (Update driver > Browse my computer) and choose \"Install this driver software anyway\" on the red warning.",
                                L"Windows 8 / 8.1：按住 Shift 再按「重新啟動」，依序選 疑難排解 > 進階選項 > 啟動設定 > 重新啟動，然後按 7（停用驅動程式強制簽章；32 位元版不強制驅動程式簽章、只會顯示警告，可略過這一步）。"
                                L"接著在裝置管理員安裝驅動程式（更新驅動程式 > 瀏覽電腦上的驅動程式），並在紅色警告選「仍然安裝此驅動程式軟體」。"));
         else if (b >= 6000)
-            lstrcatW(g_note, T(L"Windows Vista / 7: restart and press F8 repeatedly before the Windows logo appears, choose \"Disable Driver Signature Enforcement\" in Advanced Boot Options "
+            lstrcatW(wz.note, T(L"Windows Vista / 7: restart and press F8 repeatedly before the Windows logo appears, choose \"Disable Driver Signature Enforcement\" in Advanced Boot Options "
                                L"(32-bit editions do not enforce driver signing and only show the warning, so they can skip this). Then in Device Manager use Update Driver > Browse my computer > Have Disk, and choose \"Install this driver software anyway\" on the red warning.",
                                L"Windows Vista / 7：重新開機，在出現 Windows 標誌之前連續按 F8，在「進階開機選項」選「停用驅動程式強制簽章」（32 位元版不強制驅動程式簽章、只會顯示警告，可略過這一步）。"
                                L"接著在裝置管理員用 更新驅動程式 > 瀏覽電腦 > 從磁片安裝，並在紅色警告選「仍然安裝此驅動程式軟體」。"));
         else
-            lstrcatW(g_note, T(L"Windows XP does not enforce driver signatures. Install the driver in Device Manager; when Windows says the software has not passed Windows Logo testing, click \"Continue Anyway\".",
+            lstrcatW(wz.note, T(L"Windows XP does not enforce driver signatures. Install the driver in Device Manager; when Windows says the software has not passed Windows Logo testing, click \"Continue Anyway\".",
                                L"Windows XP 不強制驅動程式簽章。請在裝置管理員安裝驅動程式；Windows 說軟體未通過 Windows 標誌測試時，按「仍然繼續」。"));
-        lstrcatW(g_note, T(L"\n\nThe manual steps have the details: click \"Open the manual steps\".", L"\n\n詳細說明請按「開啟手動安裝說明」。"));
+        lstrcatW(wz.note, T(L"\n\nThe manual steps have the details: click \"Open the manual steps\".", L"\n\n詳細說明請按「開啟手動安裝說明」。"));
         set_page(P_DRV_ERROR);
         return;
     }
-    g_drv_have = driver_installed();
-    if (g_flow == FLOW_DRIVER_CONTINUE) {
-        if (g_drv_have) { if (is_admin()) driver_cancel(&g_opts); set_page(P_DRV_DONE); }       // installed meanwhile: the waiting task goes
+    wz.drv_have = driver_installed();
+    if (wz.flow == FLOW_DRIVER_CONTINUE) {
+        if (wz.drv_have) { if (is_admin()) driver_cancel(&wz.opts); set_page(P_DRV_DONE); }       // installed meanwhile: the waiting task goes
         else set_page(driver_ci_state() == DRV_CI_ENFORCED ? P_DRV_RETRY : P_DRV_WARN);
-    } else set_page(g_drv_have ? P_DRV_DONE : P_DRV_INTRO);
+    } else set_page(wz.drv_have ? P_DRV_DONE : P_DRV_INTRO);
 }
 
 // The choice on the warning page: install the zip anyway (the elevated step is told, see driver_prep) or cancel. Both are logged.
@@ -291,13 +291,13 @@ static void hash_choice(BOOL install)
 {
     static WCHAR l[2 * MAX_PATH + 120];
     lstrcpyW(l, install ? L"driver zip with another hash: the user chose to install it anyway: " : L"driver zip with another hash: the user cancelled: ");
-    lstrcatW(l, g_drvzip); user_log(l);
-    if (install) { g_drv_allow = TRUE; set_page(P_DRV_PRESS7); return; }
-    if (!(g_drv_how & DRV_SRC_LOCAL)) driver_forget(g_drvzip);             // our own refused download is not offered again; a file of the user's stays
-    if ((g_drv_how & DRV_SRC_LOCAL) && !(g_drv_how & DRV_SRC_PICKED)) { driver_skip_local_other(); user_log(L"the declined copy was found automatically: automatic searches skip such copies from now on"); }   // later tries download
-    else if (g_drv_how & DRV_SRC_PICKED) user_log(L"the declined file was chosen by the user: automatic searches are not changed");
-    g_drvzip[0] = 0; g_drv_allow = FALSE;
-    lstrcpyW(g_note, ((g_drv_how & DRV_SRC_LOCAL) && !(g_drv_how & DRV_SRC_PICKED)) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
+    lstrcatW(l, wz.drvzip); user_log(l);
+    if (install) { wz.drv_allow = TRUE; set_page(P_DRV_PRESS7); return; }
+    if (!(wz.drv_how & DRV_SRC_LOCAL)) driver_forget(wz.drvzip);             // our own refused download is not offered again; a file of the user's stays
+    if ((wz.drv_how & DRV_SRC_LOCAL) && !(wz.drv_how & DRV_SRC_PICKED)) { driver_skip_local_other(); user_log(L"the declined copy was found automatically: automatic searches skip such copies from now on"); }   // later tries download
+    else if (wz.drv_how & DRV_SRC_PICKED) user_log(L"the declined file was chosen by the user: automatic searches are not changed");
+    wz.drvzip[0] = 0; wz.drv_allow = FALSE;
+    lstrcpyW(wz.note, ((wz.drv_how & DRV_SRC_LOCAL) && !(wz.drv_how & DRV_SRC_PICKED)) ? T(L"Cancelled: the driver was not installed. Trying again downloads it from the Dyna Pro website.", L"已取消，沒有安裝驅動程式。再試一次會從 Dyna Pro 官網下載。")
                                                  : T(L"Cancelled: the driver was not installed.", L"已取消，沒有安裝驅動程式。"));
     set_page(P_DRV_INTRO);
 }
@@ -306,13 +306,13 @@ static void hash_choice(BOOL install)
 static void acq_driver_result(int rc)
 {
     if (rc == PK_OK) {
-        g_drv_allow = FALSE;
+        wz.drv_allow = FALSE;
         if (!g_bmp[0]) g_bmp[0] = load_png(18, &g_bw[0], &g_bh[0]);                 // the picture is decoded before the page changes, so the new page is built at once
         set_page(P_DRV_PRESS7);
     } else if (rc == DRV_W_HASH) {
         WCHAR m[2 * MAX_PATH + 100];
-        g_drv_allow = FALSE;
-        lstrcpyW(m, L"driver package with other files: the warning page is shown for "); lstrcatW(m, g_drvzip); user_log(m);
+        wz.drv_allow = FALSE;
+        lstrcpyW(m, L"driver package with other files: the warning page is shown for "); lstrcatW(m, wz.drvzip); user_log(m);
         set_page(P_DRV_HASH);
     } else acq_fail(rc);
 }
@@ -381,12 +381,12 @@ static void choose_driver_source(void)
         }
     }
     { WCHAR l[MAX_PATH + 60]; lstrcpyW(l, L"driver: the user chose "); lstrcatW(l, p); user_log(l); }
-    g_acq = &ACQ_DRIVER; lstrcpyW(g_drvzip, p);
+    wz.acq = &ACQ_DRIVER; lstrcpyW(wz.drvzip, p);
     old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
-    rc = driver_check(g_drvzip, &g_drv_how, g_drv_hex, &g_drv_size, g_drv_rep, 1500);
-    g_drv_how |= DRV_SRC_PICKED;                                           // chosen by the user: always checked; declining its warning does not touch the memory of declined auto-found copies
+    rc = driver_check(wz.drvzip, &wz.drv_how, wz.drv_hex, &wz.drv_size, wz.drv_rep, 1500);
+    wz.drv_how |= DRV_SRC_PICKED;                                           // chosen by the user: always checked; declining its warning does not touch the memory of declined auto-found copies
     user_log(L"driver: a file the user chose is checked as it is (the skip of declined auto-found copies does not apply to it)");
-    g_drv_bl = driver_bitlocker();
+    wz.drv_bl = driver_bitlocker();
     SetCursor(old);
     acq_driver_result(rc);
 }
@@ -397,8 +397,8 @@ static void jd_drv_prep(int job, int rc)
     if (rc == DRV_SUCCESS) { drv_reboot_now(); return; }
     if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); return; }      // armed, but BitLocker is still on: the user decides
     if (rc == RC_CANCEL) {
-        lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
-        set_page(g_flow == FLOW_DRIVER_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
+        lstrcpyW(wz.note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
+        set_page(wz.flow == FLOW_DRIVER_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
         return;
     }
     drv_error(rc);
@@ -407,10 +407,10 @@ static void jd_drv_prep(int job, int rc)
 static void jd_drv_install(int job, int rc)
 {
     (void)job;
-    if (rc == DRV_SUCCESS) { g_drv_have = FALSE; set_page(P_DRV_DONE); return; }
-    if (rc == RC_CANCEL) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); return; }
+    if (rc == DRV_SUCCESS) { wz.drv_have = FALSE; set_page(P_DRV_DONE); return; }
+    if (rc == RC_CANCEL) { lstrcpyW(wz.note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); return; }
     if (rc == DRV_E_ENFORCED) {                        // this start still checks signatures: nothing was installed, the restart stays armed
-        lstrcpyW(g_note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
+        lstrcpyW(wz.note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
         set_page(P_DRV_RETRY); return;
     }
     drv_error(rc);
@@ -423,9 +423,9 @@ static void jd_drv_cancel(int job, int rc)
 }
 
 static void pri_drv_intro(void) { acq_start(&ACQ_DRIVER); }
-static void pri_drv_press7(void) { if (g_flow == FLOW_MAIN_WITH_DRIVER) install(g_inst_job); else start_job(JOB_DRV_PREP, P_DRV_PREP); }   // FLOW_MAIN_WITH_DRIVER: the fix and the driver preparation in one elevated stage
+static void pri_drv_press7(void) { if (wz.flow == FLOW_MAIN_WITH_DRIVER) install(wz.inst_job); else start_job(JOB_DRV_PREP, P_DRV_PREP); }   // FLOW_MAIN_WITH_DRIVER: the fix and the driver preparation in one elevated stage
 static void pri_drv_hash(void) { hash_choice(FALSE); }                                    // "Cancel" is the default button
-static void pri_drv_retry(void) { g_drvzip[0] = 0; start_job(JOB_DRV_PREP, P_DRV_PREP); }       // the staged driver is still there
+static void pri_drv_retry(void) { wz.drvzip[0] = 0; start_job(JOB_DRV_PREP, P_DRV_PREP); }       // the staged driver is still there
 static void pri_drv_warn(void) { start_job(JOB_DRV_INSTALL, P_DRV_INSTALL); }
 static void pri_drv_bde(void) { drv_reboot_now(); }                                       // "Restart anyway"
 
@@ -438,7 +438,7 @@ static void pri_drv_done(void)
 // after the restart: closing the window ends the installation like "Cancel" (done at once when this runs elevated, as the task does)
 static void cls_drv_task(void)
 {
-    if (g_flow == FLOW_DRIVER_CONTINUE && is_admin()) driver_cancel(&g_opts);
+    if (wz.flow == FLOW_DRIVER_CONTINUE && is_admin()) driver_cancel(&wz.opts);
     end_wizard();
 }
 

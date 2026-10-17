@@ -812,20 +812,23 @@ static void test_job_table(void)
             if (!strncmp(p, "return ", 7)) has_return = TRUE;
         }
         CHECK(has_return, L"every job proc returns its result code outside of a comment");
+        // the worker reads g_in and writes g_out: the wizard_state (wz, owned by the UI thread) does not appear in a job proc
+        for (p = c; p < stop && strncmp(p, "wz.", 3); p++);
+        CHECK(p >= stop, L"no job proc touches the UI's wizard_state");
         rows++;
     }
     CHECK(rows == jobs, L"every job has its own proc function");
     // job_proc and job_done go through the table
     a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
-    CHECK(a && end && strstr(a, "JOBS[g_job].proc()") && strstr(a, "JOBS[g_job].proc()") < end, L"job_proc runs the proc of the job's row");
-    // g_opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
-    // records that (g_close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
+    CHECK(a && end && strstr(a, "JOBS[g_in.job].proc()") && strstr(a, "JOBS[g_in.job].proc()") < end, L"job_proc runs the proc of the job's row");
+    // wz.opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
+    // records that (wz.close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
     a = strstr(t, "static void job_done"); end = a ? strstr(a, "JOBS[job].on_done") : NULL;
     CHECK(a && end, L"job_done is in the wizard source and hands the result to the job's on_done");
-    for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_opts.close = FALSE", 20)) break;
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "wz.opts.close = FALSE", 21)) break;
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
-    for (c = t, jobs = 0; (c = strstr(c, "g_opts.close = TRUE")) != NULL; c += 19) jobs++;
-    CHECK(jobs == 1 && strstr(t, "g_opts.close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_opts.close only together with g_close_asked");
+    for (c = t, jobs = 0; (c = strstr(c, "wz.opts.close = TRUE")) != NULL; c += 20) jobs++;
+    CHECK(jobs == 1 && strstr(t, "wz.opts.close = TRUE; wz.close_asked = TRUE"), L"the wizard sets wz.opts.close only together with wz.close_asked");
     release(f);
 }
 

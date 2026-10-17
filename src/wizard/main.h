@@ -32,25 +32,25 @@ static const WCHAR *disclaimer(void)
 static void hint_line(WCHAR *b)
 {
     WCHAR t[400];
-    if (g_hint == HINT_NEWER) {
+    if (wz.hint == HINT_NEWER) {
         wsprintfW(t, T(L"\n\nA newer DynaRun V3 is available on Dyna Pro's website: %s (installed: %s). \"Download new version\" downloads and installs it; nothing happens unless you click it.",
-                       L"\n\nDyna Pro 官網有新版 DynaRun V3：%s（目前已安裝：%s）。按「下載新版」會下載並安裝；不按就什麼都不會發生。"), g_hint_new, g_hint_inst);
+                       L"\n\nDyna Pro 官網有新版 DynaRun V3：%s（目前已安裝：%s）。按「下載新版」會下載並安裝；不按就什麼都不會發生。"), wz.hint_new, wz.hint_inst);
         lstrcatW(b, t);
-    } else if (g_hint == HINT_ZIPDIFF)
+    } else if (wz.hint == HINT_ZIPDIFF)
         lstrcatW(b, T(L"\n\nDyna Pro's website may have a newer DynaRun V3 (the file there is not the one downloaded last time). \"Download new version\" gets it; nothing happens unless you click it.",
                       L"\n\nDyna Pro 官網可能有新版 DynaRun V3（那裡的檔案和上次下載的不同）。按「下載新版」會取得它；不按就什麼都不會發生。"));
 }
 
-static const WCHAR *hint_btn(void) { return g_hint ? T(L"Download new version", L"下載新版") : NULL; }
+static const WCHAR *hint_btn(void) { return wz.hint ? T(L"Download new version", L"下載新版") : NULL; }
 
-static BOOL can_start_dynarun(void) { return g_installed && g_exe[0] && exists(g_launcher); }
+static BOOL can_start_dynarun(void) { return wz.installed && g_exe[0] && exists(g_launcher); }
 
-// What is said about the taskbar pin (g_instres.pin, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
-// the install (g_fix_done: the page "Done" is skipped), on the restart page.
+// What is said about the taskbar pin (wz.instres.pin, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
+// the install (wz.fix_done: the page "Done" is skipped), on the restart page.
 static void pin_hint(WCHAR *b)
 {
-    if (g_instres.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-    if (g_instres.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
+    if (wz.instres.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (wz.instres.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
         ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
             L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
         : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
@@ -67,7 +67,7 @@ static void acp_warning(void)
 static void enter_hello(void)
 {
     WCHAR *b = pgbuf;
-    if (g_flow == FLOW_DRIVER_ONLY) {
+    if (wz.flow == FLOW_DRIVER_ONLY) {
         wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThe fix for Windows 10/11 is already installed (version %s). The Dyna Pro USB driver is not installed yet; "
                        L"without it this computer cannot talk to the dynamometer.\n\nThis installs the driver (one restart is needed). When Windows asks whether to allow changes, click \"Yes\".\n\n"
                        L"If DynaRun does not behave, \"Reinstall the fix...\" installs the fix again.",
@@ -78,10 +78,10 @@ static void enter_hello(void)
         text(ID_TITLE, T(L"Install the Dyna Pro USB driver", L"安裝 Dyna Pro USB 驅動程式"));
         text(ID_BODY, b);
         buttons4(T(L"Install the driver", L"安裝驅動程式"), T(L"Cancel", L"取消"), hint_btn(), T(L"Reinstall the fix...", L"重新安裝修正…"));
-        if (g_note[0]) status(g_note, TRUE);
+        if (wz.note[0]) status(wz.note, TRUE);
         return;
     }
-    if (g_installed) {
+    if (wz.installed) {
         text(ID_TITLE, T(L"Fix DynaRun V3 for this Windows", L"讓 DynaRun V3 在這台電腦正常運作"));
         wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThis installs the fixes for Windows 10/11 (flickering main screen, .Dpr files "
                        L"in OneDrive that do not open, garbled text, \"Run as administrator\").\n\n"
@@ -106,17 +106,17 @@ static void enter_hello(void)
         text(ID_BODY, b);
         buttons(T(L"Start", L"開始"), T(L"Cancel", L"取消"), T(L"Installed elsewhere...", L"已裝在其他位置…"));
     }
-    vis(ID_PIN, TRUE); vis(ID_AUTO, TRUE); vis(ID_DRV, g_drv_avail);
-    if (g_note[0]) status(g_note, TRUE);
+    vis(ID_PIN, TRUE); vis(ID_AUTO, TRUE); vis(ID_DRV, wz.drv_avail);
+    if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_running(void)
 {
     WCHAR *b = pgbuf;
     WCHAR names[200];
-    running_names(g_lastrun = running_programs(), names);
+    running_names(wz.lastrun = running_programs(), names);
     text(ID_TITLE, T(L"DynaRun is running", L"DynaRun 正在執行"));
-    if (g_lastrun & RUN_NOCLOSE) {               // another user's, or one that cannot be identified: closing from here would not help
+    if (wz.lastrun & RUN_NOCLOSE) {               // another user's, or one that cannot be identified: closing from here would not help
         wsprintfW(b, T(L"DynaRun is running for another user, or as a program that cannot be identified, so it cannot be closed from here:\n%s\n"
                        L"Ask that user to close DynaRun; this page then offers \"Install\".",
                        L"另一位使用者（或無法辨識的程式）正在執行 DynaRun，無法從這裡關閉：\n%s\n"
@@ -131,7 +131,7 @@ static void enter_running(void)
         text(ID_BODY, b);
         buttons(T(L"Close DynaRun and install", L"關閉 DynaRun 並安裝"), T(L"Cancel", L"取消"), NULL);
     }
-    if (g_note[0]) status(g_note, TRUE);
+    if (wz.note[0]) status(wz.note, TRUE);
     SetTimer(g_hwnd, TIMER_RUNNING, 1000, NULL);
 }
 
@@ -146,7 +146,7 @@ static void enter_install(void)
 
 static void enter_done(void)
 {
-    g_result = RC_OK;                                   // everything is installed
+    wz.result = RC_OK;                                   // everything is installed
     WCHAR *b = pgbuf;
     text(ID_TITLE, T(L"Done", L"完成"));
     lstrcpyW(b, T(L"Everything is installed.\n\nFrom now on, start DynaRun with the \"DynaRun V3\" icon on the desktop as usual.\n\n"
@@ -154,7 +154,7 @@ static void enter_done(void)
                   L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
                   L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
     pin_hint(b);
-    if (g_opts.autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
+    if (wz.opts.autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
     lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
     text(ID_BODY, b);
     buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
@@ -163,72 +163,93 @@ static void enter_done(void)
 
 static void enter_error(void)
 {
-    g_result = RC_FAIL;                                 // the install failed
+    wz.result = RC_FAIL;                                 // the install failed
     text(ID_TITLE, T(L"Something went wrong", L"發生問題"));
-    text(ID_BODY, g_note);
+    text(ID_BODY, wz.note);
     buttons(T(L"Close", L"關閉"), NULL, NULL);
 }
 
-static int jp_install_all(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_jobopts, &g_instres, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_instres, g_msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
-static int jp_install_fix(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_jobopts, &g_instres, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_instres); }
+static int jp_install_all(void) { return g_in.flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_in.opts, &g_out.instres, g_in.msi, g_in.drvzip, g_in.drv_allow ? g_in.drv_hex : NULL) : install_all(&g_in.opts, &g_out.instres, g_in.msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
+static int jp_install_fix(void) { return g_in.flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_in.opts, &g_out.instres, g_in.drvzip, g_in.drv_allow ? g_in.drv_hex : NULL) : install_fix(&g_in.opts, &g_out.instres); }
+static void mo_install(void) { wz.instres = g_out.instres; }                // the pin hint
 
 static void jd_install(int job, int rc);
 
 // One row per job, indexed by the JOB_* value (nothing depends on the order of the values).
-//   proc        runs on the worker thread; returns the job's result code
+//   proc        runs on the worker thread; returns the job's result code. Reads g_in, writes g_out, touches nothing else of the wizard's state
+//   merge       runs on the UI thread after the worker has been joined, before on_done: takes the part of g_out the job produced into wz (NULL: none)
 //   on_done     runs on the UI thread when the worker has ended (job_done), with the job and its result
 //   keep_up     the elevated stage or a system tool works: the UAC prompt and msiexec's window take the foreground, so ID_KEEPUP keeps the wizard behind them
 //   bring_front the wizard comes back in front of other windows when the job is done (the elevated part allows it)
 typedef struct {
     int (*proc)(void);
+    void (*merge)(void);
     void (*on_done)(int job, int rc);
     BOOL keep_up, bring_front;
 } job_desc;
 
 static const job_desc JOBS[JOB_COUNT] = {
-    [JOB_ACQUIRE]     = { jp_acquire,     jd_acquire,     FALSE, FALSE },
-    [JOB_EXTRACT]     = { jp_extract,     jd_extract,     FALSE, FALSE },
-    [JOB_INSTALL_ALL] = { jp_install_all, jd_install,     TRUE,  TRUE  },
-    [JOB_INSTALL_FIX] = { jp_install_fix, jd_install,     TRUE,  TRUE  },
-    [JOB_DRV_PREP]    = { jp_drv_prep,    jd_drv_prep,    TRUE,  TRUE  },
-    [JOB_DRV_INSTALL] = { jp_drv_install, jd_drv_install, TRUE,  TRUE  },
-    [JOB_DRV_CANCEL]  = { jp_drv_cancel,  jd_drv_cancel,  TRUE,  TRUE  },
+    [JOB_ACQUIRE]     = { jp_acquire,     mo_acquire, jd_acquire,     FALSE, FALSE },
+    [JOB_EXTRACT]     = { jp_extract,     NULL,       jd_extract,     FALSE, FALSE },
+    [JOB_INSTALL_ALL] = { jp_install_all, mo_install, jd_install,     TRUE,  TRUE  },
+    [JOB_INSTALL_FIX] = { jp_install_fix, mo_install, jd_install,     TRUE,  TRUE  },
+    [JOB_DRV_PREP]    = { jp_drv_prep,    NULL,       jd_drv_prep,    TRUE,  TRUE  },
+    [JOB_DRV_INSTALL] = { jp_drv_install, NULL,       jd_drv_install, TRUE,  TRUE  },
+    [JOB_DRV_CANCEL]  = { jp_drv_cancel,  NULL,       jd_drv_cancel,  TRUE,  TRUE  },
 };
 
 static DWORD WINAPI job_proc(LPVOID unused)
 {
-    int rc = JOBS[g_job].proc();
-    PostMessageW(g_hwnd, WM_JOBDONE, g_job, rc);
+    int rc = JOBS[g_in.job].proc();
+    PostMessageW(g_hwnd, WM_JOBDONE, g_in.job, rc);
     (void)unused;
     return 0;
 }
 
 // The update hint is asked in the background when the first page shows an installed DynaRun; the answer comes as WM_HINT. Never waited for.
+// The thread writes g_hint_out and then posts WM_HINT; the UI reads g_hint_out only when that message arrives.
 static DWORD WINAPI hint_proc(LPVOID unused)
 {
-    static WCHAR i[40], n[40]; int r;
-    r = pkg_update_hint(i, n, 40, user_log);
-    if (r) { lstrcpyW(g_hint_inst, i); lstrcpyW(g_hint_new, n); }
+    int r = pkg_update_hint(g_hint_out.inst, g_hint_out.nw, 40, user_log);
     if (g_hwnd) PostMessageW(g_hwnd, WM_HINT, (WPARAM)r, 0);
     (void)unused;
     return 0;
 }
 
+// Hands the job what it needs (g_in) and starts its output (g_out) as a copy of the UI's values, on the UI thread, before the worker exists. The password
+// leaves the UI's copy here: the worker wipes the one it was given.
+static void job_handover(int job)
+{
+    g_in.job = job; g_in.opts = wz.opts; g_in.flow = wz.flow;
+    g_in.acq = wz.acq; g_in.acq_local_ok = wz.acq_local_ok;
+    CopyMemory(g_in.msi, wz.msi, sizeof(g_in.msi));
+    CopyMemory(&g_in.zip, &wz.zip, sizeof(g_in.zip));
+    CopyMemory(g_in.pw, wz.pw, sizeof(g_in.pw)); SecureZeroMemory(wz.pw, sizeof(wz.pw));
+    CopyMemory(g_in.drvzip, wz.drvzip, sizeof(g_in.drvzip)); g_in.drv_allow = wz.drv_allow;
+    CopyMemory(g_in.drv_hex, wz.drv_hex, sizeof(g_in.drv_hex));
+    g_out.lastpct = -1; g_out.neterr = wz.neterr;
+    CopyMemory(g_out.pkg, wz.pkg, sizeof(g_out.pkg)); g_out.pkg_found = wz.pkg_found; g_out.pkg_ours = wz.pkg_ours;
+    CopyMemory(g_out.drvzip, wz.drvzip, sizeof(g_out.drvzip)); g_out.drv_how = wz.drv_how;
+    CopyMemory(g_out.drv_hex, wz.drv_hex, sizeof(g_out.drv_hex)); g_out.drv_size = wz.drv_size;
+    CopyMemory(g_out.drv_rep, wz.drv_rep, sizeof(g_out.drv_rep)); g_out.drv_bl = wz.drv_bl;
+    g_out.instres = wz.instres;
+}
+
 static void start_job(int job, int page)
 {
     DWORD tid;
-    g_job = job; g_cancel = 0; g_busy = TRUE;
-    if (job == JOB_ACQUIRE && g_dlacq != g_acq) { g_dlacq = g_acq; g_dltotal = g_dlhave = 0; }   // a resume of the same download keeps what is known
+    g_cancel = 0; wz.busy = TRUE;
+    if (job == JOB_ACQUIRE && wz.dlacq != wz.acq) { wz.dlacq = wz.acq; wz.dltotal = wz.dlhave = 0; }   // a resume of the same download keeps what is known
     set_page(page);
-    g_jobopts = g_opts;                              // the job runs with the options as they are now
-    g_thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
+    job_handover(job);                                // the job runs with the options and the state as they are now
+    wz.thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
     if (JOBS[job].keep_up) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
 }
 
 // The install jobs start only once DynaRun is closed (see running_programs in setup.c).
 static void install(int job)
 {
-    g_pending = job;
+    wz.pending = job;
     if (running_programs()) set_page(P_RUNNING);
     else start_job(job, P_INSTALL);
 }
@@ -237,7 +258,7 @@ static void install(int job)
 // one elevated stage then does both: the UAC prompt comes once, before the restart. The driver-only first page (FLOW_DRIVER_ONLY) has no install: it starts the prep itself.
 static void go_install(int job)
 {
-    if (g_drv && g_flow == FLOW_MAIN) { g_flow = FLOW_MAIN_WITH_DRIVER; g_inst_job = job; g_note[0] = 0; set_page(P_DRV_INTRO); }
+    if (wz.drv && wz.flow == FLOW_MAIN) { wz.flow = FLOW_MAIN_WITH_DRIVER; wz.inst_job = job; wz.note[0] = 0; set_page(P_DRV_INTRO); }
     else install(job);
 }
 
@@ -250,45 +271,46 @@ static void choose_exe(void)
     of.lpstrFile = f; of.nMaxFile = MAX_PATH;
     of.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameW(&of)) return;
-    lstrcpyW(g_exe, f); g_installed = TRUE;
+    lstrcpyW(g_exe, f); wz.installed = TRUE;
     set_page(P_HELLO);
 }
 
 static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INSTALL_FIX
 {
-    if (g_flow == FLOW_MAIN_WITH_DRIVER && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
+    if (wz.flow == FLOW_MAIN_WITH_DRIVER && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
         cleanup_files();
-        g_fix_done = TRUE;
+        wz.fix_done = TRUE;
         if (rc == DRV_SUCCESS) drv_reboot_now();
         else if (rc == DRV_W_BDE) set_page(P_DRV_BDE);
         else drv_error(rc);
         return;
     }
     if (rc == RC_OK) { cleanup_files(); set_page(P_DONE); return; }
-    if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
+    if (rc == RC_RUNNING) { wz.pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
     if (rc == RC_CANCEL) {
-        lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
-        set_page(g_flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
+        lstrcpyW(wz.note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
+        set_page(wz.flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
         return;
     }
-    wsprintfW(g_note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
+    wsprintfW(wz.note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
                         L"安裝沒有完成（代碼 %d）。\n\n請重新開機後再執行一次本程式。"), rc);
     set_page(P_ERROR);
 }
 
 static void job_done(int job, int rc)
 {
-    WaitForSingleObject(g_thread, INFINITE); CloseHandle(g_thread); g_thread = NULL; g_busy = FALSE;
-    if (g_close_asked) { g_opts.close = FALSE; g_close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
-    if (g_closing) { DestroyWindow(g_hwnd); return; }
+    WaitForSingleObject(wz.thread, INFINITE); CloseHandle(wz.thread); wz.thread = NULL; wz.busy = FALSE;   // the join: what the worker wrote is ours now
+    if (JOBS[job].merge) JOBS[job].merge();
+    if (wz.close_asked) { wz.opts.close = FALSE; wz.close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
+    if (wz.closing) { DestroyWindow(g_hwnd); return; }
     JOBS[job].on_done(job, rc);
 }
 
 // The first page's options are read when it is left, whichever button leaves it.
 static void take_options(void)
 {
-    g_opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
-    g_opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    wz.opts.pin = SendMessageW(H(ID_PIN), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    wz.opts.autostart = SendMessageW(H(ID_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 
 static void end_wizard(void) { DestroyWindow(g_hwnd); }
@@ -297,16 +319,16 @@ static void end_wizard(void) { DestroyWindow(g_hwnd); }
 static void pri_hello(void)
 {
     take_options();
-    if (g_flow == FLOW_DRIVER_ONLY) { g_drv = TRUE; g_opts.autostart_later = FALSE; set_page(P_DRV_INTRO); return; }   // the fix is current: straight to the driver
-    g_drv = g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
-    g_opts.autostart_later = g_drv;              // the driver restart comes first: the sign-in start is registered after it
-    if (g_installed) go_install(JOB_INSTALL_FIX); else { g_acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
+    if (wz.flow == FLOW_DRIVER_ONLY) { wz.drv = TRUE; wz.opts.autostart_later = FALSE; set_page(P_DRV_INTRO); return; }   // the fix is current: straight to the driver
+    wz.drv = wz.drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    wz.opts.autostart_later = wz.drv;              // the driver restart comes first: the sign-in start is registered after it
+    if (wz.installed) go_install(JOB_INSTALL_FIX); else { wz.acq_fresh = FALSE; acq_start(&ACQ_SETUP); }
 }
 
 static void pri_running(void)
 {
-    if (!g_opts.close) { g_opts.close = TRUE; g_close_asked = TRUE; }   // the elevated stage closes DynaRun (see close_programs in setup.c), for this job only
-    start_job(g_pending, P_INSTALL);
+    if (!wz.opts.close) { wz.opts.close = TRUE; wz.close_asked = TRUE; }   // the elevated stage closes DynaRun (see close_programs in setup.c), for this job only
+    start_job(wz.pending, P_INSTALL);
 }
 
 static void pri_done(void)
@@ -319,9 +341,9 @@ static void pri_done(void)
 // (its close hook, which then also ends the wizard if that is what closing means there).
 static void on_close(void)
 {
-    const page_desc *d = &PAGES[g_page];
+    const page_desc *d = &PAGES[wz.page];
     if (d->flags & PF_NOCLOSE) return;                                                    // msiexec / registry / system tool work must not be interrupted
-    if (g_busy) { g_closing = TRUE; InterlockedExchange(&g_cancel, 1); return; }
+    if (wz.busy) { wz.closing = TRUE; InterlockedExchange(&g_cancel, 1); return; }
     if (d->close) d->close(); else end_wizard();
 }
 
@@ -330,23 +352,23 @@ static void sec_none(BOOL button) { (void)button; }                             
 
 static void thr_hello(void)
 {
-    if (!g_hint) return;                                          // "Download new version": the same acquire flow, then the normal install (the MSI upgrades DynaRun)
+    if (!wz.hint) return;                                          // "Download new version": the same acquire flow, then the normal install (the MSI upgrades DynaRun)
     take_options();
-    g_drv = g_flow != FLOW_DRIVER_ONLY && g_drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
-    g_opts.autostart_later = g_drv;
+    wz.drv = wz.flow != FLOW_DRIVER_ONLY && wz.drv_avail && SendMessageW(H(ID_DRV), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    wz.opts.autostart_later = wz.drv;
     user_log(L"DynaRun update hint: the user chose to download the new version");
-    g_acq_fresh = TRUE;                                           // an older package found on this computer would not be the new version
+    wz.acq_fresh = TRUE;                                           // an older package found on this computer would not be the new version
     acq_start(&ACQ_SETUP);
 }
 
 static void ext_hello(void)                                                               // "Reinstall the fix..." / "Installed elsewhere..."
 {
-    if (g_flow == FLOW_DRIVER_ONLY) { g_flow = FLOW_MAIN; set_page(P_HELLO); }
+    if (wz.flow == FLOW_DRIVER_ONLY) { wz.flow = FLOW_MAIN; set_page(P_HELLO); }
     else choose_exe();
 }
 
 // Alt+key shortcuts that exist on one page only (the controls' own & mnemonics do not work while the focus is in the edit or the rich text).
-static BOOL when_drv_avail(void) { return g_drv_avail; }
+static BOOL when_drv_avail(void) { return wz.drv_avail; }
 static const hotkey KEYS_HELLO[] = { { 'T', ID_PIN, NULL }, { 'S', ID_AUTO, NULL }, { 'D', ID_DRV, when_drv_avail }, { 0 } };
 static const hotkey KEYS_LICENSE[] = { { 'A', ID_CHECK, NULL }, { 0 } };
 
@@ -384,15 +406,15 @@ static const page_desc PAGES[P_COUNT] = {
 
 static void set_page(int p)
 {
-    g_page = p;
-    g_result = RC_CANCEL;                               // undecided until a page below says otherwise
-    g_paused = g_pause_req = FALSE;
-    g_checking = g_marquee = FALSE;                     // a page starts with a plain bar; a download started again (also after the checking phase) shows its progress
+    wz.page = p;
+    wz.result = RC_CANCEL;                               // undecided until a page below says otherwise
+    wz.paused = wz.pause_req = FALSE;
+    wz.checking = wz.marquee = FALSE;                     // a page starts with a plain bar; a download started again (also after the checking phase) shows its progress
     g_building = TRUE;                                  // status() does not lay out while the page is being rebuilt; the layout at the end does
     KillTimer(g_hwnd, TIMER_RUNNING);
     vis(ID_EDIT, FALSE); vis(ID_RICH, FALSE); vis(ID_CHECK, FALSE); vis(ID_PIN, FALSE); vis(ID_AUTO, FALSE); vis(ID_DRV, FALSE); vis(ID_IMG, FALSE); vis(ID_INFO, FALSE); vis(ID_PROG, FALSE); status(NULL, FALSE);
     PAGES[p].enter();
-    g_note[0] = 0;
+    wz.note[0] = 0;
     g_building = FALSE;
     layout();
     if (!GetFocus() || !IsWindowEnabled(GetFocus()) || !(GetWindowLongW(GetFocus(), GWL_STYLE) & WS_VISIBLE))
@@ -400,15 +422,15 @@ static void set_page(int p)
 }
 
 // The window asks the table (the controls are the same on every page).
-static void on_primary(void) { if (PAGES[g_page].primary) PAGES[g_page].primary(); }
-static void on_second(BOOL button) { if (PAGES[g_page].second) PAGES[g_page].second(button); else on_close(); }
-static void on_third(void) { if (PAGES[g_page].third) PAGES[g_page].third(); }
-static void on_extra(void) { if (PAGES[g_page].extra) PAGES[g_page].extra(); }
+static void on_primary(void) { if (PAGES[wz.page].primary) PAGES[wz.page].primary(); }
+static void on_second(BOOL button) { if (PAGES[wz.page].second) PAGES[wz.page].second(button); else on_close(); }
+static void on_third(void) { if (PAGES[wz.page].third) PAGES[wz.page].third(); }
+static void on_extra(void) { if (PAGES[wz.page].extra) PAGES[wz.page].extra(); }
 
 // The control id of the Alt+key the current page has a shortcut for; 0 when there is none.
 static int page_hotkey(WPARAM key)
 {
-    const hotkey *k = PAGES[g_page].keys;
+    const hotkey *k = PAGES[wz.page].keys;
     for (; k && k->key; k++) if (k->key == key && (!k->when || k->when())) return k->id;
     return 0;
 }
@@ -429,12 +451,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         static WCHAR b[100];
         DWORD done = (DWORD)w, total = (DWORD)l;
         if (done == (DWORD)-1) {                    // download over, the file is being checked: not pausable, bar and text say so
-            if (g_page == P_FETCH && !g_paused) {
-                g_marquee = TRUE;
+            if (wz.page == P_FETCH && !wz.paused) {
+                wz.marquee = TRUE;
                 progress(TRUE);
-                if (total == 2) { WCHAR s[160]; wsprintfW(s, T(L"Looking for %s on this computer...", L"正在尋找電腦上現有的%s…"), ACQ_NAME(g_acq)); status(s, FALSE); }   // before anything is downloaded: a bar that moves
+                if (total == 2) { WCHAR s[160]; wsprintfW(s, T(L"Looking for %s on this computer...", L"正在尋找電腦上現有的%s…"), ACQ_NAME(wz.acq)); status(s, FALSE); }   // before anything is downloaded: a bar that moves
                 else {                                                                                       // the file is being checked: not pausable
-                    g_checking = TRUE;
+                    wz.checking = TRUE;
                     text(ID_TITLE, T(L"Checking the driver", L"正在檢查驅動程式"));
                     status(T(L"Checking the driver...", L"正在檢查驅動程式…"), FALSE);
                     EnableWindow(H(ID_PRIMARY), FALSE);
@@ -443,13 +465,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             return 0;
         }
-        if (g_checking) return 0;
-        if (total && g_marquee) { g_marquee = FALSE; progress(FALSE); }                                  // the size became known
-        else if (!total && !g_marquee && g_page == P_FETCH) { g_marquee = TRUE; progress(TRUE); }   // size unknown: a moving bar and the MB received
-        if (!g_marquee) SendMessageW(H(ID_PROG), PBM_SETPOS, total ? MulDiv(done, 1000, total) : 0, 0);
-        g_dlhave = done; if (total) g_dltotal = total;
-        if (g_page == P_FETCH) {
-            if (total != g_total) { fetch_body(total); layout(); }
+        if (wz.checking) return 0;
+        if (total && wz.marquee) { wz.marquee = FALSE; progress(FALSE); }                                  // the size became known
+        else if (!total && !wz.marquee && wz.page == P_FETCH) { wz.marquee = TRUE; progress(TRUE); }   // size unknown: a moving bar and the MB received
+        if (!wz.marquee) SendMessageW(H(ID_PROG), PBM_SETPOS, total ? MulDiv(done, 1000, total) : 0, 0);
+        wz.dlhave = done; if (total) wz.dltotal = total;
+        if (wz.page == P_FETCH) {
+            if (total != wz.total) { fetch_body(total); layout(); }
             wsprintfW(b, total ? L"%lu.%lu / %lu.%lu MB" : L"%lu.%lu MB", done / 1048576, done % 1048576 / 104858,
                       total / 1048576, total % 1048576 / 104858);
             status(b, FALSE);
@@ -457,10 +479,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_TIMER:                                  // the page follows DynaRun being closed (or started again)
-        if (w == TIMER_RUNNING && g_page == P_RUNNING) {
+        if (w == TIMER_RUNNING && wz.page == P_RUNNING) {
             int run = running_programs();
-            if (run != g_lastrun) {
-                g_lastrun = run;
+            if (run != wz.lastrun) {
+                wz.lastrun = run;
                 if (run) set_page(P_RUNNING);
                 else {                               // closed by the user meanwhile: plain "Install"
                     buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
@@ -472,8 +494,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (w == ID_KEEPUP) keep_up(h);
         return 0;
     case WM_HINT:
-        g_hint = (int)w;
-        if (g_hint && g_page == P_HELLO && !g_busy) set_page(P_HELLO);
+        wz.hint = (int)w;
+        if (wz.hint) { lstrcpyW(wz.hint_inst, g_hint_out.inst); lstrcpyW(wz.hint_new, g_hint_out.nw); }
+        if (wz.hint && wz.page == P_HELLO && !wz.busy) set_page(P_HELLO);
         return 0;
     case WM_JOBDONE:
         KillTimer(h, ID_KEEPUP);
@@ -494,10 +517,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         return (LRESULT)g_grey;                     // push buttons sit on the grey footer
     case WM_CTLCOLORSTATIC:
         SetBkColor((HDC)w, RGB(255, 255, 255));
-        SetTextColor((HDC)w, (HWND)l == H(ID_STATUS) && g_status_err ? RGB(192, 0, 0) : GetSysColor(COLOR_WINDOWTEXT));
+        SetTextColor((HDC)w, (HWND)l == H(ID_STATUS) && wz.status_err ? RGB(192, 0, 0) : GetSysColor(COLOR_WINDOWTEXT));
         return (LRESULT)g_white;
     case WM_CLOSE: on_close(); return 0;
-    case WM_DESTROY: SecureZeroMemory(g_pw, sizeof(g_pw)); SetWindowTextW(H(ID_EDIT), L""); drop_msi(); PostQuitMessage(0); return 0;
+    case WM_DESTROY: SecureZeroMemory(wz.pw, sizeof(wz.pw)); SecureZeroMemory(g_in.pw, sizeof(g_in.pw)); SetWindowTextW(H(ID_EDIT), L""); drop_msi(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, m, w, l);
 }
@@ -506,7 +529,8 @@ int wizard(const install_opts *init)
 {
     INITCOMMONCONTROLSEX icc; WNDCLASSW wc; NONCLIENTMETRICSW nm; RECT r; MSG msg; HDC dc; LOGFONTW lf; int key;
     static WCHAR title[100];
-    g_opts = *init;                                  // the command line's options; the pages change this copy
+    wz.result = RC_CANCEL; wz.flow = FLOW_MAIN; wz.drv_bl = BL_UNKNOWN; wz.acq = &ACQ_SETUP;   // the starting values of the state that are not zero
+    wz.opts = *init;                                  // the command line's options; the pages change this copy
     icc.dwSize = sizeof(icc); icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
     dc = GetDC(NULL); g_dpi = GetDeviceCaps(dc, LOGPIXELSY); ReleaseDC(NULL, dc);
@@ -533,17 +557,17 @@ int wizard(const install_opts *init)
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
     if (!g_hwnd) return RC_FAIL;
     create_controls();
-    g_installed = locate_dynarun();
-    g_drv_avail = g_drvmode == DRV_MODE_NONE && driver_supported() && !driver_installed();
+    wz.installed = locate_dynarun();
+    wz.drv_avail = g_drvmode == DRV_MODE_NONE && driver_supported() && !driver_installed();
     // g_drvmode (set by cmd_driver / cmd_driver_continue before the wizard starts) is read here and nowhere else
-    if (g_drvmode == DRV_MODE_STANDALONE) g_flow = FLOW_DRIVER_ONLY;
-    else if (g_drvmode == DRV_MODE_CONTINUE) g_flow = FLOW_DRIVER_CONTINUE;
-    else g_flow = g_installed && g_drv_avail && fix_current() ? FLOW_DRIVER_ONLY : FLOW_MAIN;   // the fix is there and current: only the driver is missing
+    if (g_drvmode == DRV_MODE_STANDALONE) wz.flow = FLOW_DRIVER_ONLY;
+    else if (g_drvmode == DRV_MODE_CONTINUE) wz.flow = FLOW_DRIVER_CONTINUE;
+    else wz.flow = wz.installed && wz.drv_avail && fix_current() ? FLOW_DRIVER_ONLY : FLOW_MAIN;   // the fix is there and current: only the driver is missing
     if (g_drvmode != DRV_MODE_NONE) drv_start();
     else {
         DWORD tid;
         set_page(P_HELLO);
-        if (g_installed) CloseHandle(CreateThread(NULL, 0, hint_proc, NULL, 0, &tid));      // is there a newer DynaRun? (a hint; the page does not wait)
+        if (wz.installed) CloseHandle(CreateThread(NULL, 0, hint_proc, NULL, 0, &tid));      // is there a newer DynaRun? (a hint; the page does not wait)
     }
     ShowWindow(g_hwnd, SW_SHOWNORMAL);
     SetForegroundWindow(g_hwnd);
@@ -561,6 +585,6 @@ int wizard(const install_opts *init)
         TranslateMessage(&msg); DispatchMessageW(&msg);
     }
     g_hwnd = NULL;
-    if (g_page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
-    return g_result;
+    if (wz.page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
+    return wz.result;
 }
