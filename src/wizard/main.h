@@ -463,6 +463,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (wz.hint && wz.page == P_HELLO && !wz.busy) set_page(P_HELLO);
         return 0;
     case WM_JOBDONE:
+        if (!wz.busy || w >= JOB_COUNT) return 0;      // not from our worker (nothing running, or a job number that is none): ignore, JOBS[] is not indexed
         KillTimer(h, ID_KEEPUP);
         // after the elevated part (which allows it) the wizard comes back in front of other windows
         if (JOBS[w].bring_front) bring_front(h);
