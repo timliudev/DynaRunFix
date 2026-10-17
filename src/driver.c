@@ -1157,13 +1157,13 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
             check_report(&chk, rep, 1500); drv_log(rep);
             drop_staged = TRUE; res = DRV_E_HASH; goto out;
         }
-        if (!staged_ok(base)) { res = DRV_E_INF; goto out; }
+        if (!staged_ok(base)) { drop_staged = TRUE; res = DRV_E_INF; goto out; }
     } else {                                                                   // a retry: the staged driver must still be ours
         if (!exists(base) || path_user_writable(base, sid)) { res = DRV_E_DIR; goto out; }
         log_in_base(base, sid);
         if (!staged_ok(base)) { res = DRV_E_INF; goto out; }
     }
-    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) { res = DRV_E_COPY; goto out; }     // the task starts this copy
+    if (!inside && ((!CopyFileW(g_self, p, FALSE)) || !same_file(g_self, p))) { drop_staged = stage; res = DRV_E_COPY; goto out; }     // the task starts this copy (a first attempt ends here: nothing is armed, the next one stages again; a retry keeps the staged files)
     // BitLocker: the restart menu asks for the recovery key on an encrypted PC; suspend protection until the driver is installed (resumed by install/cancel).
     // -RebootCount 3 is the safety net: protection returns by itself after 3 restarts if the flow is abandoned; a retry suspends again and starts the count over.
     // "Not encrypted" is not an error.
@@ -1206,18 +1206,21 @@ static int prep_locked(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
         // Everything else is armed; the wizard lets the user decide (DRV_W_BDE). "Not readable / no BitLocker" with a failing manage-bde is no warning.
         if ((ps == BDE_PS_ON || ps == BDE_PS_UNKNOWN) && (rc != 0 || after == BDE_PS_ON || after == BDE_PS_UNKNOWN)) bde_warn = TRUE;
     }
-    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { resume = TRUE; res = DRV_E_BCD; goto out; }
+    if (run_tool(L"bcdedit.exe", L"/set {current} onetimeadvancedoptions on") != 0) { drop_staged = stage; resume = TRUE; res = DRV_E_BCD; goto out; }
     n = drv_task_xml(xml, 3000, sid, p);
     lstrcpyW(z, base); lstrcatW(z, L"\\task.xml");
-    if (n < 0 || !write_utf16_file(z, xml, n)) { undo = TRUE; res = DRV_E_TASK; goto out; }
+    if (n < 0 || !write_utf16_file(z, xml, n)) { drop_staged = stage; undo = TRUE; res = DRV_E_TASK; goto out; }
     lstrcpyW(args, L"/create /tn " TASK_NAME L" /xml \""); lstrcatW(args, z); lstrcatW(args, L"\" /f");
     n = (int)run_tool(L"schtasks.exe", args);
     DeleteFileW(z);
-    if (n != 0) { undo = TRUE; res = DRV_E_TASK; goto out; }
+    if (n != 0) { drop_staged = stage; undo = TRUE; res = DRV_E_TASK; goto out; }
     drv_log(bde_warn ? L"prep: done, but BitLocker could not be suspended" : L"prep: done");
     res = bde_warn ? DRV_W_BDE : DRV_SUCCESS;
 out:
-    if (drop_staged) { lstrcpyW(args, base); lstrcatW(args, L"\\driver"); delete_tree(args, NULL, 0); }
+    if (drop_staged) {                                                         // a first attempt that failed: neither the staged files nor an "install anyway" acceptance outlive it
+        lstrcpyW(args, base); lstrcatW(args, L"\\driver"); delete_tree(args, NULL, 0);
+        if (accept_path(z, base)) DeleteFileW(z);
+    }
     if (undo) cancel_locked();
     if (resume) bde_resume();
     return res;
