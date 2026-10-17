@@ -165,6 +165,8 @@ static const char *g_pegmods[2] = { "Pesgo32e.ocx", "PEGRP32E.dll" };
 typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } peg_us;
 static volatile LONG g_pegready;
 static BOOL g_pegnote;
+static volatile LONG g_pegbusy;               // 1 while hook_t's raw/chain are being patched (peg_check or the notification)
+static volatile LONG g_pegdefer;              // a notification found g_pegbusy taken: peg_check patches the modules again
 static VOID NTAPI peg_ldr_note(ULONG reason, const ldrnote_t *d, PVOID ctx)
 {
     WCHAR n[32]; const peg_us *u; int i, k;
@@ -179,8 +181,11 @@ static VOID NTAPI peg_ldr_note(ULONG reason, const ldrnote_t *d, PVOID ctx)
         for (j = 0; g_pegmods[k][j]; j++) w[j] = (WCHAR)g_pegmods[k][j];
         w[j] = 0;
         if (!lstrcmpiW(n, w)) {
+            // under the loader lock: never wait; when peg_check is patching (on any thread) it is left to peg_check, no log here
+            if (InterlockedCompareExchange(&g_pegbusy, 1, 0)) { InterlockedExchange(&g_pegdefer, 1); continue; }
             logf("PEGRC32D: loader notification for %s %u %u\r\n", (DWORD)(UINT_PTR)g_pegmods[k], 0, 0);
             patch_base((BYTE *)d->DllBase, g_pegmods[k], "peg-note", g_peg_hooks);
+            InterlockedExchange(&g_pegbusy, 0);
         }
     }
 }
@@ -188,17 +193,21 @@ static VOID NTAPI peg_ldr_note(ULONG reason, const ldrnote_t *d, PVOID ctx)
 // Patch the control's modules once they are loaded (also the fallback when no loader notifications exist); idempotent.
 static void peg_check(void)
 {
-    static BOOL resolved, off; static volatile LONG busy;
+    static BOOL resolved, off;
     int i;
     if (!g_pegrc || off || !GetModuleHandleA("MSVBVM60.DLL")) return;
-    if (InterlockedCompareExchange(&busy, 1, 0)) return;         // not from inside our own patching
+    if (InterlockedCompareExchange(&g_pegbusy, 1, 0)) return;         // not from inside our own patching
     if (!resolved) {
-        if (peg_elevated()) { off = TRUE; logf("PEGRC32D: DynaRun is elevated: no redirect %u %u %u\r\n", 0, 0, 0); InterlockedExchange(&busy, 0); return; }
+        if (peg_elevated()) { off = TRUE; logf("PEGRC32D: DynaRun is elevated: no redirect %u %u %u\r\n", 0, 0, 0); InterlockedExchange(&g_pegbusy, 0); return; }
         resolved = TRUE; resolve(g_peg_hooks);
         {   // see peg_ldr_note
             HMODULE nt = GetModuleHandleA("ntdll.dll"); ldrreg_t rg = nt ? (ldrreg_t)GetProcAddress(nt, "LdrRegisterDllNotification") : NULL; PVOID ck;
             if (rg && !g_pegnote) { g_pegnote = TRUE; InterlockedExchange(&g_pegready, 1); if (rg(0, peg_ldr_note, NULL, &ck)) InterlockedExchange(&g_pegready, 0); }
         }
+    }
+    if (InterlockedExchange(&g_pegdefer, 0)) {   // a notification was skipped meanwhile: patch whatever is loaded now
+        g_pegmod[0] = g_pegmod[1] = NULL;
+        logf("PEGRC32D: loader notification came while patching, checking the modules again %u %u %u\r\n", 0, 0, 0);
     }
     for (i = 0; i < 2; i++) {
         HMODULE m = GetModuleHandleA(g_pegmods[i]);
@@ -208,7 +217,7 @@ static void peg_check(void)
             patch_base((BYTE *)m, g_pegmods[i], "peg", g_peg_hooks);
         } else if (!m) g_pegmod[i] = NULL;
     }
-    InterlockedExchange(&busy, 0);
+    InterlockedExchange(&g_pegbusy, 0);
 }
 
 // The launcher starts DynaRun with "RunAsInvoker" appended to __COMPAT_LAYER (so that DynaRun itself never runs elevated). That
