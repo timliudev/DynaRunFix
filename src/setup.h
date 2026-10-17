@@ -2,6 +2,7 @@
 #pragma once
 #include <windows.h>
 #include <wininet.h>
+#include "errors.h"                         // RC_*, PK_*, PKC_*, DRV_E_* / DRV_W_*, FIX_DONE: the result codes
 
 extern BOOL g_zh, g_quiet, g_close;         // g_close: close a running DynaRun before installing (/close)
 extern BOOL g_pin, g_autostart;                         // pin DynaRun to the taskbar / start it at sign-in (default on; /notaskbar, /noautostart)
@@ -27,20 +28,19 @@ BOOL user_sid(WCHAR *out, int cch);
 BOOL fix_current(void);                      // the fix is installed and is the version of this setup (uninstall entry, launcher and dll there)
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
-int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. 0 ok, 2 cancelled
-int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. 0 ok, 2 cancelled
+int install_fix(void);                      // DynaRun is installed: elevated stage + user shortcuts. RC_OK, RC_CANCEL
+int install_all(const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL
 // The same, and the driver's preparation (driver_prep) in the SAME elevated stage: one UAC prompt for both. zip/accept as for driver_prep.
-// 0 ok; 2 cancelled; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
+// RC_OK; RC_CANCEL; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
 int install_fix_driver(const WCHAR *zip, const WCHAR *accept);
 int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept);
 // shared with driver.c
 void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth);   // a link is removed itself, never followed; in-use files go at the next restart
 BOOL same_file(const WCHAR *a, const WCHAR *b);
-int run_elevated(const WCHAR *args, const WCHAR *exe_path);   // "<exe or this program> <args>" with one UAC prompt; its exit code, 2 = cancelled
+int run_elevated(const WCHAR *args, const WCHAR *exe_path);   // "<exe or this program> <args>" with one UAC prompt; its exit code, RC_CANCEL = cancelled
 BOOL valid_user_sid(const WCHAR *sid);      // a SID of a real account with a profile here
 BOOL path_user_writable(const WCHAR *path, const WCHAR *sid);   // could ordinary users (or the user sid) change what is at path (or is that unknown)
 BOOL enable_privilege(const WCHAR *name);
-#define RC_RUNNING 6                        // exit code: DynaRun (or the launcher / LEProc) still runs, nothing was changed
 enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4, RUN_CANCLOSE = 8, RUN_NOCLOSE = 16 };
 int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces. RUN_CANCLOSE: one of them can be closed
                                             // by the setup; RUN_NOCLOSE: one cannot (another session, or its exe path cannot be told)
@@ -63,7 +63,6 @@ int wizard(void);
 #define GITHUB_HOSTS L"github.com;api.github.com;objects.githubusercontent.com;release-assets.githubusercontent.com"
 #define DYNAPRO_ZIP  L"https://dynapro.co.uk/Site/graphics/Technical_Info/Software/Dyna%20Pro%20Dynamometers.zip"
 typedef void (*progress_fn)(DWORD done, DWORD total);
-enum { PK_OK, PK_CANCEL, PK_NET, PK_HTTP, PK_IO, PK_FORMAT, PK_PASSWORD, PK_CERT, PK_URL };   // PK_CERT: certificate/TLS failure; PK_URL: not https, or redirected off the allowed host
 
 typedef struct {
     WCHAR path[MAX_PATH];
@@ -133,7 +132,6 @@ int pkg_prepare_documents(const WCHAR *msi);   // download OneDrive "online-only
    Windows installs it only with driver signature enforcement off for one start: see docs/DRIVER.md) */
 #define DYNAPRO_USB_ZIP  L"https://dynapro.co.uk/Site/graphics/Technical_Info/Software/Dyna%20Pro%20USB.zip"
 #define DRIVER_DOC_URL   L"https://github.com/timliudev/DynaRunFix/blob/main/docs/DRIVER.md"
-enum { DRV_SUCCESS = 0, DRV_E_HASH = 20, DRV_E_EXTRACT, DRV_E_INF, DRV_E_COPY, DRV_E_BCD, DRV_E_TASK, DRV_E_PNP, DRV_E_DIR, DRV_E_SID, DRV_E_ENFORCED, DRV_W_BDE = 30, DRV_W_HASH = 31, DRV_NOVERB = -1000 };
 enum { DRV_CI_ENFORCED, DRV_CI_OFF, DRV_CI_UNKNOWN };   // driver signature enforcement now
 BOOL driver_supported(void);                // Windows 10 (build 10240) or later: older systems install the driver by hand
 BOOL driver_installed(void);                // a Dyna Pro ftdibus package is in the driver store (%windir%\INF\oem*.inf)

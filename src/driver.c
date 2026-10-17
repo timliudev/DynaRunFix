@@ -391,8 +391,8 @@ static void check_report(const drv_check *c, WCHAR *out, int cch)
     WCHAR line[200], a[17], e[17]; int i;
     out[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 0) continue;
-        if (c->st[i] == 2) wsprintfW(line, T(L"  %s: missing\n", L"  %s：缺少\n"), DRV_FILES[i].rel);
+        if (c->st[i] == PKC_OK) continue;
+        if (c->st[i] == PKC_MISSING) wsprintfW(line, T(L"  %s: missing\n", L"  %s：缺少\n"), DRV_FILES[i].rel);
         else {
             lstrcpynW(a, c->hex[i][0] ? c->hex[i] : L"?", 17); lstrcpynW(e, DRV_FILES[i].sha, 17);
             wsprintfW(line, T(L"  %s: %s... (expected %s...)\n", L"  %s：%s…（已知 %s…）\n"), DRV_FILES[i].rel, a, e);
@@ -502,7 +502,7 @@ static BOOL digest_of(const drv_check *c, const WCHAR *tmp, WCHAR *hex)
     static WCHAR t[DRV_MAXF * 100]; ULONGLONG sz; int i; BOOL ok;
     t[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 2 || !c->hex[i][0]) return FALSE;
+        if (c->st[i] == PKC_MISSING || !c->hex[i][0]) return FALSE;
         lstrcatW(t, L";"); lstrcatW(t, DRV_FILES[i].rel); lstrcatW(t, L"|"); lstrcatW(t, c->hex[i]);
     }
     if (!write_utf16_file(tmp, t, lstrlenW(t))) return FALSE;
@@ -881,7 +881,7 @@ static BOOL write_accepted(const WCHAR *base, const drv_check *c)
     static WCHAR t[DRV_MAXF * 100]; WCHAR f[MAX_PATH]; int i;
     t[0] = 0;
     for (i = 0; i < DRV_NFILES; i++) {
-        if (c->st[i] == 2 || !c->hex[i][0]) return FALSE;
+        if (c->st[i] == PKC_MISSING || !c->hex[i][0]) return FALSE;
         lstrcatW(t, L";"); lstrcatW(t, DRV_FILES[i].rel); lstrcatW(t, L"|"); lstrcatW(t, c->hex[i]);
     }
     lstrcatW(t, L";");
@@ -1249,7 +1249,7 @@ static int install_locked(void)
 int driver_prep(const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 300];
-    if (!user_sid(sid, 200)) return 1;
+    if (!user_sid(sid, 200)) return RC_FAIL;
     if (is_admin()) return prep_locked(sid, zip, accept);
     if (accept && accept[0]) wsprintfW(args, L"/driver-prep %s \"%s\" /unverified %s", sid, zip, accept);
     else wsprintfW(args, L"/driver-prep %s \"%s\"", sid, zip);
@@ -1260,18 +1260,18 @@ int driver_prep(const WCHAR *zip, const WCHAR *accept)
 // one UAC prompt serves both. sid: the user the stage was started for.
 int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept)
 {
-    if (!is_admin()) return 1;
+    if (!is_admin()) return RC_FAIL;
     return prep_locked(sid, zip, accept);
 }
 
 int driver_bitlocker(void)
 {
     WCHAR dr[4]; int ps; bde_info bi;
-    if (!is_admin()) return -1;                                                // WMI's BitLocker namespace refuses a process that is not elevated: do not even try (it can take many seconds)
+    if (!is_admin()) return BL_UNKNOWN;                                                // WMI's BitLocker namespace refuses a process that is not elevated: do not even try (it can take many seconds)
     sys_drive(dr);
     ps = bde_query(dr, &bi);
-    if (ps == BDE_PS_ERROR) return -1;                                         // not elevated: WMI refuses, nothing can be told
-    return drv_bde_suspend(ps, bi.conv, bi.nprot) ? 1 : 0;                   // the same rule as prep's, so the hint on the restart page agrees with what will happen
+    if (ps == BDE_PS_ERROR) return BL_UNKNOWN;                                         // not elevated: WMI refuses, nothing can be told
+    return drv_bde_suspend(ps, bi.conv, bi.nprot) ? BL_ON : BL_OFF;                   // the same rule as prep's, so the hint on the restart page agrees with what will happen
 }
 
 int driver_install(void)
@@ -1283,7 +1283,7 @@ int driver_install(void)
 int driver_cancel(void)
 {
     static WCHAR base[MAX_PATH];
-    if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return 0; }
+    if (is_admin()) { base_dir(base); log_in_base(base, NULL); cancel_locked(); return RC_OK; }
     return run_elevated(L"/driver-cancel", NULL);
 }
 
@@ -1341,8 +1341,8 @@ int driver_verb(int argc, WCHAR **argv)
     if (!lstrcmpiW(v, L"/driver")) { g_drvmode = DRV_MODE_STANDALONE; return wizard(); }
     if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(); }
     if (lstrcmpiW(v, L"/driver-prep") && lstrcmpiW(v, L"/driver-install") && lstrcmpiW(v, L"/driver-cancel")) return DRV_NOVERB;
-    if (!is_admin()) return 1;                                                 // the elevated parts: only with the rights they need
-    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], prep_accept_arg(argc, argv)) : 1;
+    if (!is_admin()) return RC_FAIL;                                           // the elevated parts: only with the rights they need
+    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], prep_accept_arg(argc, argv)) : RC_FAIL;
     if (!lstrcmpiW(v, L"/driver-install")) return install_locked();
     return driver_cancel();
 }

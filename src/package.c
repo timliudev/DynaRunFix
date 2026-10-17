@@ -663,21 +663,21 @@ static BOOL recorded_download(WCHAR *etag, DWORD *len, WCHAR *mod)
 // zip is not the one the last download recorded: "there may be a newer one". Nothing is changed, nothing is asked; every outcome is one line in the log (log may be NULL).
 int pkg_update_hint(WCHAR *installed, WCHAR *latest, int cch, void (*log)(const WCHAR *line))
 {
-    static char page[262144]; DWORD len; WCHAR l[300], e1[200], m1[64], e2[200], m2[64]; DWORD l1, l2; int r = 0;
+    static char page[262144]; DWORD len; WCHAR l[300], e1[200], m1[64], e2[200], m2[64]; DWORD l1, l2; int r = HINT_NONE;
     latest[0] = 0;
-    if (!dynarun_version(installed, cch)) { if (log) log(L"DynaRun update hint: no installed DynaRun version (not installed by its MSI)"); return 0; }
-    if (pkg_net_state() == NET_NO) { if (log) log(L"DynaRun update hint: no network"); return 0; }
+    if (!dynarun_version(installed, cch)) { if (log) log(L"DynaRun update hint: no installed DynaRun version (not installed by its MSI)"); return HINT_NONE; }
+    if (pkg_net_state() == NET_NO) { if (log) log(L"DynaRun update hint: no network"); return HINT_NONE; }
     if (fetch_text(DYNAPRO_PAGE, page, sizeof(page), &len) && pkg_page_version(page, len, latest, cch)) {
-        r = ver_compare(latest, installed) > 0 ? 1 : 0;
+        r = ver_compare(latest, installed) > 0 ? HINT_NEWER : HINT_NONE;
         if (log) { wsprintfW(l, L"DynaRun update hint: installed %s, the website names %s: %s", installed, latest, r ? L"newer version available" : L"nothing newer"); log(l); }
         return r;
     }
     if (log) log(L"DynaRun update hint: the website names no version (or could not be read): comparing its zip with the last download");
-    if (!probe_zip(e1, &l1, m1) || !recorded_download(e2, &l2, m2)) { if (log) log(L"DynaRun update hint: nothing to compare"); return 0; }
+    if (!probe_zip(e1, &l1, m1) || !recorded_download(e2, &l2, m2)) { if (log) log(L"DynaRun update hint: nothing to compare"); return HINT_NONE; }
     if (e1[0] && e2[0]) r = lstrcmpW(e1, e2) != 0;
     else r = (l1 && l2 && l1 != l2) || (m1[0] && m2[0] && lstrcmpW(m1, m2));
     if (log) log(r ? L"DynaRun update hint: the zip on the site differs from the one downloaded last (there may be a newer version)" : L"DynaRun update hint: the zip on the site is the one downloaded last");
-    return r ? 2 : 0;
+    return r ? HINT_ZIPDIFF : HINT_NONE;
 }
 
 
@@ -1002,9 +1002,9 @@ void pkg_check_files(const WCHAR *dir, const WCHAR *sub, const pkg_file *t, int 
     WCHAR p[MAX_PATH]; ULONGLONG sz; int i; DWORD a;
     zero(c, sizeof(*c));
     for (i = 0; i < n; i++) {
-        if (!pkg_file_path(p, dir, sub, t, i) || (a = GetFileAttributesW(p)) == INVALID_FILE_ATTRIBUTES) { c->st[i] = 2; c->missing++; continue; }
-        if ((a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || !pkg_sha256(p, c->hex[i], &sz)) { c->st[i] = 1; c->differ++; c->hex[i][0] = 0; continue; }
-        if (lstrcmpiW(c->hex[i], expect ? expect[i] : t[i].sha)) { c->st[i] = 1; c->differ++; continue; }
+        if (!pkg_file_path(p, dir, sub, t, i) || (a = GetFileAttributesW(p)) == INVALID_FILE_ATTRIBUTES) { c->st[i] = PKC_MISSING; c->missing++; continue; }
+        if ((a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || !pkg_sha256(p, c->hex[i], &sz)) { c->st[i] = PKC_DIFFER; c->differ++; c->hex[i][0] = 0; continue; }
+        if (lstrcmpiW(c->hex[i], expect ? expect[i] : t[i].sha)) { c->st[i] = PKC_DIFFER; c->differ++; continue; }
         c->ok++;
     }
 }
@@ -1271,12 +1271,12 @@ BOOL dynarun_product(WCHAR *out)
     return !MsiEnumRelatedProductsW(L"" DYNARUN_UPGRADE_CODE, 0, 0, out);
 }
 
-// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; -1 = not installed.
+// Dyna Pro's own uninstall of DynaRun V3 (basic UI, like the install). msiexec exit code; RM_NONE = not installed.
 int remove_dynarun(void)
 {
     static WCHAR exe[MAX_PATH], cmd[MAX_PATH + 96], prod[40];
     STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = 1;
-    if (!dynarun_product(prod)) return -1;
+    if (!dynarun_product(prod)) return RM_NONE;
     GetSystemDirectoryW(exe, MAX_PATH); lstrcatW(exe, L"\\msiexec.exe");
     wsprintfW(cmd, L"\"%s\" /x %s /qb! REBOOT=ReallySuppress", exe, prod);
     zero(&si, sizeof(si)); si.cb = sizeof(si);

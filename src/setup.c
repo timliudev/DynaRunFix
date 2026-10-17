@@ -1209,8 +1209,8 @@ static BOOL pin_taskbar(const WCHAR *lnk)
         return TRUE;
     }
     if (ma >= 10 && b >= 22000) {                       // Windows 11: see taskbar_policy
-        if (reg_str(HKEY_CURRENT_USER, POLKEY, L"StartLayoutFile", v, MAX_PATH, 0) && !lstrcmpiW(v, layout_xml(d))) g_pinresult = 2;
-        return g_pinresult == 2;
+        if (reg_str(HKEY_CURRENT_USER, POLKEY, L"StartLayoutFile", v, MAX_PATH, 0) && !lstrcmpiW(v, layout_xml(d))) g_pinresult = PIN_NEXT_SIGNIN;
+        return g_pinresult == PIN_NEXT_SIGNIN;
     }
     if (pinned_ours()) return TRUE;
     if (ma >= 10 && b >= 17763) pin_list(lnk); else pin_verb(lnk);
@@ -1409,15 +1409,15 @@ static int machine_install_locked(const WCHAR *sid)
 {
     static WCHAR p[MAX_PATH + 16];
     HKEY k;
-    if (!valid_user_sid(sid)) { error2(T(L"The user account is not valid.", L"使用者帳戶無效。"), sid); return 1; }
+    if (!valid_user_sid(sid)) { error2(T(L"The user account is not valid.", L"使用者帳戶無效。"), sid); return RC_FAIL; }
     lstrcpynW(g_user_sid, sid, 200);
     if (still_running(L"install")) return RC_RUNNING;   // checked again here: DynaRun may have been started since
-    if (!check_exe()) { error2(T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return 1; }
+    if (!check_exe()) { error2(T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return RC_FAIL; }
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
         !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL)) || !extract(5, cat3(p, g_dir, L"\\LICENSE.txt", NULL))) {
         error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
-        return 1;
+        return RC_FAIL;
     }
     {   // Locale Emulator, resources 10.. (see setup.rc)
         static const WCHAR *le[] = { L"LEProc.exe", L"LoaderDll.dll", L"LocaleEmulator.dll", L"LECommonLibrary.dll",
@@ -1427,16 +1427,16 @@ static int machine_install_locked(const WCHAR *sid)
         for (i = 0; i < (int)(sizeof(le) / sizeof(le[0])); i++)
             if (!extract(10 + i, cat3(p, g_dir, L"\\le\\", le[i]))) {
                 error2(T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), p);
-                return 1;
+                return RC_FAIL;
             }
     }
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
     if (lstrcmpiW(p, g_self) && ((!CopyFileW(g_self, p, FALSE) && !(move_aside(p) && CopyFileW(g_self, p, FALSE))) || !same_file(g_self, p))) {
         error2(T(L"Cannot copy the uninstaller.", L"無法複製解除安裝程式。"), p);
-        return 1;
+        return RC_FAIL;
     }
     driver_machine_stage(p);                            // the Start menu shortcut to the driver installation (p: the installed setup)
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return 1;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return RC_FAIL;
     set_str(k, L"InstallDir", g_dir);
     if (g_exe_trusted) set_str(k, L"DynaRunExe", g_exe);     // a path that ordinary users can change is not recorded for the elevated stages (uninstall) to use
     else RegDeleteValueW(k, L"DynaRunExe");
@@ -1466,13 +1466,13 @@ static int machine_install_locked(const WCHAR *sid)
         set_dword(k, L"NoModify", 1); set_dword(k, L"NoRepair", 1); set_dword(k, L"EstimatedSize", 100);
         RegCloseKey(k);
     }
-    return 0;
+    return RC_OK;
 }
 
 static int machine_install(const WCHAR *sid)
 {
     int rc;
-    if (!stage_lock()) { error2(busy_text(), NULL); return 1; }
+    if (!stage_lock()) { error2(busy_text(), NULL); return RC_FAIL; }
     rc = machine_install_locked(sid);
     stage_unlock();
     return rc;
@@ -1552,7 +1552,7 @@ static int machine_uninstall(const WCHAR *skip_sid)
 {
     static WCHAR p[MAX_PATH + 16], polsid[200]; static const WCHAR KEEP[] = L"com-copied.txt\0com-backup\0com-skipped.txt\0setup.log\0";   // the record of the COM copies stays
     HKEY k; DWORD man = 0, n = 4; BOOL keep = FALSE, deleted = FALSE, stuck = FALSE;
-    if (!stage_lock()) { error2(busy_text(), NULL); return 1; }
+    if (!stage_lock()) { error2(busy_text(), NULL); return RC_FAIL; }
     if (skip_sid && skip_sid[0] && valid_user_sid(skip_sid)) lstrcpynW(g_user_sid, skip_sid, 200); else skip_sid = NULL;
     if (g_close) close_programs();                   // the user agreed (or /close): DynaRun keeps files of the folder open
     if (!g_exe[0]) locate_dynarun();                 // not recorded (an untrusted path is not): the default folders
@@ -1592,7 +1592,7 @@ static int machine_uninstall(const WCHAR *skip_sid)
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, UNINSTKEY);
     delete_tree(g_dir, KEEP, 0);
     stage_unlock();
-    return 0;
+    return RC_OK;
 }
 
 static int memcmp_(const BYTE *x, const BYTE *y, DWORD n) { while (n--) if (*x++ != *y++) return 1; return 0; }
@@ -1631,7 +1631,7 @@ static HANDLE copy_and_hold(const WCHAR *src, const WCHAR *dst)
 // Runs "<exe> <args>" elevated (one UAC prompt) and returns its exit code; 2 = cancelled. exe: the program to run, NULL = this one.
 int run_elevated(const WCHAR *args, const WCHAR *exe_path)
 {
-    SHELLEXECUTEINFOW se; DWORD rc = 1, err, tn; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = exe_path ? exe_path : g_self; HANDLE hold = INVALID_HANDLE_VALUE; LARGE_INTEGER q;
+    SHELLEXECUTEINFOW se; DWORD rc = RC_FAIL, err, tn; static WCHAR a[1024], root[4], tmp[MAX_PATH]; const WCHAR *exe = exe_path ? exe_path : g_self; HANDLE hold = INVALID_HANDLE_VALUE; LARGE_INTEGER q;
     lstrcpyW(a, args); if (g_quiet) lstrcatW(a, L" /quiet"); if (g_close) lstrcatW(a, L" /close");
     if (g_pin) lstrcatW(a, L" /pin");                // the elevated stage sets up the Windows 11 pin
     if (g_keep) lstrcatW(a, L" /keep");
@@ -1649,7 +1649,7 @@ int run_elevated(const WCHAR *args, const WCHAR *exe_path)
     if (!ShellExecuteExW(&se)) {
         err = GetLastError();
         if (hold != INVALID_HANDLE_VALUE) { CloseHandle(hold); DeleteFileW(tmp); }
-        return err == ERROR_CANCELLED ? 2 : 1;
+        return err == ERROR_CANCELLED ? RC_CANCEL : RC_FAIL;
     }
     WaitForSingleObject(se.hProcess, INFINITE);
     GetExitCodeProcess(se.hProcess, &rc);
@@ -1724,31 +1724,31 @@ static BOOL stage_msi(const WCHAR *msi, WCHAR *dir, WCHAR *staged)
 static int machine_full(const WCHAR *sid, const WCHAR *msi)
 {
     static WCHAR me[200], txt[300], dir[MAX_PATH], staged[MAX_PATH]; int rc;
-    if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return 3;
-    if (!stage_lock()) { error2(busy_text(), NULL); return 1; }
+    if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return RC_OVER_SHOULDER;
+    if (!stage_lock()) { error2(busy_text(), NULL); return RC_FAIL; }
     if (still_running(L"full install")) { stage_unlock(); return RC_RUNNING; }
     if (!stage_msi(msi, dir, staged)) {
         stage_unlock();
         msg(T(L"The DynaRun V3 setup could not be copied for installation.", L"無法複製 DynaRun V3 安裝檔以進行安裝。"), MB_ICONERROR);
-        return 4;
+        return RC_MSI_FAILED;
     }
     if (msi_check(staged, NULL, 0) != MSI_DYNARUN) {            // the check of the copy that is going to be run
         drop_admin_dir(dir); stage_unlock();
         msg(T(L"This is not the DynaRun V3 setup, so it will not be installed.", L"這不是 DynaRun V3 的安裝檔，所以不會安裝它。"), MB_ICONERROR);
-        return 4;
+        return RC_MSI_FAILED;
     }
     rc = run_msiexec(staged);
     drop_admin_dir(dir);
     stage_unlock();
     if (rc != 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
-        if (rc == ERROR_INSTALL_USEREXIT) return 2;
+        if (rc == ERROR_INSTALL_USEREXIT) return RC_CANCEL;
         wsprintfW(txt, T(L"The DynaRun V3 setup failed (Windows Installer error %d).", L"DynaRun V3 安裝失敗（Windows Installer 錯誤 %d）。"), rc);
         if (rc == ERROR_INSTALL_ALREADY_RUNNING)
             lstrcatW(txt, T(L"\n\nAnother installation is running. Wait until it finishes and try again.", L"\n\n有其他程式正在安裝，請等它完成後再試一次。"));
         msg(txt, MB_ICONERROR);
-        return 4;
+        return RC_MSI_FAILED;
     }
-    if (!locate_dynarun()) { msg(T(L"DynaRun V3 was installed, but DynaRun V3.exe was not found.", L"DynaRun V3 已安裝，但找不到 DynaRun V3.exe。"), MB_ICONERROR); return 5; }
+    if (!locate_dynarun()) { msg(T(L"DynaRun V3 was installed, but DynaRun V3.exe was not found.", L"DynaRun V3 已安裝，但找不到 DynaRun V3.exe。"), MB_ICONERROR); return RC_NO_DYNARUN; }
     return machine_install(sid);
 }
 
@@ -1756,7 +1756,7 @@ static int machine_full(const WCHAR *sid, const WCHAR *msi)
 static void user_stage(void)
 {
     static WCHAR p[MAX_PATH]; HKEY b, s;
-    g_pinresult = 0;
+    g_pinresult = PIN_NOT_ASKED;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) return;
     // another version is installed now: what update.c noted no longer applies; the first start of DynaRun looks again
     RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk"); RegDeleteValueW(b, L"UpdateSkip");
@@ -1768,8 +1768,8 @@ static void user_stage(void)
             save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
         if (g_pin && !g_keep) {
-            g_pinresult = 3;
-            if (desktop_link(p, s) && pin_taskbar(p) && g_pinresult == 3) g_pinresult = 1;
+            g_pinresult = PIN_FAILED;
+            if (desktop_link(p, s) && pin_taskbar(p) && g_pinresult == PIN_FAILED) g_pinresult = PIN_DONE;
         }
         RegCloseKey(s);
     }
@@ -1814,8 +1814,7 @@ BOOL fix_current(void)
 }
 
 // The wizard's one elevated stage may do the driver's preparation too (zip != NULL; see driver_prep_stage): the fix and the driver then share ONE UAC prompt.
-// The result: the fix's failure code, or, when the fix is installed (user stage done), 0 or the driver's code (DRV_E_*, DRV_W_BDE: >= DRV_E_HASH).
-#define FIX_DONE(rc) ((rc) == 0 || (rc) >= DRV_E_HASH)
+// The result: the fix's failure code, or, when the fix is installed (user stage done), RC_OK or the driver's code (DRV_E_*, DRV_W_BDE: >= DRV_E_FIRST). FIX_DONE (errors.h) tells which.
 
 static void add_driver_args(WCHAR *args, const WCHAR *zip, const WCHAR *accept)   // the command line of the elevated stage
 {
@@ -1827,14 +1826,14 @@ static void add_driver_args(WCHAR *args, const WCHAR *zip, const WCHAR *accept) 
 int install_fix_driver(const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
-    if (!user_sid(sid, 200)) return 1;
+    if (!user_sid(sid, 200)) return RC_FAIL;
     if (running_early(L"install (before elevation)")) return RC_RUNNING;   // before the UAC prompt; /quiet without /close ends here
     CoInitialize(NULL);
     if (is_admin()) { rc = machine_install(sid); if (!rc && zip) rc = driver_prep_stage(sid, zip, accept); }
     else {
         wsprintfW(args, L"/machine %s \"%s\"", sid, g_exe);
         add_driver_args(args, zip, accept);
-        if ((rc = run_elevated(args, NULL)) == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
+        if ((rc = run_elevated(args, NULL)) == RC_CANCEL) { msg(no_admin(), MB_ICONWARNING); return RC_CANCEL; }
     }
     if (!FIX_DONE(rc)) return rc;
     user_stage();
@@ -1846,7 +1845,7 @@ int install_fix(void) { return install_fix_driver(NULL, NULL); }
 int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
-    if (!user_sid(sid, 200)) return 1;
+    if (!user_sid(sid, 200)) return RC_FAIL;
     if (running_early(L"full install (before elevation)")) return RC_RUNNING;
     CoInitialize(NULL);
     pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
@@ -1856,14 +1855,14 @@ int install_all_driver(const WCHAR *msi, const WCHAR *zip, const WCHAR *accept)
         add_driver_args(args, zip, accept);
         rc = run_elevated(args, NULL);
     }
-    if (rc == 3) {                      // over-the-shoulder elevation: setup as this user, then the fix (and the driver)
+    if (rc == RC_OVER_SHOULDER) {                      // over-the-shoulder elevation: setup as this user, then the fix (and the driver)
         rc = run_msiexec(msi);
-        if (rc == ERROR_INSTALL_USEREXIT) return 2;
-        if (rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED) return 4;
-        if (!locate_dynarun()) return 5;
+        if (rc == ERROR_INSTALL_USEREXIT) return RC_CANCEL;
+        if (rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED) return RC_MSI_FAILED;
+        if (!locate_dynarun()) return RC_NO_DYNARUN;
         return install_fix_driver(zip, accept);
     }
-    if (rc == 2) return 2;
+    if (rc == RC_CANCEL) return RC_CANCEL;
     if (!FIX_DONE(rc)) return rc;
     locate_dynarun();
     user_stage();
@@ -1912,10 +1911,10 @@ static int uninstall(void)
     drop_old_temp_copies();                        // copies that earlier builds left in %TEMP%
     if (!exists(p) && !reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0)) {
         info(T(L"DynaRunFix is not installed.", L"DynaRunFix 尚未安裝。"));
-        return 0;
+        return RC_OK;
     }
     if (!g_quiet && !dynarun_product(prod)) {
-        if (msg(T(L"Uninstall DynaRunFix?", L"要解除安裝 DynaRunFix 嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return 2;
+        if (msg(T(L"Uninstall DynaRunFix?", L"要解除安裝 DynaRunFix 嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return RC_CANCEL;
     } else if (!g_quiet) {
         g_cbt = SetWindowsHookExW(WH_CBT, relabel, NULL, GetCurrentThreadId());
         rc = msg(T(L"Uninstall DynaRunFix?\n\n"
@@ -1925,7 +1924,7 @@ static int uninstall(void)
                    L"只移除修正：DynaRun 的捷徑改回開啟原版，DynaRun V3 保留。\n\n"
                    L"全部移除：接著再用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3。"), MB_YESNOCANCEL | MB_ICONQUESTION);
         if (g_cbt) { UnhookWindowsHookEx(g_cbt); g_cbt = NULL; }
-        if (rc == IDCANCEL) return 2;
+        if (rc == IDCANCEL) return RC_CANCEL;
         all = rc == IDNO;
     }
     // Running DynaRun / launcher / LEProc hold files of the folder: ask first, the elevated stage then closes them.
@@ -1934,7 +1933,7 @@ static int uninstall(void)
         if (msg(T(L"DynaRun is running and must be closed to uninstall DynaRunFix.\n\n"
                   L"OK closes DynaRun now: a test run in progress stops, unsaved data is lost.",
                   L"解除安裝 DynaRunFix 前必須關閉 DynaRun。\n\n"
-                  L"按「確定」會立即關閉 DynaRun，正在進行的測試會中斷，沒存檔的資料會遺失。"), MB_OKCANCEL | MB_ICONWARNING) != IDOK) return 2;
+                  L"按「確定」會立即關閉 DynaRun，正在進行的測試會中斷，沒存檔的資料會遺失。"), MB_OKCANCEL | MB_ICONWARNING) != IDOK) return RC_CANCEL;
         g_close = TRUE;
     }
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
@@ -1952,14 +1951,14 @@ static int uninstall(void)
             if (g_is_writable(g_dir) || g_is_writable(p)) {
                 error2(T(L"The DynaRunFix folder can be changed by ordinary users, so its uninstaller is not run with administrator rights. Remove DynaRunFix as an administrator.",
                          L"DynaRunFix 資料夾可被一般使用者修改，因此不會以系統管理員權限執行其中的解除安裝程式。請以系統管理員身分移除 DynaRunFix。"), g_dir);
-                return 1;
+                return RC_FAIL;
             }
             elev = p;
         }
         wsprintfW(args, L"/unmachine %s", sid);
         rc = run_elevated(sid[0] ? args : L"/unmachine", elev);
     }
-    if (rc == 2) { msg(no_admin(), MB_ICONWARNING); return 2; }
+    if (rc == RC_CANCEL) { msg(no_admin(), MB_ICONWARNING); return RC_CANCEL; }
     if (rc) {                                                           // the elevated stage did not finish: nothing user-side is undone either
         if (!g_quiet) { wsprintfW(p, T(L"The uninstall did not finish (code %d). Nothing else was changed.", L"解除安裝沒有完成（代碼 %d）。沒有做其他變更。"), rc); msg(p, MB_ICONERROR); }
         return rc;
@@ -1972,18 +1971,18 @@ static int uninstall(void)
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
     if (all) {
         rc = remove_dynarun();
-        if (rc == ERROR_INSTALL_USEREXIT) { info(T(L"DynaRunFix has been uninstalled. DynaRun V3 was kept (its uninstall was cancelled).", L"DynaRunFix 已解除安裝。DynaRun V3 的解除安裝已取消，DynaRun V3 保留。")); return 2; }
+        if (rc == ERROR_INSTALL_USEREXIT) { info(T(L"DynaRunFix has been uninstalled. DynaRun V3 was kept (its uninstall was cancelled).", L"DynaRunFix 已解除安裝。DynaRun V3 的解除安裝已取消，DynaRun V3 保留。")); return RC_CANCEL; }
         if (rc > 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
             wsprintfW(p, T(L"DynaRunFix has been uninstalled, but uninstalling DynaRun V3 failed (Windows Installer error %d).",
                            L"DynaRunFix 已解除安裝，但 DynaRun V3 解除安裝失敗（Windows Installer 錯誤 %d）。"), rc);
             msg(p, MB_ICONERROR);
-            return 4;
+            return RC_MSI_FAILED;
         }
         info(T(L"DynaRunFix and DynaRun V3 have been uninstalled.", L"DynaRunFix 和 DynaRun V3 都已解除安裝。"));
-        return 0;
+        return RC_OK;
     }
     info(T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
-    return 0;
+    return RC_OK;
 }
 
 // the command line after its first n arguments, as typed (the launcher's arguments for /update)
@@ -2045,7 +2044,7 @@ void WinMainCRTStartup(void)
     else if (argc >= 2 && !lstrcmpiW(argv[1], L"/checkupdate")) rc = update_check();
     else if (argc >= 2 && !lstrcmpiW(argv[1], L"/update")) rc = update_run(after_args(2));
     else if (argc >= 2 && !lstrcmpiW(argv[1], L"/offer")) rc = update_offer();
-    else if (g_quiet) rc = locate_dynarun() ? install_fix() : 1;
+    else if (g_quiet) rc = locate_dynarun() ? install_fix() : RC_FAIL;
     else rc = wizard();
     // the elevated part (/machine, /full) ends here: let the wizard that started it take the foreground back
     AllowSetForegroundWindow(ASFW_ANY);

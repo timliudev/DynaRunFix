@@ -54,7 +54,7 @@ static int g_drv_how;                                    // DRV_SRC_*: the drive
 static WCHAR g_drv_hex[65];                              // SHA-256 and size of a driver zip that is not the pinned file (the warning page shows them)
 static ULONGLONG g_drv_size;
 static WCHAR g_drv_rep[1500];                           // the driver files that differ from the pinned ones, one per line (the warning page lists them)
-static int g_drv_bl = -1;                                // BitLocker hint for the press-7 page, asked in the worker (WMI can take seconds): 1 on, 0 off, -1 cannot be told
+static int g_drv_bl = BL_UNKNOWN;                              // BitLocker hint for the press-7 page, asked in the worker (WMI can take seconds): 1 on, 0 off, -1 cannot be told
 // What the acquire flow needs to know about the thing it gets: the DynaRun V3 setup and the Dyna Pro USB driver go through the same pages (looking for
 // a copy on this computer, download with pause / resume, one error page); only these texts, the "partial download" test, the search and the check differ.
 typedef struct {
@@ -320,11 +320,11 @@ static BOOL can_skip_driver(void) { return g_drvmode == DRV_MODE_NONE && !g_driv
 static void hint_line(WCHAR *b)
 {
     WCHAR t[400];
-    if (g_hint == 1) {
+    if (g_hint == HINT_NEWER) {
         wsprintfW(t, T(L"\n\nA newer DynaRun V3 is available on Dyna Pro's website: %s (installed: %s). \"Download new version\" downloads and installs it; nothing happens unless you click it.",
                        L"\n\nDyna Pro 官網有新版 DynaRun V3：%s（目前已安裝：%s）。按「下載新版」會下載並安裝；不按就什麼都不會發生。"), g_hint_new, g_hint_inst);
         lstrcatW(b, t);
-    } else if (g_hint == 2)
+    } else if (g_hint == HINT_ZIPDIFF)
         lstrcatW(b, T(L"\n\nDyna Pro's website may have a newer DynaRun V3 (the file there is not the one downloaded last time). \"Download new version\" gets it; nothing happens unless you click it.",
                       L"\n\nDyna Pro 官網可能有新版 DynaRun V3（那裡的檔案和上次下載的不同）。按「下載新版」會取得它；不按就什麼都不會發生。"));
 }
@@ -343,8 +343,8 @@ static void cat_to(WCHAR *d, int cap, const WCHAR *s)
 // the install (g_fix_done: the page "Done" is skipped), on the restart page.
 static void pin_hint(WCHAR *b)
 {
-    if (g_pinresult == 2) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-    if (g_pinresult == 3) lstrcatW(b, os_build() >= 22000
+    if (g_pinresult == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (g_pinresult == PIN_FAILED) lstrcatW(b, os_build() >= 22000
         ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
             L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
         : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
@@ -720,7 +720,7 @@ static void on_progress(DWORD done, DWORD total)
 
 static DWORD WINAPI job_proc(LPVOID unused)
 {
-    int rc = 1;
+    int rc = RC_FAIL;
     switch (g_job) {
     case JOB_ACQUIRE:                                // the DynaRun setup or the driver: a copy on this computer first, else the download
         on_progress((DWORD)-1, 2);                   // the page shows "looking" (a moving bar) until a download starts
@@ -1210,17 +1210,17 @@ static void job_done(int job, int rc)
         break;
     case JOB_INSTALL_ALL:
     case JOB_INSTALL_FIX:
-        if (g_pre && (rc == 0 || rc >= DRV_E_HASH)) {            // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
+        if (g_pre && FIX_DONE(rc)) {            // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
             cleanup_files();
             g_fix_done = TRUE;
-            if (rc == 0) drv_reboot_now();
+            if (rc == DRV_SUCCESS) drv_reboot_now();
             else if (rc == DRV_W_BDE) set_page(P_DRV_BDE);
             else drv_error(rc);
             break;
         }
-        if (rc == 0) { cleanup_files(); set_page(P_DONE); break; }
+        if (rc == RC_OK) { cleanup_files(); set_page(P_DONE); break; }
         if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); break; }   // DynaRun was started meanwhile
-        if (rc == 2) {
+        if (rc == RC_CANCEL) {
             lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
             set_page(g_pre ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // g_pre: the page with the button that started it
             break;
@@ -1230,9 +1230,9 @@ static void job_done(int job, int rc)
         set_page(P_ERROR);
         break;
     case JOB_DRV_PREP:
-        if (rc == 0) { drv_reboot_now(); break; }
+        if (rc == DRV_SUCCESS) { drv_reboot_now(); break; }
         if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); break; }      // armed, but BitLocker is still on: the user decides
-        if (rc == 2) {
+        if (rc == RC_CANCEL) {
             lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
             set_page(g_drvmode == DRV_MODE_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
             break;
@@ -1240,8 +1240,8 @@ static void job_done(int job, int rc)
         drv_error(rc);
         break;
     case JOB_DRV_INSTALL:
-        if (rc == 0) { g_drv_have = FALSE; set_page(P_DRV_DONE); break; }
-        if (rc == 2) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); break; }
+        if (rc == DRV_SUCCESS) { g_drv_have = FALSE; set_page(P_DRV_DONE); break; }
+        if (rc == RC_CANCEL) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); break; }
         if (rc == DRV_E_ENFORCED) {                        // this start still checks signatures: nothing was installed, the restart stays armed
             lstrcpyW(g_note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
             set_page(P_DRV_RETRY); break;
@@ -1721,7 +1721,7 @@ int wizard(void)
     }
     g_hwnd = NULL;
     if (g_page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
-    if (g_page == P_DONE || g_page == P_DRV_DONE || g_page == P_DRV_REBOOT) return 0;      // ended on a success page
-    if (g_page == P_FAIL || g_page == P_ERROR || g_page == P_DRV_ERROR) return 1;           // ended on an error page
-    return 2;                                                                               // closed before the end
+    if (g_page == P_DONE || g_page == P_DRV_DONE || g_page == P_DRV_REBOOT) return RC_OK;      // ended on a success page
+    if (g_page == P_FAIL || g_page == P_ERROR || g_page == P_DRV_ERROR) return RC_FAIL;           // ended on an error page
+    return RC_CANCEL;                                                                       // closed before the end
 }
