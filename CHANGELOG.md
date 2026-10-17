@@ -2,6 +2,19 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.7.2 — 2026-10-18
+
+Internal refactor (no intended behaviour change; see Fixed): `setup.c` is split into topic files in `src\setup\` and `wizard.c` into flow files in `src\wizard\` (each still one compilation unit), `setup.h` is now an umbrella over the `drf_*.h` module headers, the result codes have names in `src\errors.h` (values unchanged), the install options travel in `install_opts` instead of globals, the setup and driver stages share one command-line verb table, the wizard uses a page table and a job table, the launcher and the update check share `src\applog.h` (log lock, clock, value names, verbs), and `dynafix.c` is split into `dynafix_*.inc.c`. Test-only code (COM promotion, whole-zip extraction) moved out of the shipped sources into `tests\`.
+
+Fixed:
+
+- **"Close DynaRun and install" now applies to one install only.** The consent was kept for later attempts: after a cancelled UAC prompt or a failed install, a DynaRun started in the meantime could be ended without asking. The question is now asked again.
+- **A failed driver preparation no longer leaves files behind.** The staged driver files and `accepted.txt` in `%ProgramData%\DynaRunFix\driver` are removed when the check, the copy, the boot option or the scheduled task step fails.
+- **A very long `%APPDATA%` path no longer overflows a buffer** in the shortcut and taskbar pin code; the folder that does not fit is skipped. The check now also counts what is added after the folder (the taskbar's pinned-items folder and the shortcut file name), which could still overflow for paths of about 200 characters or more; the same check covers the desktop shortcut.
+- **The setup wizard ignores a "job finished" window message that its own worker thread did not send.** The message number was used as an index into an internal table without a check, so a stray message could crash the wizard.
+- **The download progress bar** is updated by the download thread only (exactly one update per value when the size is unknown).
+- **dynafix.dll:** a race between the loader callback and the periodic check that could patch the same hook twice on two threads is fixed.
+
 ## v1.7.1 — 2026-10-17
 
 Fixed:
@@ -495,6 +508,19 @@ Changed and fixed (after a review of v1.4.0):
 ---
 
 ## 更新紀錄
+
+### v1.7.2 — 2026-10-18
+
+內部重構(不打算改變行為;見「修正」):`setup.c` 依主題拆成 `src\setup\` 內的檔案、`wizard.c` 拆成 `src\wizard\` 內的流程檔(仍是單一編譯單元);`setup.h` 改為 `drf_*.h` 模組標頭的總入口;結果碼在 `src\errors.h` 命名(數值不變);安裝選項以 `install_opts` 傳遞而非全域變數;安裝程式與驅動程式階段共用一張命令列動詞表;精靈改用頁面表與工作表;啟動器與更新檢查共用 `src\applog.h`(log 鎖、時鐘、值名稱、動詞);`dynafix.c` 拆成 `dynafix_*.inc.c`。僅供測試的程式碼(COM 登錄提升、整包 zip 解壓)移出正式原始碼,放到 `tests\`。
+
+修正:
+
+- **「關閉 DynaRun 並安裝」只對一次安裝有效。** 先前同意會留給之後的重試:UAC 被取消或安裝失敗後,期間才啟動的 DynaRun 可能未經詢問就被結束。現在會重新詢問。
+- **驅動程式準備失敗時不再留下檔案。** 檢查、複製、開機選項或排程工作任一步失敗時,會移除 `%ProgramData%\DynaRunFix\driver` 內已放置的驅動程式檔與 `accepted.txt`。
+- **%APPDATA% 路徑非常長時不再造成緩衝區溢位**(捷徑與工作列釘選程式碼);放不下的資料夾會被略過。檢查現在也計入資料夾之後才加上的部分(工作列釘選項目的資料夾與捷徑檔名),約 200 個字元以上的路徑先前仍可能溢位;桌面捷徑也用同一個檢查。
+- **安裝精靈會忽略不是它自己的工作執行緒送出的「工作完成」視窗訊息。** 先前未經檢查就把訊息的數字當成內部表格的索引,雜訊訊息可能使精靈當機。
+- **下載進度條**只由下載執行緒更新(大小未知時每個數值只更新一次)。
+- **dynafix.dll:** 修正載入回呼與定期檢查之間的競爭,兩個執行緒可能同時修改同一個 hook。
 
 ### v1.7.1 — 2026-10-17
 

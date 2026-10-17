@@ -2,7 +2,7 @@
 // It #includes the real source, so what is tested is the shipped code:
 //   logtest.exe       -> src\dynafix.c  (logf)
 //   logtest_l.exe     -> src\launcher.c (llog; built with -DTEST_LAUNCHER)
-// SRC (default ..\src\dynafix.c / ..\src\launcher.c) can point at another copy, e.g. an older revision.
+// SRC (default ..\src\dynafix.c / ..\src\launcher.c) can point at another copy, e.g. an older revision (with its dynafix_*.inc.c and applog.h beside it, as in src).
 // The log is %TEMP%\dynafix.log, so run it with TEMP pointing at a scratch directory.
 #include <windows.h>
 #include <stdio.h>

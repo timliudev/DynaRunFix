@@ -117,9 +117,9 @@ text in ANSI-charset fonts is drawn as Latin letters.
 
 ## How this was tested
 
-* VirtualBox VMs: Windows 11 (locale changed to zh-TW), Windows 11 installed in zh-TW, Windows 7, Windows XP
+* Virtual machines: Windows 11 (locale changed to zh-TW), Windows 11 installed in zh-TW, Windows 7, Windows XP
   (fresh install with the official DynaRun installer).
-  The VMs were driven through `VBoxManage` keyboard/mouse input and screenshots.
+  The VMs were driven through the virtual machine tools' keyboard/mouse input and screenshots.
 * Process Monitor captures filtered to `DynaPro` / `Setup_` events, registry dumps of `HKCU\Software\DynaPro`
   before and after the helper.
 
@@ -202,5 +202,5 @@ DynaRun 在 ANSI 字元集字型裡的 Big5 文字會變成拉丁字母。
 
 ### 測試方法
 
-VirtualBox 虛擬機(Win11 改繁中地區、原生繁中 Win11、Win7、全新 XP),透過 `VBoxManage` 鍵盤/滑鼠操作與截圖;
+虛擬機(Win11 改繁中地區、原生繁中 Win11、Win7、全新 XP),透過虛擬機工具的鍵盤/滑鼠操作與截圖;
 Process Monitor 只篩選 `DynaPro`/`Setup_` 事件;設定程式執行前後匯出 `HKCU\Software\DynaPro`。

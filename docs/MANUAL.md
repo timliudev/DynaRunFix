@@ -84,6 +84,10 @@ whenever DynaRun starts its first-time setup helper (normally only on the very f
 
 ## What's new
 
+v1.7.2 (released 2026-10-18):
+- Fix: a very long `%APPDATA%` path (about 200 characters or more) no longer overflows a buffer in the shortcut and taskbar pin code; the folder that does not fit is skipped.
+- Fix: the setup wizard ignores a "job finished" window message that its own worker thread did not send (it could crash the wizard). Also: "Close DynaRun and install" applies to one install only, and a failed driver preparation removes the staged driver files. The rest is an internal source reorganisation without intended changes; see the [changelog](../CHANGELOG.md).
+
 v1.7.1 (released 2026-10-17):
 - Fix: a full install with the driver now asks for administrator permission only once. Before, on an administrator account it asked twice (once for the fix, once to prepare the driver), although the documentation said once. The driver pages (download and check, the restart picture) now come before the install; *Install and restart* then installs the fix and prepares the driver in one step, and *Skip* installs the fix without the driver. After the restart an administrator account is not asked again; a standard user still is (administrator password).
 
@@ -767,6 +771,10 @@ DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;�
 log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.7.2(2026-10-18 發行):
+- 修正:%APPDATA% 路徑非常長(約 200 個字元以上)時,捷徑與工作列釘選程式碼不再造成緩衝區溢位;放不下的資料夾會被略過。
+- 修正:安裝精靈會忽略不是它自己的工作執行緒送出的「工作完成」視窗訊息(先前可能使精靈當機)。另外:「關閉 DynaRun 並安裝」只對一次安裝有效,驅動程式準備失敗時會移除已放置的驅動程式檔。其餘是內部原始碼整理,不打算改變行為;見[更新紀錄](../CHANGELOG.md)。
+
 v1.7.1(2026-10-17 發行):
 - 修正:同時安裝驅動程式的完整安裝，現在只會要求一次系統管理員權限。先前在系統管理員帳戶上會問兩次（一次裝修正、一次準備驅動程式），和文件寫的「問一次」不符。驅動程式的頁面（下載與檢查、重新開機選單的圖片）現在排在安裝之前；按「安裝並重新開機」後，一步完成修正的安裝與驅動程式的準備；選「略過」則只安裝修正、不裝驅動程式。重新開機後，系統管理員帳戶不會再被詢問；標準使用者仍會被詢問（要輸入系統管理員密碼）。
 
