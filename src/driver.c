@@ -38,7 +38,6 @@
 #define TASK_NAME         L"DynaRunFix-DriverContinue"
 enum { BDE_PS_ERROR = -2, BDE_PS_NONE = -1, BDE_PS_OFF = 0, BDE_PS_ON = 1, BDE_PS_UNKNOWN = 2 };   // protection status (WMI values, plus ours)
 #define BDE_VALUE         L"DriverBitLockerSuspended"       // HKLM\SOFTWARE\DynaRunFix: 1 while we have BitLocker suspended until the driver is installed
-#define DRV_APPKEY        L"SOFTWARE\\DynaRunFix"
 #define SETUP_NAME        L"DynaRunFix-Setup.exe"
 #define BUS_INF_REL       L"\\driver\\Dyna Pro USB\\ftdibus.inf"
 #define PORT_INF_REL      L"\\driver\\Dyna Pro USB\\ftdiport.inf"
@@ -257,8 +256,7 @@ BOOL driver_installed(void)
     lstrcpyW(pat, dir); lstrcatW(pat, L"\\oem*.inf");
     if ((h = FindFirstFileW(pat, &fd)) == INVALID_HANDLE_VALUE) return FALSE;
     do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= MAX_PATH) continue;
-        lstrcpyW(f, dir); lstrcatW(f, L"\\"); lstrcatW(f, fd.cFileName);
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !path_join(f, MAX_PATH, dir, fd.cFileName)) continue;
         if ((d = slurp(f, &n, 2 * 1024 * 1024))) { found = drv_inf_matches(d, n); release(d); }
     } while (!found && FindNextFileW(h, &fd));
     FindClose(h);
@@ -679,16 +677,11 @@ static const WCHAR *g_tool_ok_text;
 
 static DWORD run_tool(const WCHAR *tool, const WCHAR *args)
 {
-    static WCHAR win[MAX_PATH], exe[MAX_PATH]; WCHAR *cmd; STARTUPINFOW si; PROCESS_INFORMATION pi; DWORD rc = (DWORD)-1;
+    static WCHAR win[MAX_PATH], exe[MAX_PATH]; WCHAR *cmd; DWORD rc = (DWORD)-1;
     if (!GetWindowsDirectoryW(win, MAX_PATH - 40) || !drv_sys_tool(win, is_wow64(), tool, exe, MAX_PATH) || !exists(exe)) { drv_log2(tool, L"not found", rc); return rc; }
     if (!(cmd = alloc((lstrlenW(exe) + lstrlenW(args) + 8) * sizeof(WCHAR)))) return rc;
     lstrcpyW(cmd, L"\""); lstrcatW(cmd, exe); lstrcatW(cmd, L"\" "); lstrcatW(cmd, args);
-    zero(&si, sizeof(si)); si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, win, &si, &pi)) {
-        if (WaitForSingleObject(pi.hProcess, 180000) != WAIT_OBJECT_0) TerminateProcess(pi.hProcess, 1);
-        else GetExitCodeProcess(pi.hProcess, &rc);
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    }
+    run_process(exe, cmd, win, CREATE_NO_WINDOW, TRUE, 180000, &rc);     // (not started, or no end in 3 minutes: rc stays -1)
     if (g_tool_ok_text && rc == g_tool_ok_code) {
         static WCHAR l[2 * MAX_PATH + 240];
         lstrcpyW(l, tool); lstrcatW(l, L" "); lstrcatW(l, args); lstrcatW(l, L" -> "); lstrcatW(l, g_tool_ok_text);
@@ -841,8 +834,7 @@ static BOOL make_base(const WCHAR *base, BOOL keep_exe, const WCHAR *sid)
     if (!exists(base) || path_user_writable(base, sid)) { base_fail(L"the folder is not protected (owner or permissions)"); return FALSE; }
     if (keep_exe) {                                                              // the kept setup copy: its owner and permissions are ours too
         WCHAR f[MAX_PATH];
-        if (lstrlenW(base) + lstrlenW(KEEP) + 2 >= MAX_PATH) { base_fail(L"the path is too long"); return FALSE; }
-        lstrcpyW(f, base); lstrcatW(f, L"\\"); lstrcatW(f, KEEP);
+        if (!path_join(f, MAX_PATH, base, KEEP)) { base_fail(L"the path is too long"); return FALSE; }
         if (exists(f)) {
             if (!plain_single_file(f)) { base_fail(L"the kept setup file is a link or has several links"); return FALSE; }
             reset_security(f, SDDL_FILE);
@@ -1069,7 +1061,7 @@ static int bde_protection(const WCHAR *drive) { return bde_query(drive, NULL); }
 static BOOL bde_flag(void)
 {
     HKEY k; DWORD v = 0, n = 4;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, KEY_QUERY_VALUE, &k)) return FALSE;
+    if (!app_key_open(APP_MACHINE, KEY_QUERY_VALUE, &k)) return FALSE;
     if (RegQueryValueExW(k, BDE_VALUE, NULL, NULL, (BYTE *)&v, &n)) v = 0;
     RegCloseKey(k);
     return v == 1;
@@ -1079,8 +1071,8 @@ static void set_bde_flag(BOOL on)
 {
     HKEY k; DWORD v = 1;
     if (on) {
-        if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) { RegSetValueExW(k, BDE_VALUE, 0, REG_DWORD, (const BYTE *)&v, 4); RegCloseKey(k); }
-    } else if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, DRV_APPKEY, 0, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, BDE_VALUE); RegCloseKey(k); }
+        if (app_key_create(APP_MACHINE, &k)) { RegSetValueExW(k, BDE_VALUE, 0, REG_DWORD, (const BYTE *)&v, 4); RegCloseKey(k); }
+    } else if (app_key_open(APP_MACHINE, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, BDE_VALUE); RegCloseKey(k); }
 }
 
 static void bde_resume(void)                    // BitLocker protection on again, if we are the ones who suspended it
@@ -1294,8 +1286,7 @@ static const WCHAR *lnk_names[2] = { L"Install Dyna Pro USB driver.lnk", L"å®‰è£
 static BOOL lnk_path(WCHAR *out, int which)
 {
     WCHAR d[MAX_PATH];
-    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_COMMON_PROGRAMS, FALSE) || lstrlenW(d) + lstrlenW(lnk_names[which]) + 2 >= MAX_PATH) return FALSE;
-    lstrcpyW(out, d); lstrcatW(out, L"\\"); lstrcatW(out, lnk_names[which]);
+    if (!SHGetSpecialFolderPathW(NULL, d, CSIDL_COMMON_PROGRAMS, FALSE) || !path_join(out, MAX_PATH, d, lnk_names[which])) return FALSE;
     return TRUE;
 }
 

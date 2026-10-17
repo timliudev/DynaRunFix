@@ -123,6 +123,45 @@ void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 static WCHAR *cat3(WCHAR *d, const WCHAR *a, const WCHAR *b, const WCHAR *c)
 { lstrcpyW(d, a); lstrcatW(d, b); if (c) lstrcatW(d, c); return d; }
 BOOL exists(const WCHAR *p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES; }
+
+BOOL path_join(WCHAR *out, int limit, const WCHAR *dir, const WCHAR *name)
+{
+    if (lstrlenW(dir) + lstrlenW(name) + 2 >= limit) return FALSE;
+    if (out != dir) lstrcpyW(out, dir);
+    lstrcatW(out, L"\\"); lstrcatW(out, name);
+    return TRUE;
+}
+
+int run_process(const WCHAR *exe, WCHAR *cmd, const WCHAR *cwd, DWORD flags, BOOL hide, DWORD ms, DWORD *code)
+{
+    STARTUPINFOW si; PROCESS_INFORMATION pi; int r = PROC_EXITED;
+    zero(&si, sizeof(si)); si.cb = sizeof(si);
+    if (hide) { si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE; }
+    if (!CreateProcessW(exe, cmd, NULL, NULL, FALSE, flags, NULL, cwd, &si, &pi)) return PROC_NOSTART;
+    if (WaitForSingleObject(pi.hProcess, ms) == WAIT_OBJECT_0 || ms == INFINITE) GetExitCodeProcess(pi.hProcess, code);
+    else { TerminateProcess(pi.hProcess, 1); r = PROC_TIMEOUT; }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return r;
+}
+
+int dir_walk(const WCHAR *dir, WCHAR *buf, int bufcch, int limit, walk_fn fn, void *ctx)
+{
+    WIN32_FIND_DATAW fd; HANDLE f; int r = WALK_DONE;
+    if (lstrlenW(dir) + 3 > bufcch) return WALK_NOOPEN;
+    lstrcpyW(buf, dir); lstrcatW(buf, L"\\*");
+    if ((f = FindFirstFileW(buf, &fd)) == INVALID_HANDLE_VALUE) return WALK_NOOPEN;
+    do {
+        if (fd.cFileName[0] == '.' || !path_join(buf, limit, dir, fd.cFileName)) continue;
+        if (!fn(buf, &fd, ctx)) { r = WALK_STOPPED; break; }
+    } while (FindNextFileW(f, &fd));
+    FindClose(f);
+    return r;
+}
+
+BOOL app_key_open(BOOL machine, REGSAM sam, HKEY *k)
+{ return !RegOpenKeyExW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, machine ? APPKEY : USERKEY, 0, sam, k); }
+BOOL app_key_create(BOOL machine, HKEY *k)
+{ return !RegCreateKeyExW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, machine ? APPKEY : USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, k, NULL); }
 int msg(const WCHAR *text, UINT flags) { return MessageBoxW(g_hwnd, text, TITLE, flags | MB_SETFOREGROUND); }
 static void info(const WCHAR *text) { if (!g_quiet) msg(text, MB_ICONINFORMATION); }
 static void error2(const WCHAR *text, const WCHAR *what)
@@ -242,9 +281,7 @@ void delete_tree(const WCHAR *dir, const WCHAR *keep, int depth)
         if (f != INVALID_HANDLE_VALUE) {
             do {
                 if (!lstrcmpW(fd.cFileName, L".") || !lstrcmpW(fd.cFileName, L"..")) continue;
-                if (lstrlenW(dir) + lstrlenW(fd.cFileName) + 2 >= 2 * MAX_PATH) { kept = TRUE; continue; }
-                if (depth == 0 && name_in(keep, fd.cFileName)) { kept = TRUE; continue; }
-                cat3(p, dir, L"\\", fd.cFileName);
+                if ((depth == 0 && name_in(keep, fd.cFileName)) || !path_join(p, 2 * MAX_PATH, dir, fd.cFileName)) { kept = TRUE; continue; }   // kept, or a path too long for the buffer
                 if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                     if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) { if (!RemoveDirectoryW(p)) MoveFileExW(p, NULL, MOVEFILE_DELAY_UNTIL_REBOOT); }
                     else delete_tree(p, NULL, depth + 1);
@@ -1005,8 +1042,7 @@ static BOOL lnk_path_ok(const WCHAR *name, BOOL common)
     lstrcpyW(par, name); for (e = par + len; e > par && *e != '\\'; e--); *e = 0;
     if (!lnk_name_in_dirs(name, list, nd)) {
         lstrcpyW(lname, par); long_form(lname);                    // the same, with the folder of the file in long form
-        if (lstrlenW(lname) + lstrlenW(e + 1) + 2 >= MAX_PATH) return FALSE;
-        lstrcatW(lname, L"\\"); lstrcatW(lname, e + 1);
+        if (!path_join(lname, MAX_PATH, lname, e + 1)) return FALSE;
         if (!lnk_name_in_dirs(lname, list, nd)) return FALSE;
     }
     a = GetFileAttributesW(par);
@@ -1436,7 +1472,7 @@ static int machine_install_locked(const WCHAR *sid)
         return RC_FAIL;
     }
     driver_machine_stage(p);                            // the Start menu shortcut to the driver installation (p: the installed setup)
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return RC_FAIL;
+    if (!app_key_create(APP_MACHINE, &k)) return RC_FAIL;
     set_str(k, L"InstallDir", g_dir);
     if (g_exe_trusted) set_str(k, L"DynaRunExe", g_exe);     // a path that ordinary users can change is not recorded for the elevated stages (uninstall) to use
     else RegDeleteValueW(k, L"DynaRunExe");
@@ -1564,7 +1600,7 @@ static int machine_uninstall(const WCHAR *skip_sid)
     polsid[0] = 0; reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"TaskbarPolicySid", polsid, 200, 0);
     drop_policy_of(skip_sid); drop_policy_of(polsid);
     unretarget_all_users(skip_sid);
-    if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, KEY_READ, &k)) { RegQueryValueExW(k, L"ManifestInstalled", NULL, NULL, (BYTE *)&man, &n); RegCloseKey(k); }
+    if (app_key_open(APP_MACHINE, KEY_READ, &k)) { RegQueryValueExW(k, L"ManifestInstalled", NULL, NULL, (BYTE *)&man, &n); RegCloseKey(k); }
     if (man == 1 && g_exe[0] && !g_exe_trusted && exists(cat3(p, g_exe, L".manifest", NULL)))
         setup_log(L"the manifest next to DynaRun V3.exe was left in place: DynaRun's folder or exe can be changed by ordinary users, so nothing is deleted or scheduled for deletion there");
     else if (man == 1 && g_exe[0] && exists(cat3(p, g_exe, L".manifest", NULL))) {
@@ -1586,7 +1622,7 @@ static int machine_uninstall(const WCHAR *skip_sid)
     // stuck: the original time stamp of DynaRun V3.exe could not be put back; ExeOrigTimePath / ExeOrigTime stay for the next install or
     // uninstall (touch_report says so) - the key is not deleted then
     if (!keep && !stuck) RegDeleteKeyW(HKEY_LOCAL_MACHINE, APPKEY);
-    else if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, APPKEY, 0, KEY_SET_VALUE, &k)) {     // what is no longer needed; ManifestInstalled, DynaRunExe (and the time stamp record) stay
+    else if (app_key_open(APP_MACHINE, KEY_SET_VALUE, &k)) {     // what is no longer needed; ManifestInstalled, DynaRunExe (and the time stamp record) stay
         RegDeleteValueW(k, L"InstallDir"); RegDeleteValueW(k, L"TaskbarPolicy"); RegDeleteValueW(k, L"TaskbarPolicySid"); RegCloseKey(k);
     }
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, UNINSTKEY);
@@ -1757,7 +1793,7 @@ static void user_stage(void)
 {
     static WCHAR p[MAX_PATH]; HKEY b, s;
     g_pinresult = PIN_NOT_ASKED;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) return;
+    if (!app_key_create(APP_USER, &b)) return;
     // another version is installed now: what update.c noted no longer applies; the first start of DynaRun looks again
     RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk"); RegDeleteValueW(b, L"UpdateSkip");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
@@ -1780,7 +1816,7 @@ static void user_stage(void)
         if (g_autostart && !g_autostart_later) set_str(s, L"DynaRunFix", cat3(p, L"\"", g_launcher, L"\" /autostart"));
         else RegDeleteValueW(s, L"DynaRunFix");
         RegCloseKey(s);
-        if (!RegCreateKeyExW(HKEY_CURRENT_USER, USERKEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &b, NULL)) {
+        if (app_key_create(APP_USER, &b)) {
             if (g_autostart && g_autostart_later) set_dword(b, L"AutostartPending", 1);
             else RegDeleteValueW(b, L"AutostartPending");
             RegCloseKey(b);
@@ -1794,7 +1830,7 @@ static void user_stage(void)
 void autostart_flush(void)
 {
     static WCHAR p[MAX_PATH]; HKEY k, r; DWORD v = 0, n = 4, t = 0; BOOL pending;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, USERKEY, 0, KEY_ALL_ACCESS, &k)) return;
+    if (!app_key_open(APP_USER, KEY_ALL_ACCESS, &k)) return;
     pending = RegQueryValueExW(k, L"AutostartPending", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS && t == REG_DWORD && v;
     if (pending) RegDeleteValueW(k, L"AutostartPending");
     RegCloseKey(k);
