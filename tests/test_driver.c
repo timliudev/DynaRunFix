@@ -879,6 +879,67 @@ static void test_real_zip(void)
     }
 }
 
+/* ---------- characterization tests of the command line of driver.c (lock today's behaviour) ---------- */
+
+// driver_verb: /driver-prep <sid> <zip> [/unverified <sha256>]. The accepted hash is taken ONLY as argv[4] == /unverified with argv[5] of exactly
+// 64 characters; anywhere else (or another length) it is silently NULL (the prep then asks for the exact hash by other means / refuses).
+// Differs from setup.c's parse_switches (tests\test_hardening.c), which finds /unverified at any index >= 4, takes any following argument as its
+// value and drops one that is not 64 characters long: there a bad value is consumed, here it simply is not at argv[4].
+// The verb itself: /driver and /driver-continue open the wizard (not run here); /driver-prep, /driver-install and /driver-cancel need an
+// administrator (return 1 otherwise) and /driver-prep needs argc >= 4 (return 1 otherwise); anything else is DRV_NOVERB.
+static void test_cmdline(void)
+{
+    WCHAR h64[80], h63[80], h65[80];
+    WCHAR *a1[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h64 };
+    WCHAR *a2[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h63 };
+    WCHAR *a3[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified", h65 };
+    WCHAR *a4[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/UNVERIFIED", h64 };
+    WCHAR *a5[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/unverified" };
+    WCHAR *a6[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/quiet", L"/unverified", h64 };
+    WCHAR *a7[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", h64 };
+    WCHAR *a8[] = { L"s", L"/driver-prep", L"S-1", L"z.zip", L"/with-driver", h64 };
+    WCHAR *a9[] = { L"s", L"/driver-prep", L"S-1", L"z.zip" };
+    WCHAR *n1[] = { L"s", L"/nothing" };
+    WCHAR *n2[] = { L"s", L"/machine", L"S-1", L"e" };
+    WCHAR *n3[] = { L"s", L"/driver-prepx" };
+    WCHAR *n4[] = { L"s", L"driver-prep" };
+    WCHAR *n5[] = { L"s", L"/uninstall" };
+    WCHAR *p1[] = { L"s", L"/driver-prep" };
+    WCHAR *p2[] = { L"s", L"/DRIVER-PREP", L"S-1" };
+    WCHAR *i1[] = { L"s", L"/driver-install" };
+    WCHAR *c1[] = { L"s", L"/Driver-Cancel" };
+    const WCHAR *r;
+    lstrcpyW(h64, L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); lstrcpyW(h63, h64); h63[63] = 0;
+    lstrcpyW(h65, h64); lstrcatW(h65, L"0");
+    CHECK(lstrlenW(h64) == 64 && lstrlenW(h63) == 63 && lstrlenW(h65) == 65, L"cmdline: test hashes have 64, 63 and 65 characters");
+
+    // prep_accept_arg: the accepted hash of /driver-prep
+    r = prep_accept_arg(6, a1); CHECK(r == h64, L"accept: /unverified + 64 characters at argv[4], argv[5]");
+    CHECK(prep_accept_arg(6, a2) == NULL, L"accept: 63 characters: NULL");
+    CHECK(prep_accept_arg(6, a3) == NULL, L"accept: 65 characters: NULL");
+    CHECK(prep_accept_arg(6, a4) == h64, L"accept: /UNVERIFIED, case-insensitive");
+    CHECK(prep_accept_arg(5, a5) == NULL, L"accept: /unverified without a value: NULL");
+    CHECK(prep_accept_arg(7, a6) == NULL, L"accept: /unverified at argv[5] (not argv[4]): NULL (setup.c would take it at index 5)");
+    CHECK(prep_accept_arg(5, a7) == NULL, L"accept: a bare hash without /unverified: NULL");
+    CHECK(prep_accept_arg(6, a8) == NULL, L"accept: /with-driver is not understood here: NULL");
+    CHECK(prep_accept_arg(4, a9) == NULL, L"accept: nothing after the zip: NULL");
+
+    // the verb dispatch; only what is safe to run in any account
+    CHECK(driver_verb(2, n1) == DRV_NOVERB, L"verb: unknown verb is DRV_NOVERB");
+    CHECK(driver_verb(4, n2) == DRV_NOVERB, L"verb: /machine is not a driver verb");
+    CHECK(driver_verb(2, n3) == DRV_NOVERB, L"verb: exact match only (/driver-prepx)");
+    CHECK(driver_verb(2, n4) == DRV_NOVERB, L"verb: no slash, no verb");
+    CHECK(driver_verb(2, n5) == DRV_NOVERB, L"verb: /uninstall is setup.c's");
+    CHECK(driver_verb(2, p1) == 1, L"verb: /driver-prep without arguments returns 1 (not admin: 1 as well)");
+    CHECK(driver_verb(3, p2) == 1, L"verb: /DRIVER-PREP <sid> without a zip returns 1 (case-insensitive verb)");
+    if (!is_admin()) {
+        // elevated verbs refuse a normal process before doing anything
+        CHECK(driver_verb(2, i1) == 1, L"verb: /driver-install not elevated returns 1");
+        CHECK(driver_verb(2, c1) == 1, L"verb: /driver-cancel not elevated returns 1");
+        CHECK(driver_verb(6, a1) == 1, L"verb: /driver-prep with arguments, not elevated, returns 1");
+    } else wprintf(L"  (info: running elevated - /driver-install, /driver-cancel and /driver-prep with arguments are not called)\n");
+}
+
 int wmain(void)
 {
     g_quiet = TRUE; g_zh = FALSE;
@@ -902,6 +963,7 @@ int wmain(void)
     wprintf(L"[job table]\n"); test_job_table();
     wprintf(L"[shared package machinery]\n"); test_shared();
     wprintf(L"[update hint]\n"); test_hint();
+    wprintf(L"[command line]\n"); test_cmdline();
     wprintf(L"[real zip]\n"); test_real_zip();
     delete_tree(g_base, NULL, 0);
     wprintf(L"\n%d passed, %d failed\n", g_pass, g_fail);

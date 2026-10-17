@@ -1329,6 +1329,12 @@ void driver_machine_uninstall(void)
 
 /* ---------- command line ---------- */
 
+// /driver-prep <sid> <zip> [/unverified <sha256>]: the accepted hash only as argv[4] /unverified argv[5] with a 64 character value, else NULL (tests/test_driver.c locks this)
+static const WCHAR *prep_accept_arg(int argc, WCHAR **argv)
+{
+    return argc >= 6 && !lstrcmpiW(argv[4], L"/unverified") && lstrlenW(argv[5]) == 64 ? argv[5] : NULL;
+}
+
 int driver_verb(int argc, WCHAR **argv)
 {
     const WCHAR *v = argv[1];
@@ -1336,7 +1342,7 @@ int driver_verb(int argc, WCHAR **argv)
     if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(); }
     if (lstrcmpiW(v, L"/driver-prep") && lstrcmpiW(v, L"/driver-install") && lstrcmpiW(v, L"/driver-cancel")) return DRV_NOVERB;
     if (!is_admin()) return 1;                                                 // the elevated parts: only with the rights they need
-    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], argc >= 6 && !lstrcmpiW(argv[4], L"/unverified") && lstrlenW(argv[5]) == 64 ? argv[5] : NULL) : 1;
+    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], prep_accept_arg(argc, argv)) : 1;
     if (!lstrcmpiW(v, L"/driver-install")) return install_locked();
     return driver_cancel();
 }

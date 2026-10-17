@@ -2314,25 +2314,33 @@ static const WCHAR *after_args(int n)
     return c;
 }
 
-void WinMainCRTStartup(void)
+// The switches of the command line, at any position (tests/test_hardening.c locks the rules). g_quiet, g_close, g_pin, g_autostart and g_keep are set;
+// *pin: /pin seen; *dzip, *daccept: the values of /with-driver and /unverified (only from argv[4] on, after the verb, the SID and the path).
+static void parse_switches(int argc, WCHAR **argv, BOOL *pin, const WCHAR **dzip, const WCHAR **daccept)
 {
-    typedef BOOL (WINAPI *SetDefaultDllDirectories_t)(DWORD);
-    SetDefaultDllDirectories_t sdd = (SetDefaultDllDirectories_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetDefaultDllDirectories");
-    int argc, i, rc; BOOL pin = FALSE; WCHAR **argv; const WCHAR *dzip = NULL, *daccept = NULL;
-    if (sdd) sdd(0x800);                    // LOAD_LIBRARY_SEARCH_SYSTEM32: no DLL is searched for in the exe's folder or the current folder
-    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
-    init_paths();
+    int i;
     for (i = 1; i < argc; i++) {
         if (!lstrcmpiW(argv[i], L"/quiet")) g_quiet = TRUE;
         else if (!lstrcmpiW(argv[i], L"/close")) g_close = TRUE;
         else if (!lstrcmpiW(argv[i], L"/notaskbar")) g_pin = FALSE;
         else if (!lstrcmpiW(argv[i], L"/noautostart")) g_autostart = FALSE;
-        else if (!lstrcmpiW(argv[i], L"/pin")) pin = TRUE;
+        else if (!lstrcmpiW(argv[i], L"/pin")) *pin = TRUE;
         else if (!lstrcmpiW(argv[i], L"/keep")) g_keep = TRUE;
-        else if (i >= 4 && !lstrcmpiW(argv[i], L"/with-driver") && i + 1 < argc) dzip = argv[++i];                                 // after the SID and the path: see install_fix_driver
-        else if (i >= 4 && !lstrcmpiW(argv[i], L"/unverified") && i + 1 < argc) { if (lstrlenW(argv[i + 1]) == 64) daccept = argv[i + 1]; i++; }
+        else if (i >= 4 && !lstrcmpiW(argv[i], L"/with-driver") && i + 1 < argc) *dzip = argv[++i];                                 // after the SID and the path: see install_fix_driver
+        else if (i >= 4 && !lstrcmpiW(argv[i], L"/unverified") && i + 1 < argc) { if (lstrlenW(argv[i + 1]) == 64) *daccept = argv[i + 1]; i++; }
     }
+}
+
+void WinMainCRTStartup(void)
+{
+    typedef BOOL (WINAPI *SetDefaultDllDirectories_t)(DWORD);
+    SetDefaultDllDirectories_t sdd = (SetDefaultDllDirectories_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetDefaultDllDirectories");
+    int argc, rc; BOOL pin = FALSE; WCHAR **argv; const WCHAR *dzip = NULL, *daccept = NULL;
+    if (sdd) sdd(0x800);                    // LOAD_LIBRARY_SEARCH_SYSTEM32: no DLL is searched for in the exe's folder or the current folder
+    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    init_paths();
+    parse_switches(argc, argv, &pin, &dzip, &daccept);
     if (argc >= 2 && (!lstrcmpiW(argv[1], L"/machine") || !lstrcmpiW(argv[1], L"/full"))) g_pin = pin;   // the elevated stage: as asked
     if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
         lstrcpynW(g_exe, argv[3], MAX_PATH);
