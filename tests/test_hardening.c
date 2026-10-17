@@ -39,7 +39,6 @@ int cmd_driver_cancel(cmdline *c) { (void)c; return 0; }
 int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }   // called by install_fix_driver / install_all_driver (not run here)
 void driver_machine_stage(const WCHAR *p) { (void)p; }
 void driver_machine_uninstall(void) { }
-int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }
 
 static int g_fail, g_pass;
 #define CHECK(c, what) do { if (c) { g_pass++; } else { g_fail++; wprintf(L"FAIL line %d: %s\n", __LINE__, what); } } while (0)
