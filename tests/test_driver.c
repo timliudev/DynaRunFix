@@ -776,6 +776,14 @@ static void test_job_table(void)
         if (!(next && next < end)) break;
     }
     CHECK(labels >= 7, L"all seven jobs were looked at");
+    // g_close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
+    // records that (g_close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
+    a = strstr(t, "static void job_done"); end = a ? strstr(a, "switch (job)") : NULL;
+    CHECK(a && end, L"job_done is in src\\wizard.c");
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_close = FALSE", 15)) break;
+    CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
+    for (c = t, labels = 0; (c = strstr(c, "g_close = TRUE")) != NULL; c += 14) labels++;
+    CHECK(labels == 1 && strstr(t, "g_close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_close only together with g_close_asked");
     release(f);
 }
 

@@ -32,6 +32,7 @@ enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_PREP,
 
 static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pending: install job waiting for DynaRun to close
 static volatile LONG g_cancel;
+static BOOL g_close_asked;                              // g_close was set by the "Close DynaRun and install" button: it covers that one install job only (job_done takes it back)
 static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_pkg_found, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static int g_nfound;   // packages pkg_find_local has handed us so far
 static HANDLE g_thread;
@@ -1186,6 +1187,7 @@ static void choose_driver_source(void)
 static void job_done(int job, int rc)
 {
     WaitForSingleObject(g_thread, INFINITE); CloseHandle(g_thread); g_thread = NULL; g_busy = FALSE;
+    if (g_close_asked) { g_close = FALSE; g_close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
     if (g_closing) { DestroyWindow(g_hwnd); return; }
     switch (job) {
     case JOB_ACQUIRE: acq_done(rc); break;
@@ -1275,7 +1277,7 @@ static void on_primary(void)
     case P_CHECK: set_page(P_LICENSE); break;
     case P_LICENSE: go_install(JOB_INSTALL_ALL); break;
     case P_RUNNING:
-        g_close = TRUE;                              // the elevated stage closes DynaRun (see close_programs in setup.c)
+        if (!g_close) { g_close = TRUE; g_close_asked = TRUE; }   // the elevated stage closes DynaRun (see close_programs in setup.c), for this job only
         start_job(g_pending, P_INSTALL);
         break;
     case P_DONE:
