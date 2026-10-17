@@ -10,9 +10,9 @@ static BOOL resume_note(void)
     fmt_mb(a, have);
     if (wz.dltotal > have) {
         fmt_mb(t, wz.dltotal);
-        wsprintfW(line, T(L"\n\n%s of %s MB are downloaded. \"Continue download\" carries on from there.", L"\n\n已下載 %s / %s MB，按「繼續下載」會從中斷的地方接續。"), a, t);
+        wsprintfW(line, TX(S_OF_MB_ARE_DOWNLOADED_CONTINUE), a, t);
     } else
-        wsprintfW(line, T(L"\n\n%s MB are downloaded. \"Continue download\" carries on from there.", L"\n\n已下載 %s MB，按「繼續下載」會從中斷的地方接續。"), a);
+        wsprintfW(line, TX(S_MB_ARE_DOWNLOADED_CONTINUE_DOWNLOAD), a);
     lstrcatW(wz.note, line);
     return TRUE;
 }
@@ -22,11 +22,8 @@ static void fetch_body(DWORD total)
 {
     WCHAR size[40], b[500];
     size[0] = 0;
-    if (total) wsprintfW(size, T(L" (%lu.%lu MB)", L"（%lu.%lu MB）"), total / 1048576, total % 1048576 / 104858);
-    wsprintfW(b, T(L"Getting %s: a copy on this computer is used if there is one, else it is downloaded from the Dyna Pro website%s.\nThis can take a few minutes.\n\n"
-                   L"If it does not work, click \"Open website\" to get it from the website yourself.",
-                   L"正在取得%s：電腦上已有就直接使用，否則從 Dyna Pro 官網下載%s，可能需要幾分鐘。\n\n"
-                   L"如果下載不順利，可以按「開啟官網」，自己從官網下載。"), ACQ_NAME(wz.acq), size);
+    if (total) wsprintfW(size, TX(S_MB), total / 1048576, total % 1048576 / 104858);
+    wsprintfW(b, TX(S_GETTING_A_COPY_ON_THIS), ACQ_NAME(wz.acq), size);
     wz.total = total;
     text(ID_BODY, b);
 }
@@ -34,79 +31,73 @@ static void fetch_body(DWORD total)
 static void enter_fetch(void)   // looking for a copy here, downloading, checking: the same page for the DynaRun setup and the driver
 {
     WCHAR *b = pgbuf;
-    wsprintfW(b, T(L"Getting %s", L"正在取得%s"), ACQ_NAME(wz.acq));
+    wsprintfW(b, TX(S_GETTING), ACQ_NAME(wz.acq));
     text(ID_TITLE, b);
     fetch_body(0);
     progress(FALSE); status(L" ", FALSE);
-    buttons(T(L"Pause", L"暫停"), T(L"Cancel", L"取消"), T(L"Open website", L"開啟官網"));
+    buttons(TX(S_PAUSE), TX(S_CANCEL), TX(S_OPEN_WEBSITE));
 }
 
 static void enter_fail(void)   // the one error page of the acquire flow
 {
     wz.result = RC_FAIL;                                 // the acquire flow ended on its error page (Retry and the other ways on leave it)
     WCHAR *b = pgbuf;
-    if (wz.badfile) lstrcpyW(b, T(L"This is not the DynaRun V3 setup", L"這不是 DynaRun V3 安裝檔"));
-    else wsprintfW(b, T(L"%s could not be downloaded", L"無法自動下載%s"), ACQ_NAME(wz.acq));
+    if (wz.badfile) lstrcpyW(b, TX(S_THIS_IS_NOT_THE_DYNARUN));
+    else wsprintfW(b, TX(S_COULD_NOT_BE_DOWNLOADED), ACQ_NAME(wz.acq));
     if (!g_zh && !wz.badfile) b[0] = (WCHAR)(b[0] >= 'a' && b[0] <= 'z' ? b[0] - 32 : b[0]);          // "the DynaRun V3 setup" at the start of a sentence
     text(ID_TITLE, b);
     {
         BOOL resume = !wz.badfile && resume_note();            // a .part to carry on from (appends its size to the note)
         BOOL skip = wz.acq == &ACQ_DRIVER && can_skip_driver();
         wz.badfile = FALSE;
-        wsprintfW(b, T(L"%s\n\nGet it yourself:\n   1.  click \"Open website\"\n   2.  on the page, click the download for %s\n"
-                       L"   3.  come back here and click \"Retry\" or \"Continue download\", or \"Choose file...\" to pick %s",
-                       L"%s\n\n請自己下載：\n   1.  按「開啟官網」\n   2.  在網頁上下載%s\n"
-                       L"   3.  回到這裡按「重試」或「繼續下載」，或按「選擇檔案…」選取%s"), wz.note, T(wz.acq->get_en, wz.acq->get_zh), T(wz.acq->pick_en, wz.acq->pick_zh));
+        wsprintfW(b, TX(S_GET_IT_YOURSELF_1_CLICK), wz.note, T(wz.acq->get_en, wz.acq->get_zh), T(wz.acq->pick_en, wz.acq->pick_zh));
         text(ID_BODY, b);
-        buttons4(resume ? T(L"Continue download", L"繼續下載") : T(L"Retry", L"重試"), skip ? T(L"Skip", L"略過") : T(L"Cancel", L"取消"),
-                 T(L"Choose file...", L"選擇檔案…"), T(L"Open website", L"開啟官網"));
+        buttons4(resume ? TX(S_CONTINUE_DOWNLOAD) : TX(S_RETRY), skip ? TX(S_SKIP) : TX(S_CANCEL),
+                 TX(S_CHOOSE_FILE), TX(S_OPEN_WEBSITE));
     }
 }
 
 static void enter_password(void)
 {
     WCHAR *b = pgbuf;
-    text(ID_TITLE, T(L"Enter the setup password", L"輸入安裝密碼"));
-    wsprintfW(b, T(L"Type the password that Dyna Pro gave you for the DynaRun V3 setup.\n(It is used only to open the setup file and is not saved.)\n\nSetup file: %s",
-                   L"請輸入 Dyna Pro 給你的 DynaRun V3 安裝密碼。\n（只用來打開安裝檔，不會被儲存。）\n\n安裝檔：%s"), file_name(wz.pkg));
+    text(ID_TITLE, TX(S_ENTER_THE_SETUP_PASSWORD));
+    wsprintfW(b, TX(S_TYPE_THE_PASSWORD_THAT_DYNA), file_name(wz.pkg));
     text(ID_BODY, b);
     vis(ID_EDIT, TRUE);
-    buttons(T(L"Next", L"下一步"), T(L"Cancel", L"取消"), T(L"Choose file...", L"選擇檔案…"));
+    buttons(TX(S_NEXT), TX(S_CANCEL), TX(S_CHOOSE_FILE));
     if (wz.note[0]) status(wz.note, TRUE);
     SetFocus(H(ID_EDIT)); SendMessageW(H(ID_EDIT), EM_SETSEL, 0, -1);
 }
 
 static void enter_extract(void)
 {
-    text(ID_TITLE, T(L"Opening the setup file", L"正在打開安裝檔"));
-    text(ID_BODY, T(L"Please wait...", L"請稍候…"));
+    text(ID_TITLE, TX(S_OPENING_THE_SETUP_FILE));
+    text(ID_BODY, TX(S_PLEASE_WAIT));
     progress(FALSE);
-    buttons(NULL, T(L"Cancel", L"取消"), NULL);
+    buttons(NULL, TX(S_CANCEL), NULL);
 }
 
 static void enter_check(void)   // everything we know about the setup file, to compare with what Dyna Pro gives
 {
-    text(ID_TITLE, T(L"Check the installer", L"確認安裝檔"));
-    text(ID_BODY, T(L"Compare this with what Dyna Pro gives you. Dyna Pro does not sign its setup, so DynaRunFix cannot prove that it is exactly what Dyna Pro released: install only a file you got from Dyna Pro.",
-                    L"請與 Dyna Pro 提供的資訊比對。Dyna Pro 的安裝檔沒有數位簽章，DynaRunFix 無法證明它與 Dyna Pro 發布的完全一致，請只安裝從 Dyna Pro 取得的檔案。"));
+    text(ID_TITLE, TX(S_CHECK_THE_INSTALLER));
+    text(ID_BODY, TX(S_COMPARE_THIS_WITH_WHAT_DYNA));
     SetWindowTextW(H(ID_INFO), wz.info);
     vis(ID_INFO, TRUE);
-    buttons(T(L"Next", L"下一步"), T(L"Cancel", L"取消"), T(L"Open website", L"開啟官網"));
+    buttons(TX(S_NEXT), TX(S_CANCEL), TX(S_OPEN_WEBSITE));
     if (wz.note[0]) status(wz.note, TRUE);
 }
 
 static void enter_license(void)
 {
     WCHAR *b = pgbuf;
-    text(ID_TITLE, T(L"Dyna Pro license agreement", L"Dyna Pro 授權合約"));
-    lstrcpyW(b, wz.nolicense ? T(L"The license agreement in this DynaRun V3 setup could not be shown.",
-                                L"無法顯示這個 DynaRun V3 安裝檔裡的授權合約。")
-                            : T(L"Please read Dyna Pro's license agreement for DynaRun V3.", L"請閱讀 Dyna Pro 的 DynaRun V3 授權合約。"));
+    text(ID_TITLE, TX(S_DYNA_PRO_LICENSE_AGREEMENT));
+    lstrcpyW(b, wz.nolicense ? TX(S_THE_LICENSE_AGREEMENT_IN_THIS)
+                            : TX(S_PLEASE_READ_DYNA_PRO_S));
     text(ID_BODY, b);
-    SetWindowTextW(H(ID_CHECK), wz.nolicense ? T(L"I understand and &accept Dyna Pro's license terms", L"我了解並同意 Dyna Pro 的授權條款(&A)")
-                                            : T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
+    SetWindowTextW(H(ID_CHECK), wz.nolicense ? TX(S_I_UNDERSTAND_AND_ACCEPT_DYNA)
+                                            : TX(S_I_ACCEPT_THE_LICENSE_AGREEMENT));
     vis(ID_RICH, TRUE); vis(ID_CHECK, TRUE);
-    buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), wz.nolicense ? T(L"Open website", L"開啟官網") : NULL);
+    buttons(TX(S_INSTALL), TX(S_CANCEL), wz.nolicense ? TX(S_OPEN_WEBSITE) : NULL);
     EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
     SetFocus(H(ID_CHECK));                       // the disabled "Install" button cannot hold the keyboard focus
     if (wz.note[0]) status(wz.note, TRUE);
@@ -194,8 +185,7 @@ static void not_dynarun(void)
     WCHAR m[MAX_PATH], nm[100];
     wz.acq = &ACQ_SETUP;
     lstrcpynW(nm, file_name(wz.pkg), 100);       // wsprintfW does not check the size of wz.note: a long file name must not overflow it
-    wsprintfW(wz.note, T(L"\"%s\" is not the DynaRun V3 setup, so it will not be installed.",
-                        L"「%s」不是 DynaRun V3 的安裝檔，所以不會安裝它。"), nm);
+    wsprintfW(wz.note, TX(S_IS_NOT_THE_DYNARUN_V3), nm);
     pkg_reject(wz.pkg);
     pkg_temp_dir(m); lstrcatW(m, L"\\Setup.msi");
     if (!lstrcmpiW(wz.msi, m)) DeleteFileW(wz.msi);   // our extracted copy
@@ -208,7 +198,7 @@ static void not_dynarun(void)
 static void fmt_size(WCHAR *o, ULONGLONG n)
 {
     DWORD v = (DWORD)n;
-    wsprintfW(o, T(L"%lu bytes (%lu.%lu MB)", L"%lu 位元組（%lu.%lu MB）"), v, v / 1048576, v % 1048576 / 104858);
+    wsprintfW(o, TX(S_BYTES_MB), v, v / 1048576, v % 1048576 / 104858);
 }
 
 // Shown on the license page so the user can compare with what Dyna Pro provides. Display only: nothing here blocks the install.
@@ -221,17 +211,17 @@ static void build_info(void)
     msi_info(wz.msi, ver, mfr, 64);
     SetCursor(old);
     wz.info[0] = 0;
-    lstrcatW(wz.info, T(L"Source:  ", L"來源：")); 
-    lstrcatW(wz.info, wz.pkg_ours ? T(L"downloaded now from dynapro.co.uk", L"剛從 dynapro.co.uk 下載")
-                     : wz.pkg_found ? T(L"found on this computer, not downloaded by DynaRunFix", L"在這台電腦上找到，不是 DynaRunFix 下載的")
-                     : T(L"chosen by you", L"你選擇的檔案"));
-    lstrcatW(wz.info, T(L"\r\n\r\nFile:\r\n", L"\r\n\r\n檔案路徑：\r\n")); lstrcatW(wz.info, wz.pkg);
+    lstrcatW(wz.info, TX(S_SOURCE)); 
+    lstrcatW(wz.info, wz.pkg_ours ? TX(S_DOWNLOADED_NOW_FROM_DYNAPRO_CO)
+                     : wz.pkg_found ? TX(S_FOUND_ON_THIS_COMPUTER_NOT)
+                     : TX(S_CHOSEN_BY_YOU));
+    lstrcatW(wz.info, TX(S_FILE)); lstrcatW(wz.info, wz.pkg);
     fmt_size(sz, size);
-    lstrcatW(wz.info, T(L"\r\n\r\nSize:  ", L"\r\n\r\n大小：")); lstrcatW(wz.info, sz);
+    lstrcatW(wz.info, TX(S_SIZE)); lstrcatW(wz.info, sz);
     lstrcatW(wz.info, L"\r\nSHA-256:\r\n"); lstrcatW(wz.info, okp ? hex : L"?");
     if (!same) {
         fmt_size(sz, size2);
-        lstrcatW(wz.info, T(L"\r\n\r\nSetup.msi inside the file, size:  ", L"\r\n\r\n檔案裡的 Setup.msi，大小：")); lstrcatW(wz.info, sz);
+        lstrcatW(wz.info, TX(S_SETUP_MSI_INSIDE_THE_FILE)); lstrcatW(wz.info, sz);
         lstrcatW(wz.info, L"\r\nSHA-256:\r\n"); lstrcatW(wz.info, okm ? hex2 : L"?");
     }
     lstrcatW(wz.info, L"\r\n\r\nMSI ProductVersion:  "); lstrcatW(wz.info, ver[0] ? ver : L"?");
@@ -251,16 +241,7 @@ static void after_extract(void)
         es.dwCookie = (DWORD_PTR)&src; es.dwError = 0; es.pfnCallback = rtf_in;
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
     } else                                       // never install without the user accepting Dyna Pro's terms
-        SetWindowTextW(H(ID_RICH), T(L"DynaRun V3 is licensed to you by Dyna Pro Dynamometers Ltd under their end-user license agreement "
-                                     L"and their terms and conditions of sale. The agreement is part of Dyna Pro's setup, but this "
-                                     L"installer could not read it from this setup file.\r\n\r\n"
-                                     L"To read it, contact Dyna Pro (support@dynapro.co.uk) or see their website "
-                                     L"(\"Open website\" below).\r\n\r\n"
-                                     L"Install only if you accept Dyna Pro's license terms.",
-                                     L"DynaRun V3 是 Dyna Pro Dynamometers Ltd 依其使用者授權合約及銷售條款授權給你使用的軟體。"
-                                     L"授權合約包含在 Dyna Pro 的安裝檔中，但本安裝程式無法從這個安裝檔讀出合約內容。\r\n\r\n"
-                                     L"如需閱讀合約，請聯絡 Dyna Pro（support@dynapro.co.uk）或參考其官網（下方「開啟官網」）。\r\n\r\n"
-                                     L"請在同意 Dyna Pro 的授權條款後再安裝。"));
+        SetWindowTextW(H(ID_RICH), TX(S_DYNARUN_V3_IS_LICENSED_TO));
     SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
     set_page(P_CHECK);
 }
@@ -294,7 +275,7 @@ static void choose_file(void)
     OPENFILENAMEW of; WCHAR f[MAX_PATH];
     zero(&of, sizeof(of)); f[0] = 0;
     of.lStructSize = sizeof(of); of.hwndOwner = g_hwnd;
-    of.lpstrFilter = T(L"DynaRun V3 setup (*.zip;*.msi)\0*.zip;*.msi\0All files\0*.*\0", L"DynaRun V3 安裝檔 (*.zip;*.msi)\0*.zip;*.msi\0所有檔案\0*.*\0");
+    of.lpstrFilter = TX(S_DYNARUN_V3_SETUP_ZIP_MSI);
     of.lpstrFile = f; of.nMaxFile = MAX_PATH;
     of.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameW(&of)) return;
@@ -324,19 +305,15 @@ static void cleanup_files(void)
 static void acq_note(int rc)
 {
     switch (rc) {
-    case PK_CANCEL: lstrcpyW(wz.note, T(L"The download was stopped.", L"已停止下載。")); break;
-    case PK_HTTP: wsprintfW(wz.note, T(L"The Dyna Pro website answered with error %lu.", L"Dyna Pro 官網回應錯誤 %lu。"), wz.neterr); break;
-    case PK_CERT: wsprintfW(wz.note, T(L"The security certificate of the Dyna Pro website could not be verified (error %lu), so nothing was downloaded. Check the date and time of this computer.",
-                                      L"無法驗證 Dyna Pro 官網的安全憑證（錯誤 %lu），因此沒有下載任何東西。請確認電腦的日期與時間。"), wz.neterr); break;
-    case PK_URL: lstrcpyW(wz.note, T(L"The download was refused: the address did not stay on https://dynapro.co.uk (it was redirected elsewhere or to an unencrypted connection). Nothing was downloaded.",
-                                    L"已拒絕下載：連線沒有停留在 https://dynapro.co.uk（被導向其他位置或未加密的連線），因此沒有下載任何東西。")); break;
-    case PK_IO: wsprintfW(wz.note, T(L"The file could not be saved (error %lu).", L"無法儲存檔案（錯誤 %lu）。"), wz.neterr); break;
-    case DRV_E_HASH: lstrcpyW(wz.note, T(L"That file is not a usable Dyna Pro USB driver package (the driver files in it are missing, or are not Dyna Pro's).",
-                                        L"這個檔案不是可用的 Dyna Pro USB 驅動程式套件（裡面缺少驅動程式檔，或不是 Dyna Pro 的）。")); break;
+    case PK_CANCEL: lstrcpyW(wz.note, TX(S_THE_DOWNLOAD_WAS_STOPPED)); break;
+    case PK_HTTP: wsprintfW(wz.note, TX(S_THE_DYNA_PRO_WEBSITE_ANSWERED), wz.neterr); break;
+    case PK_CERT: wsprintfW(wz.note, TX(S_THE_SECURITY_CERTIFICATE_OF_THE), wz.neterr); break;
+    case PK_URL: lstrcpyW(wz.note, TX(S_THE_DOWNLOAD_WAS_REFUSED_THE)); break;
+    case PK_IO: wsprintfW(wz.note, TX(S_THE_FILE_COULD_NOT_BE), wz.neterr); break;
+    case DRV_E_HASH: lstrcpyW(wz.note, TX(S_THAT_FILE_IS_NOT_A)); break;
     default:                                         // PK_NET and anything unforeseen: the first real error of the attempts
-        if (wz.neterr == ERROR_INTERNET_DISCONNECTED) lstrcpyW(wz.note, T(L"This computer is not connected to a network (Windows reports no connection). Connect it and try again.",
-                                                                        L"這台電腦沒有連上網路（Windows 回報沒有網路連線）。請連上網路後再試。"));
-        else wsprintfW(wz.note, T(L"No connection to the Dyna Pro website (error %lu). Check the internet connection.", L"連不上 Dyna Pro 官網（錯誤 %lu），請確認網路是否正常。"), wz.neterr);
+        if (wz.neterr == ERROR_INTERNET_DISCONNECTED) lstrcpyW(wz.note, TX(S_THIS_COMPUTER_IS_NOT_CONNECTED));
+        else wsprintfW(wz.note, TX(S_NO_CONNECTION_TO_THE_DYNA), wz.neterr);
         break;
     }
 }
@@ -350,9 +327,9 @@ static void fetch_paused(void)
     WCHAR a[24], t[24], s[160];
     wz.paused = TRUE; wz.pause_req = FALSE;
     fmt_mb(a, wz.dlhave);
-    if (wz.dltotal) { fmt_mb(t, wz.dltotal); wsprintfW(s, T(L"Paused: %s of %s MB downloaded.", L"已暫停：已下載 %s / %s MB。"), a, t); }
-    else wsprintfW(s, T(L"Paused: %s MB downloaded.", L"已暫停：已下載 %s MB。"), a);
-    buttons(T(L"Resume", L"繼續"), T(L"Cancel", L"取消"), T(L"Open website", L"開啟官網"));
+    if (wz.dltotal) { fmt_mb(t, wz.dltotal); wsprintfW(s, TX(S_PAUSED_OF_MB_DOWNLOADED), a, t); }
+    else wsprintfW(s, TX(S_PAUSED_MB_DOWNLOADED), a);
+    buttons(TX(S_RESUME), TX(S_CANCEL), TX(S_OPEN_WEBSITE));
     status(s, FALSE);
     layout();
 }
@@ -388,12 +365,12 @@ static void jd_extract(int job, int rc)
         lstrcpynW(nm, file_name(wz.pkg), 100);
         pkg_reject(wz.pkg);
         wz.acq = &ACQ_SETUP; wz.pkg_found = FALSE;
-        wsprintfW(wz.note, T(L"The file found on this computer (%s) is damaged, so it will not be used.", L"在這台電腦上找到的檔案（%s）已損毀，所以不使用它。"), nm);
+        wsprintfW(wz.note, TX(S_THE_FILE_FOUND_ON_THIS), nm);
         set_page(P_FAIL);
         return;
     }
-    if (rc == PK_PASSWORD) { lstrcpyW(wz.note, T(L"Wrong password, or the file is damaged. Please check the password.", L"密碼不正確，或檔案已損毀。請再確認密碼。")); set_page(P_PASSWORD); return; }
-    lstrcpyW(wz.note, T(L"The setup could not be unpacked. Is the disk full?", L"無法解開安裝檔，硬碟空間是否不足？"));
+    if (rc == PK_PASSWORD) { lstrcpyW(wz.note, TX(S_WRONG_PASSWORD_OR_THE_FILE)); set_page(P_PASSWORD); return; }
+    lstrcpyW(wz.note, TX(S_THE_SETUP_COULD_NOT_BE));
     set_page(P_ERROR);
 }
 
@@ -402,8 +379,7 @@ static void pri_fail(void) { acq_start(wz.acq); }                               
 static void pri_password(void)
 {
     if (!take_password()) {
-        status(T(L"Wrong password. Please check it (upper/lower case matters).\nIf the setup file above is not the DynaRun setup, click \"Other file...\".",
-                 L"密碼不正確，請再確認（大小寫有差別）。\n如果上面的安裝檔不是 DynaRun 的，請按「選擇其他檔案…」。"), TRUE);
+        status(TX(S_WRONG_PASSWORD_PLEASE_CHECK_IT), TRUE);
         SetFocus(H(ID_EDIT));
         return;
     }
@@ -419,7 +395,7 @@ static void pri_fetch(void)                                                     
     else if (wz.busy && !wz.pause_req) {
         wz.pause_req = TRUE;
         InterlockedExchange(&g_cancel, 2);                                                // 2 = pause (1 = cancel): the worker stops cleanly between two reads and keeps the .part and its ETag
-        text(ID_PRIMARY, T(L"Pausing...", L"暫停中…")); EnableWindow(H(ID_PRIMARY), FALSE); layout();
+        text(ID_PRIMARY, TX(S_PAUSING)); EnableWindow(H(ID_PRIMARY), FALSE); layout();
     }
 }
 

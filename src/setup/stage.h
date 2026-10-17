@@ -17,7 +17,7 @@ static BOOL stage_lock(void)
 static void stage_unlock(void) { if (g_stage_depth > 0) { g_stage_depth--; ReleaseMutex(g_stage_mx); } }
 
 static const WCHAR *busy_text(void)
-{ return T(L"Another DynaRunFix setup is running. Wait until it finishes and try again.", L"另一個 DynaRunFix 安裝程式正在執行，請等它完成後再試一次。"); }
+{ return TS(ST_ANOTHER_DYNARUNFIX_SETUP_IS_RUNNING); }
 
 // A line in <install folder>\setup.log (only the elevated stage writes there; the folder is administrators-only)
 static void setup_log(const WCHAR *line)

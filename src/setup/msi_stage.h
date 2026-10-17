@@ -1,6 +1,6 @@
 // Part of setup.c (vendor MSI staging and full stage): included by it, in one compilation unit; never compiled on its own.
 static const WCHAR *no_admin(void)
-{ return T(L"Administrator permission was not granted. Nothing was changed.", L"未取得系統管理員權限，沒有做任何變更。"); }
+{ return TS(ST_ADMINISTRATOR_PERMISSION_WAS_NOT_GRANTED); }
 
 // Elevated: install DynaRun from its MSI, then the machine stage. The MSI installs per user (as the
 // original setup does), so it must run as the user who asked for it: with over-the-shoulder
@@ -70,12 +70,12 @@ static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *ms
     if (still_running(o, L"full install")) { stage_unlock(); return RC_RUNNING; }
     if (!stage_msi(msi, dir, staged)) {
         stage_unlock();
-        msg(T(L"The DynaRun V3 setup could not be copied for installation.", L"無法複製 DynaRun V3 安裝檔以進行安裝。"), MB_ICONERROR);
+        msg(TS(ST_THE_DYNARUN_V3_SETUP_COULD), MB_ICONERROR);
         return RC_MSI_FAILED;
     }
     if (msi_check(staged, NULL, 0) != MSI_DYNARUN) {            // the check of the copy that is going to be run
         drop_admin_dir(dir); stage_unlock();
-        msg(T(L"This is not the DynaRun V3 setup, so it will not be installed.", L"這不是 DynaRun V3 的安裝檔，所以不會安裝它。"), MB_ICONERROR);
+        msg(TS(ST_THIS_IS_NOT_THE_DYNARUN), MB_ICONERROR);
         return RC_MSI_FAILED;
     }
     rc = run_msiexec(staged);
@@ -83,13 +83,13 @@ static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *ms
     stage_unlock();
     if (rc != 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
         if (rc == ERROR_INSTALL_USEREXIT) return RC_CANCEL;
-        wsprintfW(txt, T(L"The DynaRun V3 setup failed (Windows Installer error %d).", L"DynaRun V3 安裝失敗（Windows Installer 錯誤 %d）。"), rc);
+        wsprintfW(txt, TS(ST_THE_DYNARUN_V3_SETUP_FAILED), rc);
         if (rc == ERROR_INSTALL_ALREADY_RUNNING)
-            lstrcatW(txt, T(L"\n\nAnother installation is running. Wait until it finishes and try again.", L"\n\n有其他程式正在安裝，請等它完成後再試一次。"));
+            lstrcatW(txt, TS(ST_ANOTHER_INSTALLATION_IS_RUNNING_WAIT));
         msg(txt, MB_ICONERROR);
         return RC_MSI_FAILED;
     }
-    if (!locate_dynarun()) { msg(T(L"DynaRun V3 was installed, but DynaRun V3.exe was not found.", L"DynaRun V3 已安裝，但找不到 DynaRun V3.exe。"), MB_ICONERROR); return RC_NO_DYNARUN; }
+    if (!locate_dynarun()) { msg(TS(ST_DYNARUN_V3_WAS_INSTALLED_BUT), MB_ICONERROR); return RC_NO_DYNARUN; }
     return machine_install(o, sid);
 }
 

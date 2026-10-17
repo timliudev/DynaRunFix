@@ -104,7 +104,7 @@ static void draw_highlight(HDC dc, int sw, int sh, int tw, int th)
     int lw = S(2) < 2 ? 2 : S(2), rh = y1 - y0, rad = rh / 2 + 2, lx0 = x1 + lw + rh, lx1;
     HPEN pen = CreatePen(PS_SOLID, lw, RGB(255, 153, 0)), op;
     HBRUSH red = CreateSolidBrush(RGB(224, 52, 0)), ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-    LOGFONTW lf; HFONT f, of; const WCHAR *t = T(L"Press 7", L"按 7"); SIZE sz; POINT tri[3]; RECT tr;
+    LOGFONTW lf; HFONT f, of; const WCHAR *t = TX(S_PRESS_7); SIZE sz; POINT tri[3]; RECT tr;
     op = (HPEN)SelectObject(dc, pen);
     RoundRect(dc, x0, y0, x1, y1, rad, rad);                                   // orange outline around the line (the pen is centred on the edge)
     // callout to the right of the line: red label "Press 7" with a small arrow pointing at it
@@ -202,13 +202,13 @@ static void create_controls(void)
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO);
     add(L"BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX | BS_MULTILINE, ID_DRV);
     add(L"STATIC", SS_BITMAP | SS_NOTIFY, ID_IMG);
-    SetWindowTextW(H(ID_DRV), T(L"Also install the Dyna Pro USB &driver (one restart needed)", L"同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）(&D)"));
+    SetWindowTextW(H(ID_DRV), TX(S_ALSO_INSTALL_THE_DYNA_PRO));
     SendMessageW(H(ID_DRV), BM_SETCHECK, BST_CHECKED, 0);
-    SetWindowTextW(H(ID_PIN), T(L"Pin DynaRun to the &taskbar", L"釘選到工作列(&T)"));
-    SetWindowTextW(H(ID_AUTO), T(L"Start DynaRun when Windows &starts", L"開機時自動啟動 DynaRun(&S)"));
+    SetWindowTextW(H(ID_PIN), TX(S_PIN_DYNARUN_TO_THE_TASKBAR));
+    SetWindowTextW(H(ID_AUTO), TX(S_START_DYNARUN_WHEN_WINDOWS_STARTS));
     SendMessageW(H(ID_PIN), BM_SETCHECK, wz.opts.pin ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(H(ID_AUTO), BM_SETCHECK, wz.opts.autostart ? BST_CHECKED : BST_UNCHECKED, 0);
-    SetWindowTextW(H(ID_CHECK), T(L"I &accept the license agreement", L"我接受授權合約(&A)"));
+    SetWindowTextW(H(ID_CHECK), TX(S_I_ACCEPT_THE_LICENSE_AGREEMENT));
     add(PROGRESS_CLASSW, 0, ID_PROG);
     add(L"STATIC", SS_NOPREFIX, ID_STATUS);
     add(L"BUTTON", WS_TABSTOP, ID_EXTRA);

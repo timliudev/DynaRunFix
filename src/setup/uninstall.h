@@ -5,8 +5,8 @@ static LRESULT CALLBACK relabel(int code, WPARAM w, LPARAM l)
 {
     HHOOK h = g_cbt;
     if (code == HCBT_ACTIVATE) {
-        SetDlgItemTextW((HWND)w, IDYES, T(L"&Fix only", L"只移除修正(&F)"));
-        SetDlgItemTextW((HWND)w, IDNO, T(L"&Remove all", L"全部移除(&R)"));
+        SetDlgItemTextW((HWND)w, IDYES, TS(ST_FIX_ONLY));
+        SetDlgItemTextW((HWND)w, IDNO, TS(ST_REMOVE_ALL));
         UnhookWindowsHookEx(g_cbt); g_cbt = NULL;
     }
     return CallNextHookEx(h, code, w, l);
@@ -39,19 +39,14 @@ static int uninstall(const install_opts *given)
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
     drop_old_temp_copies();                        // copies that earlier builds left in %TEMP%
     if (!exists(p) && !reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0)) {
-        info(o, T(L"DynaRunFix is not installed.", L"DynaRunFix 尚未安裝。"));
+        info(o, TS(ST_DYNARUNFIX_IS_NOT_INSTALLED));
         return RC_OK;
     }
     if (!o->quiet && !dynarun_product(prod)) {
-        if (msg(T(L"Uninstall DynaRunFix?", L"要解除安裝 DynaRunFix 嗎？"), MB_YESNO | MB_ICONQUESTION) != IDYES) return RC_CANCEL;
+        if (msg(TS(ST_UNINSTALL_DYNARUNFIX), MB_YESNO | MB_ICONQUESTION) != IDYES) return RC_CANCEL;
     } else if (!o->quiet) {
         g_cbt = SetWindowsHookExW(WH_CBT, relabel, NULL, GetCurrentThreadId());
-        rc = msg(T(L"Uninstall DynaRunFix?\n\n"
-                   L"Fix only: the DynaRun shortcuts start the original DynaRun again; DynaRun V3 stays installed.\n\n"
-                   L"Remove all: DynaRun V3 is then uninstalled too, by Dyna Pro's own uninstaller.",
-                   L"要解除安裝 DynaRunFix 嗎？\n\n"
-                   L"只移除修正：DynaRun 的捷徑改回開啟原版，DynaRun V3 保留。\n\n"
-                   L"全部移除：接著再用 Dyna Pro 自己的解除安裝程式移除 DynaRun V3。"), MB_YESNOCANCEL | MB_ICONQUESTION);
+        rc = msg(TS(ST_UNINSTALL_DYNARUNFIX_FIX_ONLY_THE), MB_YESNOCANCEL | MB_ICONQUESTION);
         if (g_cbt) { UnhookWindowsHookEx(g_cbt); g_cbt = NULL; }
         if (rc == IDCANCEL) return RC_CANCEL;
         all = rc == IDNO;
@@ -59,10 +54,7 @@ static int uninstall(const install_opts *given)
     // Running DynaRun / launcher / LEProc hold files of the folder: ask first, the elevated stage then closes them.
     // /quiet without /close goes on; what is still in use is deleted at the next restart.
     if (!o->quiet && running_programs()) {
-        if (msg(T(L"DynaRun is running and must be closed to uninstall DynaRunFix.\n\n"
-                  L"OK closes DynaRun now: a test run in progress stops, unsaved data is lost.",
-                  L"解除安裝 DynaRunFix 前必須關閉 DynaRun。\n\n"
-                  L"按「確定」會立即關閉 DynaRun，正在進行的測試會中斷，沒存檔的資料會遺失。"), MB_OKCANCEL | MB_ICONWARNING) != IDOK) return RC_CANCEL;
+        if (msg(TS(ST_DYNARUN_IS_RUNNING_AND_MUST), MB_OKCANCEL | MB_ICONWARNING) != IDOK) return RC_CANCEL;
         o->close = TRUE;
     }
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
@@ -79,8 +71,7 @@ static int uninstall(const install_opts *given)
         zero(&t, sizeof(t)); lstrcpynW(t.user_sid, sid, 200);
         if (exists(p)) {
             if (g_is_writable(&t, g_dir) || g_is_writable(&t, p)) {
-                error2(o, T(L"The DynaRunFix folder can be changed by ordinary users, so its uninstaller is not run with administrator rights. Remove DynaRunFix as an administrator.",
-                         L"DynaRunFix 資料夾可被一般使用者修改，因此不會以系統管理員權限執行其中的解除安裝程式。請以系統管理員身分移除 DynaRunFix。"), g_dir);
+                error2(o, TS(ST_THE_DYNARUNFIX_FOLDER_CAN_BE), g_dir);
                 return RC_FAIL;
             }
             elev = p;
@@ -90,7 +81,7 @@ static int uninstall(const install_opts *given)
     }
     if (rc == RC_CANCEL) { msg(no_admin(), MB_ICONWARNING); return RC_CANCEL; }
     if (rc) {                                                           // the elevated stage did not finish: nothing user-side is undone either
-        if (!o->quiet) { wsprintfW(p, T(L"The uninstall did not finish (code %d). Nothing else was changed.", L"解除安裝沒有完成（代碼 %d）。沒有做其他變更。"), rc); msg(p, MB_ICONERROR); }
+        if (!o->quiet) { wsprintfW(p, TS(ST_THE_UNINSTALL_DID_NOT_FINISH), rc); msg(p, MB_ICONERROR); }
         return rc;
     }
     restore_shortcuts(HKEY_CURRENT_USER, USERKEY);
@@ -101,17 +92,16 @@ static int uninstall(const install_opts *given)
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
     if (all) {
         rc = remove_dynarun();
-        if (rc == ERROR_INSTALL_USEREXIT) { info(o, T(L"DynaRunFix has been uninstalled. DynaRun V3 was kept (its uninstall was cancelled).", L"DynaRunFix 已解除安裝。DynaRun V3 的解除安裝已取消，DynaRun V3 保留。")); return RC_CANCEL; }
+        if (rc == ERROR_INSTALL_USEREXIT) { info(o, TS(ST_DYNARUNFIX_HAS_BEEN_UNINSTALLED_DYNARUN)); return RC_CANCEL; }
         if (rc > 0 && rc != ERROR_SUCCESS_REBOOT_REQUIRED) {
-            wsprintfW(p, T(L"DynaRunFix has been uninstalled, but uninstalling DynaRun V3 failed (Windows Installer error %d).",
-                           L"DynaRunFix 已解除安裝，但 DynaRun V3 解除安裝失敗（Windows Installer 錯誤 %d）。"), rc);
+            wsprintfW(p, TS(ST_DYNARUNFIX_HAS_BEEN_UNINSTALLED_BUT), rc);
             msg(p, MB_ICONERROR);
             return RC_MSI_FAILED;
         }
-        info(o, T(L"DynaRunFix and DynaRun V3 have been uninstalled.", L"DynaRunFix 和 DynaRun V3 都已解除安裝。"));
+        info(o, TS(ST_DYNARUNFIX_AND_DYNARUN_V3_HAVE));
         return RC_OK;
     }
-    info(o, T(L"DynaRunFix has been uninstalled.", L"DynaRunFix 已解除安裝。"));
+    info(o, TS(ST_DYNARUNFIX_HAS_BEEN_UNINSTALLED));
     return RC_OK;
 }
 

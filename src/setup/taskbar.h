@@ -206,7 +206,7 @@ static void launch_normal(const WCHAR *file, const WCHAR *dir)
     }
     if (shell_execute_unelevated(file, dir)) { run_log(L"start DynaRun: through the desktop shell, as the normal user (this process is elevated)"); return; }
     run_log(L"start DynaRun: not started, this process is elevated and the desktop shell could not be asked");
-    msg(T(L"DynaRun was not started from here. Please start it with the \"DynaRun V3\" icon on the desktop.", L"這裡沒有啟動 DynaRun，請改用桌面上的「DynaRun V3」圖示開啟。"), MB_ICONINFORMATION);
+    msg(TS(ST_DYNARUN_WAS_NOT_STARTED_FROM), MB_ICONINFORMATION);
 }
 
 // The wizard's "Start DynaRun": started the way a double click on the shortcut does it (the shortcut gives the

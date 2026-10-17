@@ -15,17 +15,14 @@ static void running_names(int run, WCHAR *out)
 {
     out[0] = 0;
     if (run & RUN_DYNARUN) lstrcatW(out, L"   DynaRun V3\n");
-    if (run & RUN_LAUNCHER) lstrcatW(out, T(L"   DynaRunFix.exe (starting DynaRun)\n", L"   DynaRunFix.exe（正在啟動 DynaRun）\n"));
+    if (run & RUN_LAUNCHER) lstrcatW(out, TX(S_DYNARUNFIX_EXE_STARTING_DYNARUN));
     if (run & RUN_LEPROC) lstrcatW(out, L"   LEProc.exe (Locale Emulator)\n");
 }
 
 // Last paragraph of the first page.
 static const WCHAR *disclaimer(void)
 {
-    return T(L"\n\nDynaRunFix is an independent open-source tool, not affiliated with or endorsed by Dyna Pro Dynamometers. "
-             L"It is provided as is, without warranty (MIT license). DynaRun V3 is licensed to you separately by Dyna Pro.",
-             L"\n\nDynaRunFix 是獨立的開源工具，與 Dyna Pro Dynamometers 無關，也未經其認可；依 MIT 授權按現狀提供，不提供任何擔保。"
-             L"DynaRun V3 由 Dyna Pro 另行授權給你。");
+    return TX(S_DYNARUNFIX_IS_AN_INDEPENDENT_OPEN);
 }
 
 // The line about a newer DynaRun on the first page, and its button. A hint only: nothing happens unless the button is clicked.
@@ -33,15 +30,13 @@ static void hint_line(WCHAR *b)
 {
     WCHAR t[400];
     if (wz.hint == HINT_NEWER) {
-        wsprintfW(t, T(L"\n\nA newer DynaRun V3 is available on Dyna Pro's website: %s (installed: %s). \"Download new version\" downloads and installs it; nothing happens unless you click it.",
-                       L"\n\nDyna Pro 官網有新版 DynaRun V3：%s（目前已安裝：%s）。按「下載新版」會下載並安裝；不按就什麼都不會發生。"), wz.hint_new, wz.hint_inst);
+        wsprintfW(t, TX(S_A_NEWER_DYNARUN_V3_IS), wz.hint_new, wz.hint_inst);
         lstrcatW(b, t);
     } else if (wz.hint == HINT_ZIPDIFF)
-        lstrcatW(b, T(L"\n\nDyna Pro's website may have a newer DynaRun V3 (the file there is not the one downloaded last time). \"Download new version\" gets it; nothing happens unless you click it.",
-                      L"\n\nDyna Pro 官網可能有新版 DynaRun V3（那裡的檔案和上次下載的不同）。按「下載新版」會取得它；不按就什麼都不會發生。"));
+        lstrcatW(b, TX(S_DYNA_PRO_S_WEBSITE_MAY));
 }
 
-static const WCHAR *hint_btn(void) { return wz.hint ? T(L"Download new version", L"下載新版") : NULL; }
+static const WCHAR *hint_btn(void) { return wz.hint ? TX(S_DOWNLOAD_NEW_VERSION) : NULL; }
 
 static BOOL can_start_dynarun(void) { return wz.installed && g_exe[0] && exists(g_launcher); }
 
@@ -49,12 +44,10 @@ static BOOL can_start_dynarun(void) { return wz.installed && g_exe[0] && exists(
 // the install (wz.fix_done: the page "Done" is skipped), on the restart page.
 static void pin_hint(WCHAR *b)
 {
-    if (wz.instres.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (wz.instres.pin == PIN_NEXT_SIGNIN) lstrcatW(b, TX(S_DYNARUN_WILL_APPEAR_ON_THE));
     if (wz.instres.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
-        ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
-            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
-        : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
-            L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「釘選到工作列」。"));
+        ? TX(S_TO_PIN_IT_TO_THE)
+        : TX(S_TO_PIN_IT_TO_THE_2));
 }
 
 static void acp_warning(void)
@@ -68,43 +61,25 @@ static void enter_hello(void)
 {
     WCHAR *b = pgbuf;
     if (wz.flow == FLOW_DRIVER_ONLY) {
-        wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThe fix for Windows 10/11 is already installed (version %s). The Dyna Pro USB driver is not installed yet; "
-                       L"without it this computer cannot talk to the dynamometer.\n\nThis installs the driver (one restart is needed). When Windows asks whether to allow changes, click \"Yes\".\n\n"
-                       L"If DynaRun does not behave, \"Reinstall the fix...\" installs the fix again.",
-                       L"已找到 DynaRun V3：\n%s\n\nWindows 10/11 的相容性修正已經安裝（版本 %s）。但 Dyna Pro USB 驅動程式還沒有安裝；"
-                       L"沒有它，這台電腦就無法和馬力機連線。\n\n接下來會安裝驅動程式（需要重新開機一次）。Windows 詢問「是否允許變更」時，請按「是」。\n\n"
-                       L"如果 DynaRun 運作不正常，可以按「重新安裝修正…」再安裝一次修正。"), g_exe, WIDEN(DRF_DISPLAY));
+        wsprintfW(b, TX(S_DYNARUN_V3_WAS_FOUND_THE), g_exe, WIDEN(DRF_DISPLAY));
         hint_line(b);
-        text(ID_TITLE, T(L"Install the Dyna Pro USB driver", L"安裝 Dyna Pro USB 驅動程式"));
+        text(ID_TITLE, TX(S_INSTALL_THE_DYNA_PRO_USB));
         text(ID_BODY, b);
-        buttons4(T(L"Install the driver", L"安裝驅動程式"), T(L"Cancel", L"取消"), hint_btn(), T(L"Reinstall the fix...", L"重新安裝修正…"));
+        buttons4(TX(S_INSTALL_THE_DRIVER), TX(S_CANCEL), hint_btn(), TX(S_REINSTALL_THE_FIX));
         if (wz.note[0]) status(wz.note, TRUE);
         return;
     }
     if (wz.installed) {
-        text(ID_TITLE, T(L"Fix DynaRun V3 for this Windows", L"讓 DynaRun V3 在這台電腦正常運作"));
-        wsprintfW(b, T(L"DynaRun V3 was found:\n%s\n\nThis installs the fixes for Windows 10/11 (flickering main screen, .Dpr files "
-                       L"in OneDrive that do not open, garbled text, \"Run as administrator\").\n\n"
-                       L"When Windows asks whether to allow changes, click \"Yes\".%s",
-                       L"已找到 DynaRun V3：\n%s\n\n接下來會安裝 Windows 10/11 的相容性修正（主畫面閃爍、OneDrive 裡的 .Dpr 打不開、"
-                       L"中文亂碼、以系統管理員執行卡住）。\n\nWindows 詢問「是否允許變更」時，請按「是」。%s"), g_exe, disclaimer());
+        text(ID_TITLE, TX(S_FIX_DYNARUN_V3_FOR_THIS));
+        wsprintfW(b, TX(S_DYNARUN_V3_WAS_FOUND_THIS), g_exe, disclaimer());
         hint_line(b);
         text(ID_BODY, b);
-        buttons4(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), hint_btn(), NULL);
+        buttons4(TX(S_INSTALL), TX(S_CANCEL), hint_btn(), NULL);
     } else {
-        text(ID_TITLE, T(L"Install DynaRun V3", L"安裝 DynaRun V3"));
-        wsprintfW(b, T(L"DynaRun V3 is not installed on this computer yet.\n\nThis program will:\n"
-                        L"   1.  download the DynaRun V3 setup from the Dyna Pro website\n"
-                        L"   2.  install DynaRun V3\n"
-                        L"   3.  add the fixes for Windows 10/11\n\n"
-                        L"You need the setup password that Dyna Pro gave you.%s",
-                        L"這台電腦還沒有安裝 DynaRun V3。\n\n本程式會自動：\n"
-                        L"   1.  從 Dyna Pro 官網下載 DynaRun V3 安裝檔\n"
-                        L"   2.  安裝 DynaRun V3\n"
-                        L"   3.  加上 Windows 10/11 的相容性修正\n\n"
-                        L"過程中需要輸入 Dyna Pro 給你的安裝密碼。%s"), disclaimer());
+        text(ID_TITLE, TX(S_INSTALL_DYNARUN_V3));
+        wsprintfW(b, TX(S_DYNARUN_V3_IS_NOT_INSTALLED), disclaimer());
         text(ID_BODY, b);
-        buttons(T(L"Start", L"開始"), T(L"Cancel", L"取消"), T(L"Installed elsewhere...", L"已裝在其他位置…"));
+        buttons(TX(S_START), TX(S_CANCEL), TX(S_INSTALLED_ELSEWHERE));
     }
     vis(ID_PIN, TRUE); vis(ID_AUTO, TRUE); vis(ID_DRV, wz.drv_avail);
     if (wz.note[0]) status(wz.note, TRUE);
@@ -115,21 +90,15 @@ static void enter_running(void)
     WCHAR *b = pgbuf;
     WCHAR names[200];
     running_names(wz.lastrun = running_programs(), names);
-    text(ID_TITLE, T(L"DynaRun is running", L"DynaRun 正在執行"));
+    text(ID_TITLE, TX(S_DYNARUN_IS_RUNNING));
     if (wz.lastrun & RUN_NOCLOSE) {               // another user's, or one that cannot be identified: closing from here would not help
-        wsprintfW(b, T(L"DynaRun is running for another user, or as a program that cannot be identified, so it cannot be closed from here:\n%s\n"
-                       L"Ask that user to close DynaRun; this page then offers \"Install\".",
-                       L"另一位使用者（或無法辨識的程式）正在執行 DynaRun，無法從這裡關閉：\n%s\n"
-                       L"請該使用者先關閉 DynaRun，關閉後這個頁面會出現「安裝」按鈕。"), names);
+        wsprintfW(b, TX(S_DYNARUN_IS_RUNNING_FOR_ANOTHER), names);
         text(ID_BODY, b);
-        buttons(NULL, T(L"Cancel", L"取消"), NULL);
+        buttons(NULL, TX(S_CANCEL), NULL);
     } else {
-        wsprintfW(b, T(L"DynaRun must be closed to install:\n%s\n"
-                       L"\"Close DynaRun and install\" closes it now.\nA test run in progress stops, unsaved data is lost.",
-                       L"安裝前必須關閉 DynaRun：\n%s\n"
-                       L"按「關閉 DynaRun 並安裝」會立即關閉它。\n正在進行的測試會中斷，沒存檔的資料會遺失。"), names);
+        wsprintfW(b, TX(S_DYNARUN_MUST_BE_CLOSED_TO), names);
         text(ID_BODY, b);
-        buttons(T(L"Close DynaRun and install", L"關閉 DynaRun 並安裝"), T(L"Cancel", L"取消"), NULL);
+        buttons(TX(S_CLOSE_DYNARUN_AND_INSTALL), TX(S_CANCEL), NULL);
     }
     if (wz.note[0]) status(wz.note, TRUE);
     SetTimer(g_hwnd, TIMER_RUNNING, 1000, NULL);
@@ -137,9 +106,8 @@ static void enter_running(void)
 
 static void enter_install(void)
 {
-    text(ID_TITLE, T(L"Installing", L"安裝中"));
-    text(ID_BODY, T(L"Installing, please wait. This takes a minute or two.\n\nWhen Windows asks whether to allow changes, click \"Yes\".",
-                    L"正在安裝，請稍候，大約需要一兩分鐘。\n\nWindows 詢問「是否允許變更」時，請按「是」。"));
+    text(ID_TITLE, TX(S_INSTALLING));
+    text(ID_BODY, TX(S_INSTALLING_PLEASE_WAIT_THIS_TAKES));
     progress(TRUE);
     buttons(NULL, NULL, NULL);
 }
@@ -148,25 +116,22 @@ static void enter_done(void)
 {
     wz.result = RC_OK;                                   // everything is installed
     WCHAR *b = pgbuf;
-    text(ID_TITLE, T(L"Done", L"完成"));
-    lstrcpyW(b, T(L"Everything is installed.\n\nFrom now on, start DynaRun with the \"DynaRun V3\" icon on the desktop as usual.\n\n"
-                  L"The first start asks for your dynamometer model. If Windows asks whether to allow changes, click \"Yes\".",
-                  L"全部安裝完成。\n\n以後照常點桌面上的「DynaRun V3」圖示啟動即可。\n\n"
-                  L"第一次啟動時會要你選擇馬力機型號；如果 Windows 詢問「是否允許變更」，請按「是」。"));
+    text(ID_TITLE, TX(S_DONE));
+    lstrcpyW(b, TX(S_EVERYTHING_IS_INSTALLED_FROM_NOW));
     pin_hint(b);
-    if (wz.opts.autostart) lstrcatW(b, T(L"\n\nDynaRun will start automatically when you sign in.", L"\n\n以後開機登入後會自動啟動 DynaRun。"));
-    lstrcatW(b, T(L"\n\nIf DynaRun's screen ever looks wrong, close DynaRun and start it again.", L"\n\n如果 DynaRun 的畫面顯示不正常，關掉 DynaRun 再開一次即可。"));
+    if (wz.opts.autostart) lstrcatW(b, TX(S_DYNARUN_WILL_START_AUTOMATICALLY_WHEN));
+    lstrcatW(b, TX(S_IF_DYNARUN_S_SCREEN_EVER));
     text(ID_BODY, b);
-    buttons(T(L"Start DynaRun", L"開始使用 DynaRun"), T(L"Close", L"關閉"), NULL);
+    buttons(TX(S_START_DYNARUN), TX(S_CLOSE), NULL);
     acp_warning();
 }
 
 static void enter_error(void)
 {
     wz.result = RC_FAIL;                                 // the install failed
-    text(ID_TITLE, T(L"Something went wrong", L"發生問題"));
+    text(ID_TITLE, TX(S_SOMETHING_WENT_WRONG));
     text(ID_BODY, wz.note);
-    buttons(T(L"Close", L"關閉"), NULL, NULL);
+    buttons(TX(S_CLOSE), NULL, NULL);
 }
 
 static int jp_install_all(void) { return g_in.flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_in.opts, &g_out.instres, g_in.msi, g_in.drvzip, g_in.drv_allow ? g_in.drv_hex : NULL) : install_all(&g_in.opts, &g_out.instres, g_in.msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
@@ -288,12 +253,11 @@ static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INS
     if (rc == RC_OK) { cleanup_files(); set_page(P_DONE); return; }
     if (rc == RC_RUNNING) { wz.pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
     if (rc == RC_CANCEL) {
-        lstrcpyW(wz.note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
+        lstrcpyW(wz.note, TX(S_NOTHING_WAS_INSTALLED_WINDOWS_NEEDS_2));
         set_page(wz.flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
         return;
     }
-    wsprintfW(wz.note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
-                        L"安裝沒有完成（代碼 %d）。\n\n請重新開機後再執行一次本程式。"), rc);
+    wsprintfW(wz.note, TX(S_THE_INSTALLATION_DID_NOT_FINISH), rc);
     set_page(P_ERROR);
 }
 
@@ -454,11 +418,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (wz.page == P_FETCH && !wz.paused) {
                 wz.marquee = TRUE;
                 progress(TRUE);
-                if (total == 2) { WCHAR s[160]; wsprintfW(s, T(L"Looking for %s on this computer...", L"正在尋找電腦上現有的%s…"), ACQ_NAME(wz.acq)); status(s, FALSE); }   // before anything is downloaded: a bar that moves
+                if (total == 2) { WCHAR s[160]; wsprintfW(s, TX(S_LOOKING_FOR_ON_THIS_COMPUTER), ACQ_NAME(wz.acq)); status(s, FALSE); }   // before anything is downloaded: a bar that moves
                 else {                                                                                       // the file is being checked: not pausable
                     wz.checking = TRUE;
-                    text(ID_TITLE, T(L"Checking the driver", L"正在檢查驅動程式"));
-                    status(T(L"Checking the driver...", L"正在檢查驅動程式…"), FALSE);
+                    text(ID_TITLE, TX(S_CHECKING_THE_DRIVER));
+                    status(TX(S_CHECKING_THE_DRIVER_2), FALSE);
                     EnableWindow(H(ID_PRIMARY), FALSE);
                 }
                 layout();
@@ -485,8 +449,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                 wz.lastrun = run;
                 if (run) set_page(P_RUNNING);
                 else {                               // closed by the user meanwhile: plain "Install"
-                    buttons(T(L"Install", L"安裝"), T(L"Cancel", L"取消"), NULL);
-                    status(T(L"DynaRun is closed.", L"DynaRun 已關閉。"), FALSE);
+                    buttons(TX(S_INSTALL), TX(S_CANCEL), NULL);
+                    status(TX(S_DYNARUN_IS_CLOSED), FALSE);
                     layout();
                 }
             }
@@ -551,7 +515,7 @@ int wizard(const install_opts *init)
     RegisterClassW(&wc);
     r.left = r.top = 0; r.right = S(620); r.bottom = S(580);                                  // the first page: text, disclaimer, the two options and a one-line note
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    wsprintfW(title, T(L"DynaRunFix Setup %s", L"DynaRunFix 安裝程式 %s"), WIDEN(DRF_DISPLAY));
+    wsprintfW(title, TX(S_DYNARUNFIX_SETUP), WIDEN(DRF_DISPLAY));
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
                              (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2, (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);

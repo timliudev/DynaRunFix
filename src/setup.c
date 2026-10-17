@@ -63,6 +63,7 @@
 // The rest of this file is split by topic into src\setup\*.h. They are fragments of THIS translation unit (static functions and file-local
 // state refer to each other), not headers and not separate .c files: build.cmd and the tests compile only setup.c. The order matters:
 // a fragment uses only what the ones before it declare (the few forward declarations are inside the fragments).
+#include "setup/strings.h"                  // the English / Chinese texts: TS(ST_...)
 #include "setup/defs.h"                     // constants, globals, trust_ctx
 #include "setup/util.h"                     // system-folder DLLs, memory, files, registry, shared helpers (path_join, run_process, dir_walk, app key)
 #include "setup/stage.h"                    // one elevated stage at a time, setup.log of the install folder

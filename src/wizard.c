@@ -171,6 +171,7 @@ static void go_install(int job);
 static void on_close(void);
 static void end_wizard(void);
 
+#include "wizard/strings.h"                 // the English / Chinese texts: TX(S_...)
 #include "wizard/layout.h"                  // the window: UI helpers, screenshots, controls, layout
 #include "wizard/acquire.h"                 // getting the DynaRun setup (and the driver package): download, password, check, license
 #include "wizard/driver.h"                  // the driver pages and jobs

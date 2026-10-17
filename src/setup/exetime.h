@@ -93,8 +93,7 @@ static int touch(const WCHAR *p)
 static int touch_report(const install_opts *o, int t)
 {
     if (t == TOUCH_STUCK)
-        warn(o, T(L"The modified time of DynaRun V3.exe could not be put back as it was. It is kept in the registry and put back the next time DynaRunFix is installed or uninstalled.",
-               L"DynaRun V3.exe 的修改時間無法還原。已記錄在登錄檔，下次安裝或解除安裝 DynaRunFix 時會再還原。"));
+        warn(o, TS(ST_THE_MODIFIED_TIME_OF_DYNARUN));
     else if (t == TOUCH_NOTDONE) setup_log(L"the manifest was not refreshed: DynaRun V3.exe could not be touched");
     return t;
 }

@@ -36,5 +36,5 @@ typedef struct {
     WCHAR user_sid[200];          // the user who started the setup (elevated stage: from its command line); "" = none known
     BOOL exe_trusted;             // set by check_exe: DynaRun's exe and folder cannot be changed by ordinary users
 } trust_ctx;
-#define TITLE T(L"DynaRunFix Setup", L"DynaRunFix 安裝程式")
+#define TITLE TS(ST_DYNARUNFIX_SETUP)
 

@@ -17,14 +17,14 @@ static int machine_install_locked(const install_opts *o, const WCHAR *sid)
 {
     static WCHAR p[MAX_PATH + 16];
     HKEY k; trust_ctx t;
-    if (!valid_user_sid(sid)) { error2(o, T(L"The user account is not valid.", L"使用者帳戶無效。"), sid); return RC_FAIL; }
+    if (!valid_user_sid(sid)) { error2(o, TS(ST_THE_USER_ACCOUNT_IS_NOT), sid); return RC_FAIL; }
     zero(&t, sizeof(t)); lstrcpynW(t.user_sid, sid, 200);
     if (still_running(o, L"install")) return RC_RUNNING;   // checked again here: DynaRun may have been started since
-    if (!check_exe(&t)) { error2(o, T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return RC_FAIL; }
+    if (!check_exe(&t)) { error2(o, TS(ST_DYNARUN_V3_EXE_WAS_NOT), g_exe); return RC_FAIL; }
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
         !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL)) || !extract(5, cat3(p, g_dir, L"\\LICENSE.txt", NULL))) {
-        error2(o, T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), g_dir);
+        error2(o, TS(ST_CANNOT_WRITE_THE_PROGRAM_FILES), g_dir);
         return RC_FAIL;
     }
     {   // Locale Emulator, resources 10.. (see setup.rc)
@@ -34,13 +34,13 @@ static int machine_install_locked(const install_opts *o, const WCHAR *sid)
         CreateDirectoryW(cat3(p, g_dir, L"\\le", NULL), NULL);
         for (i = 0; i < (int)(sizeof(le) / sizeof(le[0])); i++)
             if (!extract(10 + i, cat3(p, g_dir, L"\\le\\", le[i]))) {
-                error2(o, T(L"Cannot write the program files. Close DynaRun and try again.", L"無法寫入程式檔案。請關閉 DynaRun 後再試一次。"), p);
+                error2(o, TS(ST_CANNOT_WRITE_THE_PROGRAM_FILES), p);
                 return RC_FAIL;
             }
     }
     cat3(p, g_dir, L"\\DynaRunFix-Setup.exe", NULL);
     if (lstrcmpiW(p, g_self) && ((!CopyFileW(g_self, p, FALSE) && !(move_aside(p) && CopyFileW(g_self, p, FALSE))) || !same_file(g_self, p))) {
-        error2(o, T(L"Cannot copy the uninstaller.", L"無法複製解除安裝程式。"), p);
+        error2(o, TS(ST_CANNOT_COPY_THE_UNINSTALLER), p);
         return RC_FAIL;
     }
     driver_machine_stage(p);                            // the Start menu shortcut to the driver installation (p: the installed setup)
@@ -181,11 +181,11 @@ static int machine_uninstall(const install_opts *o, const WCHAR *skip_sid)
         else if (DeleteFileW(p)) deleted = TRUE;
         else if (move_aside(p)) {                    // in use: renamed at once (a reinstall before the restart writes its own file), the renamed one goes at the next restart
             deleted = TRUE;
-            warn(o, T(L"The manifest file next to DynaRun V3.exe is in use and will be deleted at the next restart.", L"DynaRun V3.exe 旁的 manifest 檔正在使用中，將在下次重新啟動時刪除。"));
+            warn(o, TS(ST_THE_MANIFEST_FILE_NEXT_TO));
         }
         else {                                       // cannot even be renamed: it goes at the next restart, and the record that it is ours stays
             MoveFileExW(p, NULL, MOVEFILE_DELAY_UNTIL_REBOOT); keep = TRUE;
-            warn(o, T(L"The manifest file next to DynaRun V3.exe is in use and will be deleted at the next restart.", L"DynaRun V3.exe 旁的 manifest 檔正在使用中，將在下次重新啟動時刪除。"));
+            warn(o, TS(ST_THE_MANIFEST_FILE_NEXT_TO));
         }
     }
     if (deleted) { if (t.exe_trusted) { if (touch_report(o, touch(g_exe)) == TOUCH_STUCK) stuck = TRUE; } else setup_log(L"the manifest state was not refreshed: DynaRun's folder or exe can be changed by ordinary users"); }
