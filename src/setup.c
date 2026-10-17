@@ -851,13 +851,12 @@ static const shortcut_folder SF[SF_COUNT] = {
     { { CSIDL_APPDATA, 0 }, L"\\DynaRunFix", NULL, NULL, SFU_RESTORE, 0 },              // desktop_link(): the shortcut it creates when there is none
 };
 
-// The folder of row id (common: the all users' one) in out (MAX_PATH characters); FALSE when the shell has none, or when check is set and the path is
-// too long for what goes below it (the uninstall's point-back and the restore path check have always checked; the other callers have not).
-static BOOL sf_path(int id, BOOL common, WCHAR *out, BOOL check)
+// The folder of row id (common: the all users' one) in out (MAX_PATH characters); FALSE when the shell has none or the path is too long for what goes below it.
+static BOOL sf_path(int id, BOOL common, WCHAR *out)
 {
     const shortcut_folder *f = &SF[id]; int csidl = f->csidl[common ? 1 : 0];
     if (!csidl || !SHGetSpecialFolderPathW(NULL, out, csidl, FALSE)) return FALSE;
-    if (f->sub) { if (check && lstrlenW(out) + 50 >= MAX_PATH) return FALSE; lstrcatW(out, f->sub); }
+    if (f->sub) { if (lstrlenW(out) + 50 >= MAX_PATH) return FALSE; lstrcatW(out, f->sub); }
     return TRUE;
 }
 
@@ -871,7 +870,7 @@ static BOOL shortcut_folders(unsigned use, int scope, sf_fn fn, void *ctx)
         id = use == SFU_ICON && i < 2 ? 1 - i : i;              // the icon is looked for in the Start menu before the Desktop
         if (!(SF[id].uses & use)) continue;
         for (c = 0; c < 2; c++)
-            if ((scope & (1 << c)) && sf_path(id, c, d, use == SFU_UNRET || use == SFU_RESTORE) && !fn(d, id, c, (SF[id].deep & use) != 0, ctx)) return TRUE;
+            if ((scope & (1 << c)) && sf_path(id, c, d) && !fn(d, id, c, (SF[id].deep & use) != 0, ctx)) return TRUE;
     }
     return FALSE;
 }
@@ -1238,7 +1237,7 @@ static void taskbar_policy(const install_opts *o, const WCHAR *sid, HKEY app)
 static BOOL pinned_ours(void)       // a shortcut to the launcher among the taskbar's pinned items (Windows 7+)
 {
     static WCHAR d[MAX_PATH], f[MAX_PATH];
-    if (!sf_path(SF_QUICKLAUNCH, FALSE, d, FALSE)) return FALSE;
+    if (!sf_path(SF_QUICKLAUNCH, FALSE, d)) return FALSE;
     lstrcatW(d, L"\\User Pinned\\TaskBar");
     return find_ours(d, FALSE, f);
 }
@@ -1297,7 +1296,7 @@ static BOOL pin_taskbar(const WCHAR *lnk, int *res)
     static WCHAR d[MAX_PATH], v[MAX_PATH], sub[64]; DWORD ma, mi, b; HKEY k;
     os_ver(&ma, &mi, &b);
     if (ma == 5 || (ma == 6 && !mi)) {                  // XP, Vista: the Quick Launch toolbar
-        if (!sf_path(SF_QUICKLAUNCH, FALSE, d, FALSE)) return FALSE;
+        if (!sf_path(SF_QUICKLAUNCH, FALSE, d)) return FALSE;
         CreateDirectoryW(d, NULL);
         if (!save_link(lstrcatW(d, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
         if (!RegOpenKeyExW(HKEY_CURRENT_USER, cat3(sub, USERKEY, L"\\Shortcuts", NULL), 0, KEY_SET_VALUE, &k)) {
@@ -1319,7 +1318,7 @@ static BOOL desktop_link(WCHAR *out, HKEY backup)   // one of our shortcuts to p
 {
     WCHAR d[MAX_PATH];
     if (find_our_shortcut(out)) return TRUE;
-    if (!sf_path(SF_OWN, FALSE, d, FALSE)) return FALSE;
+    if (!sf_path(SF_OWN, FALSE, d)) return FALSE;
     CreateDirectoryW(d, NULL);
     if (!save_link(cat3(out, d, L"\\DynaRun V3.lnk", NULL), g_launcher, g_exe, 0, 0, 0, FALSE)) return FALSE;
     RegSetValueExW(backup, out, 0, REG_BINARY, (const BYTE *)"", 0);
@@ -1857,9 +1856,9 @@ static void user_stage(const install_opts *o, install_result *res)
     RegDeleteValueW(b, L"UpdateChecked"); RegDeleteValueW(b, L"UpdateVersion"); RegDeleteValueW(b, L"UpdateSha256"); RegDeleteValueW(b, L"UpdateAsk"); RegDeleteValueW(b, L"UpdateSkip");
     if (!RegCreateKeyExW(b, L"Shortcuts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &s, NULL)) {
         int desk = fix_shortcuts(FALSE, s);
-        if (!desk && sf_path(SF_DESKTOP, TRUE, p, FALSE))
+        if (!desk && sf_path(SF_DESKTOP, TRUE, p))
             desk = scan(p, FALSE, s);   // already handled by the machine stage; only counted here
-        if (!desk && !o->keep && sf_path(SF_DESKTOP, FALSE, p, FALSE) &&
+        if (!desk && !o->keep && sf_path(SF_DESKTOP, FALSE, p) &&
             save_link(lstrcatW(p, L"\\DynaRun V3.lnk"), g_launcher, g_exe, 0, 0, 0, FALSE))
             RegSetValueExW(s, p, 0, REG_BINARY, (const BYTE *)"", 0);
         if (o->pin && !o->keep) {
