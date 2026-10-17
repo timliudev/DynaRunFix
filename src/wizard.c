@@ -37,7 +37,12 @@ static int g_page, g_job, g_dpi, g_lastpct = -1, g_pending, g_lastrun;   // g_pe
 static volatile LONG g_cancel;
 static install_opts g_opts;                             // what the pages ask for (starts as the command line gave it); only the UI thread changes it
 static install_opts g_jobopts;                          // the copy a job runs with (start_job): the worker never reads g_opts while the pages may change it
-static install_result g_result;                         // what the install job reports besides its code (the pin hint); written by the worker, read once the job is done
+static install_result g_instres;                        // what the install job reports besides its code (the pin hint); written by the worker, read once the job is done
+// The process exit code of wizard(): what the user's run came to. It is RC_CANCEL while nothing is decided (the window is closed before the end), and set
+// where the outcome is decided: a page that says "it worked" (Done, the driver is installed, the restart for the driver) makes it RC_OK, an error page
+// (the acquire flow's, "Something went wrong", "The driver was not installed") RC_FAIL. set_page takes it back to RC_CANCEL first, so it always belongs to
+// the page on screen; wherever the window ends (a button, Esc, Alt+F4, a job that ends while the window is closing) wizard() returns this value.
+static int g_result = RC_CANCEL;
 static BOOL g_close_asked;                              // g_opts.close was set by the "Close DynaRun and install" button: it covers that one install job only (job_done takes it back)
 static BOOL g_busy, g_closing, g_installed, g_pkg_ours, g_pkg_found, g_status_err, g_badfile, g_nolicense;   // g_nolicense: the setup's license text could not be read
 static int g_nfound;   // packages pkg_find_local has handed us so far
@@ -370,12 +375,12 @@ static void cat_to(WCHAR *d, int cap, const WCHAR *s)
     if (n < cap - 1) lstrcpynW(d + n, s, cap - n);
 }
 
-// What is said about the taskbar pin (g_result.pin, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
+// What is said about the taskbar pin (g_instres.pin, set by the user stage) and about DynaRun's Chinese text: on the page "Done" and, when the driver goes with
 // the install (g_fix_done: the page "Done" is skipped), on the restart page.
 static void pin_hint(WCHAR *b)
 {
-    if (g_result.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
-    if (g_result.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
+    if (g_instres.pin == PIN_NEXT_SIGNIN) lstrcatW(b, T(L"\n\nDynaRun will appear on the taskbar after you sign out and back in.", L"\n\n登出再登入後，DynaRun 會出現在工作列上。"));
+    if (g_instres.pin == PIN_FAILED) lstrcatW(b, os_build() >= 22000
         ? T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Show more options → Pin to taskbar.",
             L"\n\n要釘選到工作列：在桌面「DynaRun V3」圖示上按右鍵 →「顯示其他選項」→「釘選到工作列」。")
         : T(L"\n\nTo pin it to the taskbar: right-click the \"DynaRun V3\" icon on the desktop → Pin to taskbar.",
@@ -446,6 +451,7 @@ static void enter_fetch(void)   // looking for a copy here, downloading, checkin
 
 static void enter_fail(void)   // the one error page of the acquire flow
 {
+    g_result = RC_FAIL;                                 // the acquire flow ended on its error page (Retry and the other ways on leave it)
     WCHAR *b = pgbuf;
     if (g_badfile) lstrcpyW(b, T(L"This is not the DynaRun V3 setup", L"這不是 DynaRun V3 安裝檔"));
     else wsprintfW(b, T(L"%s could not be downloaded", L"無法自動下載%s"), ACQ_NAME(g_acq));
@@ -550,6 +556,7 @@ static void enter_install(void)
 
 static void enter_done(void)
 {
+    g_result = RC_OK;                                   // everything is installed
     WCHAR *b = pgbuf;
     text(ID_TITLE, T(L"Done", L"完成"));
     lstrcpyW(b, T(L"Everything is installed.\n\nFrom now on, start DynaRun with the \"DynaRun V3\" icon on the desktop as usual.\n\n"
@@ -566,6 +573,7 @@ static void enter_done(void)
 
 static void enter_error(void)
 {
+    g_result = RC_FAIL;                                 // the install failed
     text(ID_TITLE, T(L"Something went wrong", L"發生問題"));
     text(ID_BODY, g_note);
     buttons(T(L"Close", L"關閉"), NULL, NULL);
@@ -707,6 +715,7 @@ static void enter_drv_prep(void)
 
 static void enter_drv_reboot(void)
 {
+    g_result = RC_OK;                                   // the driver step is prepared; the restart continues it
     WCHAR *b = pgbuf;
     text(ID_TITLE, g_drv_noreboot ? T(L"Please restart the computer", L"請重新開機") : T(L"Restarting", L"即將重新開機"));
     lstrcpyW(b, g_drv_noreboot
@@ -754,6 +763,7 @@ static void enter_drv_install(void)
 
 static void enter_drv_done(void)
 {
+    g_result = RC_OK;                                   // the driver is installed (or was already)
     text(ID_TITLE, g_drv_have ? T(L"The driver is already installed", L"驅動程式已安裝") : T(L"The driver is installed", L"驅動程式安裝完成"));
     text(ID_BODY, g_drv_have
         ? T(L"The Dyna Pro USB driver is already installed on this computer. Nothing more to do.",
@@ -768,6 +778,7 @@ static void enter_drv_done(void)
 
 static void enter_drv_error(void)
 {
+    g_result = RC_FAIL;                                 // the driver step failed
     text(ID_TITLE, T(L"The driver was not installed", L"驅動程式沒有安裝"));
     text(ID_BODY, g_note);
     buttons(T(L"Close", L"關閉"), NULL, T(L"Open the manual steps", L"開啟手動安裝說明"));
@@ -809,8 +820,8 @@ static int jp_extract(void)
     SecureZeroMemory(g_pw, sizeof(g_pw));            // the password is not needed any more
     return rc;
 }
-static int jp_install_all(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
-static int jp_install_fix(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); }
+static int jp_install_all(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_jobopts, &g_instres, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_instres, g_msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
+static int jp_install_fix(void) { return g_flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_jobopts, &g_instres, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_instres); }
 static int jp_drv_prep(void)
 {
     // "install anyway" accepts exactly this zip (its SHA-256), nothing else.
@@ -1535,6 +1546,7 @@ static const page_desc PAGES[P_COUNT] = {
 static void set_page(int p)
 {
     g_page = p;
+    g_result = RC_CANCEL;                               // undecided until a page below says otherwise
     g_paused = g_pause_req = FALSE;
     g_checking = g_marquee = FALSE;                     // a page starts with a plain bar; a download started again (also after the checking phase) shows its progress
     g_building = TRUE;                                  // status() does not lay out while the page is being rebuilt; the layout at the end does
@@ -1894,7 +1906,7 @@ int wizard(const install_opts *init)
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
                              (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2, (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
-    if (!g_hwnd) return 1;
+    if (!g_hwnd) return RC_FAIL;
     create_controls();
     g_installed = locate_dynarun();
     g_drv_avail = g_drvmode == DRV_MODE_NONE && driver_supported() && !driver_installed();
@@ -1925,7 +1937,5 @@ int wizard(const install_opts *init)
     }
     g_hwnd = NULL;
     if (g_page != P_DRV_REBOOT) autostart_flush();   // unless the restart for the driver is still to come: then the continuation does it
-    if (g_page == P_DONE || g_page == P_DRV_DONE || g_page == P_DRV_REBOOT) return RC_OK;      // ended on a success page
-    if (g_page == P_FAIL || g_page == P_ERROR || g_page == P_DRV_ERROR) return RC_FAIL;           // ended on an error page
-    return RC_CANCEL;                                                                       // closed before the end
+    return g_result;
 }
