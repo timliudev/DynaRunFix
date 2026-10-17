@@ -2,7 +2,7 @@
 
 Environment where this was analysed:
 
-| | Windows 11 (native) | Windows 7 SP1 (VirtualBox VM) |
+| | Windows 11 (native) | Windows 7 SP1 (virtual machine) |
 |---|---|---|
 | DynaRun V3 | 3.26 | 3.26 (same installer) |
 | Screen | 2048x1280 logical, 2 monitors | 2560x1443, 1 monitor |
