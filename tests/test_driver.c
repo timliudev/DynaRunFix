@@ -892,11 +892,23 @@ static void test_real_zip(void)
 
 // driver_verb: /driver-prep <sid> <zip> [/unverified <sha256>]. The accepted hash is taken ONLY as argv[4] == /unverified with argv[5] of exactly
 // 64 characters; anywhere else (or another length) it is silently NULL (the prep then asks for the exact hash by other means / refuses).
-// Differs from setup.c's parse_switches (tests\test_hardening.c), which finds /unverified at any index >= 4, takes any following argument as its
+// Differs from the install stage's rule in cmd_parse (setup.c; tests\test_hardening.c), which finds /unverified at any index >= 4, takes any following argument as its
 // value and drops one that is not 64 characters long: there a bad value is consumed, here it simply is not at argv[4].
 // The verb itself: /driver and /driver-continue open the wizard (not run here); /driver-prep, /driver-install and /driver-cancel need an
 // administrator (return 1 otherwise) and /driver-prep needs argc >= 4 (return 1 otherwise); anything else is DRV_NOVERB.
-static int driver_verb_o(int argc, WCHAR **argv) { install_opts o; install_opts_default(&o); return driver_verb(argc, argv, &o); }
+// The driver's rows of the verb table (driver.c). Other verbs of the table (/machine, /uninstall: setup.c) are only looked up, never run here:
+// they are "not a driver verb" as driver_verb used to say (DRV_NOVERB).
+static BOOL is_driver_verb(const verb *e)
+{ return e && (e->run == cmd_driver || e->run == cmd_driver_continue || e->run == cmd_driver_prep || e->run == cmd_driver_install || e->run == cmd_driver_cancel); }
+static int driver_verb_o(int argc, WCHAR **argv)
+{
+    cmdline c; const verb *e = verb_find(argc, argv);
+    c.argc = argc; c.argv = argv; cmd_parse(&c);
+    return is_driver_verb(e) ? e->run(&c) : DRV_NOVERB;
+}
+// the accepted hash of /driver-prep (c.daccept4); setup_accept_arg: the install stage's rule (c.daccept) on the same command line
+static const WCHAR *prep_accept_arg(int argc, WCHAR **argv) { cmdline c; c.argc = argc; c.argv = argv; cmd_parse(&c); return c.daccept4; }
+static const WCHAR *setup_accept_arg(int argc, WCHAR **argv) { cmdline c; c.argc = argc; c.argv = argv; cmd_parse(&c); return c.daccept; }
 static void test_cmdline(void)
 {
     WCHAR h64[80], h63[80], h65[80];
@@ -929,7 +941,8 @@ static void test_cmdline(void)
     CHECK(prep_accept_arg(6, a3) == NULL, L"accept: 65 characters: NULL");
     CHECK(prep_accept_arg(6, a4) == h64, L"accept: /UNVERIFIED, case-insensitive");
     CHECK(prep_accept_arg(5, a5) == NULL, L"accept: /unverified without a value: NULL");
-    CHECK(prep_accept_arg(7, a6) == NULL, L"accept: /unverified at argv[5] (not argv[4]): NULL (setup.c would take it at index 5)");
+    CHECK(prep_accept_arg(7, a6) == NULL, L"accept: /unverified at argv[5] (not argv[4]): NULL (the install stage's rule takes it at index 5)");
+    CHECK(setup_accept_arg(7, a6) == h64 && setup_accept_arg(6, a1) == h64, L"accept: the install stage's rule (c.daccept) takes it at argv[5] too: the two rules differ, each verb keeps its own");
     CHECK(prep_accept_arg(5, a7) == NULL, L"accept: a bare hash without /unverified: NULL");
     CHECK(prep_accept_arg(6, a8) == NULL, L"accept: /with-driver is not understood here: NULL");
     CHECK(prep_accept_arg(4, a9) == NULL, L"accept: nothing after the zip: NULL");

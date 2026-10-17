@@ -27,7 +27,7 @@ enum { PKC_OK = 0, PKC_DIFFER = 1, PKC_MISSING = 2 };
 /* ---- 4. The driver step (driver.c): result of driver_prep / driver_install / driver_cancel, also an exit code of the elevated stage ----
    DRV_SUCCESS is RC_OK. DRV_E_* 20..29 are failures; DRV_W_BDE 30 is "done, but BitLocker could not be suspended" (the wizard asks); DRV_W_HASH 31 is a
    driver_fetch / driver_check result (some files differ, the user is asked), never an exit code. RC_CANCEL (2) is also what the driver functions return
-   when the UAC prompt was declined. DRV_NOVERB is driver_verb's "not a driver command". */
+   when the UAC prompt was declined. DRV_NOVERB is verb_run's (setup.c) "argv[1] is no verb of the table". */
 enum {
     DRV_SUCCESS = 0,
     DRV_E_FIRST = 20,           // the first driver code; see FIX_DONE

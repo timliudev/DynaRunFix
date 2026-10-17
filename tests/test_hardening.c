@@ -29,7 +29,11 @@ int update_check(void) { return 0; }
 int update_offer(void) { return 0; }
 int update_run(const WCHAR *a) { (void)a; return 0; }
 // driver.c is not part of this test (it would touch ProgramData and the Start menu): tests\test_driver.c covers it
-int driver_verb(int argc, WCHAR **argv, const install_opts *o) { (void)argc; (void)argv; (void)o; return DRV_NOVERB; }
+int cmd_driver(cmdline *c) { (void)c; return 0; }
+int cmd_driver_continue(cmdline *c) { (void)c; return 0; }
+int cmd_driver_prep(cmdline *c) { (void)c; return 0; }
+int cmd_driver_install(cmdline *c) { (void)c; return 0; }
+int cmd_driver_cancel(cmdline *c) { (void)c; return 0; }
 int driver_prep_stage(const WCHAR *sid, const WCHAR *zip, const WCHAR *accept) { (void)sid; (void)zip; (void)accept; return 0; }   // called by install_fix_driver / install_all_driver (not run here)
 void driver_machine_stage(const WCHAR *p) { (void)p; }
 void driver_machine_uninstall(void) { }
@@ -838,13 +842,14 @@ static void test_run_elevated_args(void)
 //  - they take the next argument as their value WHATEVER it is (oddity: "/unverified /quiet" swallows /quiet; so does "/with-driver /quiet");
 //  - /unverified keeps its value only when exactly 64 characters long, otherwise the value is consumed and dropped (no error);
 //  - unknown arguments are ignored; the last /with-driver wins; a later /unverified with a bad length does not clear an earlier good one.
-// (driver.c's driver_verb parses /driver-prep differently: see test_driver.c.) The dispatch on argv[1] (/machine needs argc >= 4, ...) is not covered here.
-static install_opts g_po; static BOOL g_pin_seen; static const WCHAR *g_dz, *g_da;
+// (/driver-prep takes its hash by the narrower rule daccept4, see test_driver.c.) The verb table is test_verb_table.
+static install_opts g_po; static BOOL g_pin_seen; static const WCHAR *g_dz, *g_da, *g_da4;
 static void parse_case(int argc, WCHAR **argv)
 {
-    install_opts_default(&g_po);
-    g_pin_seen = FALSE; g_dz = NULL; g_da = NULL;
-    parse_switches(argc, argv, &g_po, &g_pin_seen, &g_dz, &g_da);
+    cmdline c;
+    c.argc = argc; c.argv = argv;
+    cmd_parse(&c);
+    g_po = c.opts; g_pin_seen = c.pin; g_dz = c.dzip; g_da = c.daccept; g_da4 = c.daccept4;
 }
 #define PARSE(...) do { WCHAR *av_[] = { __VA_ARGS__ }; parse_case((int)(sizeof(av_) / sizeof(av_[0])), av_); } while (0)
 static void test_parse_switches(void)
@@ -892,6 +897,32 @@ static void test_parse_switches(void)
     CHECK(g_da && !lstrcmpW(g_da, h64), L"parse: a later short /unverified does not clear an earlier accepted one");
     PARSE(L"s", L"/machine", L"S-1", L"e", L"/WITH-DRIVER", L"z", L"/UNVERIFIED", h64);
     CHECK(g_da && g_dz, L"parse: the driver switches are case-insensitive too");
+    // the second rule, for /driver-prep: the same value, but only as argv[4] argv[5]
+    PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h64);
+    CHECK(g_da && !lstrcmpW(g_da, h64) && g_da4 == g_da, L"parse: /unverified at argv[4]: both rules have it");
+    PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/quiet", L"/unverified", h64);
+    CHECK(g_da && !lstrcmpW(g_da, h64) && !g_da4 && g_po.quiet, L"parse: DIVERGENCE /unverified at argv[5]: the install stage's rule takes it, the prep's does not");
+    {   WCHAR other[80];
+        lstrcpyW(other, h64); other[0] = L'f';
+        PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h64, L"/unverified", other);
+        CHECK(g_da && !lstrcmpW(g_da, other) && g_da4 && !lstrcmpW(g_da4, h64), L"parse: DIVERGENCE two valid /unverified: later one for the install stage, the one at argv[4] for the prep");
+        PARSE(L"s", L"/driver-prep", L"S-1", L"z", L"/unverified", h63, L"/unverified", other);
+        CHECK(g_da && !g_da4, L"parse: a short /unverified at argv[4] is dropped for both, a valid later one counts for the install stage only");
+    }
+}
+
+// The verb table: argv[1] (any case, exact) and enough arguments. With too few arguments /machine and /full are no verb at all (the wizard or a /quiet
+// install runs instead), the elevated driver verbs and the others are taken with the verb alone. Only the lookup is called, nothing is run.
+static void test_verb_table(void)
+{
+    WCHAR *m3[] = { L"s", L"/machine", L"S-1" }; WCHAR *m4[] = { L"s", L"/MACHINE", L"S-1", L"e" };
+    WCHAR *f3[] = { L"s", L"/full", L"S-1" }; WCHAR *f4[] = { L"s", L"/full", L"S-1", L"m" };
+    WCHAR *u2[] = { L"s", L"/unmachine" }; WCHAR *d2[] = { L"s", L"/driver-prep" }; WCHAR *x2[] = { L"s", L"/driver-prepx" };
+    WCHAR *n1[] = { L"s" }; WCHAR *q2[] = { L"s", L"/quiet" }; WCHAR *p2[] = { L"s", L"driver" }; WCHAR *o2[] = { L"s", L"/offer" };
+    CHECK(verb_find(3, m3) == NULL && verb_find(4, m4) != NULL, L"verbs: /machine needs argc >= 4");
+    CHECK(verb_find(3, f3) == NULL && verb_find(4, f4) != NULL, L"verbs: /full needs argc >= 4");
+    CHECK(verb_find(2, u2) != NULL && verb_find(2, d2) != NULL && verb_find(2, o2) != NULL, L"verbs: /unmachine, /driver-prep, /offer need the verb only");
+    CHECK(verb_find(2, x2) == NULL && verb_find(2, q2) == NULL && verb_find(2, p2) == NULL && verb_find(1, n1) == NULL, L"verbs: exact match only, no verb without argv[1]");
 }
 
 // FIX_DONE(rc): the elevated install stage "installed the fix" = rc 0, or the driver step gave a code >= DRV_E_HASH (the fix is in place, the driver
@@ -943,6 +974,7 @@ int wmain(void)
     wprintf(L"[shortcut paths]\n"); test_shortcut_paths();
     wprintf(L"[run_elevated arguments]\n"); test_run_elevated_args();
     wprintf(L"[command line switches]\n"); test_parse_switches();
+    wprintf(L"[verb table]\n"); test_verb_table();
     wprintf(L"[result codes]\n"); test_result_codes();
     {   // clean up
         WCHAR c[1000];

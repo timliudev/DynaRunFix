@@ -20,6 +20,17 @@ void install_opts_default(install_opts *o);     // pin and autostart on, the res
 typedef struct {
     int pin;                                // PIN_*: 0 not asked, 1 pinned, 2 appears after the next sign-in, 3 could not pin
 } install_result;
+// The command line, parsed once (setup.c, cmd_parse). The verb table (setup.c) hands it to the verb's function.
+typedef struct {
+    int argc; WCHAR **argv;                 // as CommandLineToArgvW gave them; argv[0] is the program, argv[1] the verb
+    install_opts opts;                      // the switches that apply to every verb: /quiet /close /notaskbar /noautostart /keep
+    BOOL pin;                               // /pin seen (the elevated stage sets up the Windows 11 pin only when it is asked to)
+    const WCHAR *dzip;                      // /with-driver <zip>: only from argv[4] on (after the verb, the SID and the path), any value is taken
+    const WCHAR *daccept;                   // /unverified <sha256> from argv[4] on, at any position (/machine, /full): the last one with 64 characters
+    const WCHAR *daccept4;                  // ... only as argv[4] argv[5] (/driver-prep): the same value, or NULL
+} cmdline;
+typedef int (*verb_fn)(cmdline *c);         // returns the exit code of the process
+typedef struct { const WCHAR *name; int min_args; verb_fn run; } verb;   // argv[1] (any case) is name and argc >= min_args
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
@@ -186,7 +197,12 @@ int driver_install(const install_opts *o);                   // elevated: pnputi
 int driver_cancel(const install_opts *o);                    // elevated: task, restart menu and BitLocker suspension back. 2 = UAC cancelled
 BOOL driver_reboot(void);                   // restarts Windows (not elevated)
 int driver_ci_state(void);                  // DRV_CI_*
-int driver_verb(int argc, WCHAR **argv, const install_opts *o);    // command line verbs; DRV_NOVERB when argv[1] is none of ours, else the exit code
+// The driver's entries in the verb table (setup.c). The elevated three refuse a process that is not elevated (RC_FAIL).
+int cmd_driver(cmdline *c);                 // /driver: the wizard at the driver pages
+int cmd_driver_continue(cmdline *c);        // /driver-continue: the same, after the restart
+int cmd_driver_prep(cmdline *c);            // /driver-prep <sid> <zip> [/unverified <sha256>]
+int cmd_driver_install(cmdline *c);         // /driver-install
+int cmd_driver_cancel(cmdline *c);          // /driver-cancel
 void driver_machine_stage(const WCHAR *installed_setup);   // elevated install: the Start menu shortcut "Install Dyna Pro USB driver"
 int drv_file_count(void);                   // the files that get installed (pinned: name below "Dyna Pro USB\", size, SHA-256)
 int drv_file_find(const WCHAR *rel);        // index of that name (any case, / or \), or -1

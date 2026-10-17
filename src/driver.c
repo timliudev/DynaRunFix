@@ -1320,20 +1320,26 @@ void driver_machine_uninstall(void)
 
 /* ---------- command line ---------- */
 
-// /driver-prep <sid> <zip> [/unverified <sha256>]: the accepted hash only as argv[4] /unverified argv[5] with a 64 character value, else NULL (tests/test_driver.c locks this)
-static const WCHAR *prep_accept_arg(int argc, WCHAR **argv)
+// The driver's verbs of the table in setup.c. /driver-prep <sid> <zip> [/unverified <sha256>] takes the accepted hash only as argv[4] /unverified argv[5]
+// with a 64 character value (c->daccept4, set by cmd_parse), else NULL (tests/test_driver.c locks this).
+int cmd_driver(cmdline *c) { g_drvmode = DRV_MODE_STANDALONE; return wizard(&c->opts); }
+int cmd_driver_continue(cmdline *c) { g_drvmode = DRV_MODE_CONTINUE; return wizard(&c->opts); }
+
+int cmd_driver_prep(cmdline *c)
 {
-    return argc >= 6 && !lstrcmpiW(argv[4], L"/unverified") && lstrlenW(argv[5]) == 64 ? argv[5] : NULL;
+    if (!is_admin()) return RC_FAIL;                                           // the elevated parts: only with the rights they need
+    return c->argc >= 4 ? prep_locked(c->argv[2], c->argv[3], c->daccept4) : RC_FAIL;
 }
 
-int driver_verb(int argc, WCHAR **argv, const install_opts *o)
+int cmd_driver_install(cmdline *c)
 {
-    const WCHAR *v = argv[1];
-    if (!lstrcmpiW(v, L"/driver")) { g_drvmode = DRV_MODE_STANDALONE; return wizard(o); }
-    if (!lstrcmpiW(v, L"/driver-continue")) { g_drvmode = DRV_MODE_CONTINUE; return wizard(o); }
-    if (lstrcmpiW(v, L"/driver-prep") && lstrcmpiW(v, L"/driver-install") && lstrcmpiW(v, L"/driver-cancel")) return DRV_NOVERB;
-    if (!is_admin()) return RC_FAIL;                                           // the elevated parts: only with the rights they need
-    if (!lstrcmpiW(v, L"/driver-prep")) return argc >= 4 ? prep_locked(argv[2], argv[3], prep_accept_arg(argc, argv)) : RC_FAIL;
-    if (!lstrcmpiW(v, L"/driver-install")) return install_locked();
-    return driver_cancel(o);
+    (void)c;
+    if (!is_admin()) return RC_FAIL;
+    return install_locked();
+}
+
+int cmd_driver_cancel(cmdline *c)
+{
+    if (!is_admin()) return RC_FAIL;
+    return driver_cancel(&c->opts);
 }

@@ -2034,58 +2034,123 @@ static const WCHAR *after_args(int n)
     return c;
 }
 
-// The switches of the command line, at any position (tests/test_hardening.c locks the rules). *o (the defaults, install_opts_default) gets quiet, close,
-// keep set and pin, autostart cleared by what the command line says;
-// *pin: /pin seen; *dzip, *daccept: the values of /with-driver and /unverified (only from argv[4] on, after the verb, the SID and the path).
-static void parse_switches(int argc, WCHAR **argv, install_opts *o, BOOL *pin, const WCHAR **dzip, const WCHAR **daccept)
+// The /unverified rule of both stages: argv[i] is /unverified and a value of exactly 64 characters follows it, else NULL. The elevated install stage
+// (/machine, /full) looks for it at every position from argv[4] on (cmd_parse), /driver-prep only at argv[4]: the two differ for a hand-typed
+// "/driver-prep <sid> <zip> /quiet /unverified <sha256>" (see cmd_parse).
+static const WCHAR *unverified_value(int argc, WCHAR **argv, int i)
+{
+    return i + 1 < argc && !lstrcmpiW(argv[i], L"/unverified") && lstrlenW(argv[i + 1]) == 64 ? argv[i + 1] : NULL;
+}
+
+// The switches of the command line, at any position (tests/test_hardening.c and test_driver.c lock the rules). c->opts is set to the defaults
+// (install_opts_default), then quiet, close, keep are set and pin, autostart cleared by what the command line says;
+// c->pin: /pin seen; c->dzip, c->daccept, c->daccept4: the values of /with-driver and /unverified (only from argv[4] on, after the verb, the SID and the path).
+// /with-driver and /unverified take the next argument whatever it is; an /unverified value that is not 64 characters long is dropped. daccept is the last
+// valid /unverified at index >= 4 (the install stage's rule), daccept4 the one at index 4 (the driver prep's rule); they differ when
+//  - a valid /unverified comes later (argv[5] on, e.g. after /quiet): daccept has it, daccept4 is NULL;
+//  - two valid ones are given: daccept is the later one, daccept4 the one at argv[4].
+// Each verb keeps using the rule it always had (/machine, /full: daccept; /driver-prep: daccept4), so no command line behaves differently from before.
+static void cmd_parse(cmdline *c)
+{
+    int i; const WCHAR *v;
+    install_opts_default(&c->opts);
+    c->pin = FALSE; c->dzip = c->daccept = c->daccept4 = NULL;
+    for (i = 1; i < c->argc; i++) {
+        WCHAR *a = c->argv[i];
+        if (!lstrcmpiW(a, L"/quiet")) c->opts.quiet = TRUE;
+        else if (!lstrcmpiW(a, L"/close")) c->opts.close = TRUE;
+        else if (!lstrcmpiW(a, L"/notaskbar")) c->opts.pin = FALSE;
+        else if (!lstrcmpiW(a, L"/noautostart")) c->opts.autostart = FALSE;
+        else if (!lstrcmpiW(a, L"/pin")) c->pin = TRUE;
+        else if (!lstrcmpiW(a, L"/keep")) c->opts.keep = TRUE;
+        else if (i >= 4 && !lstrcmpiW(a, L"/with-driver") && i + 1 < c->argc) c->dzip = c->argv[++i];                              // after the SID and the path: see install_fix_driver
+        else if (i >= 4 && !lstrcmpiW(a, L"/unverified") && i + 1 < c->argc) {
+            if ((v = unverified_value(c->argc, c->argv, i)) != NULL) { c->daccept = v; if (i == 4) c->daccept4 = v; }
+            i++;
+        }
+    }
+}
+
+/* ---------- the verbs: argv[1] ---------- */
+
+static int cmd_machine(cmdline *c)                  // /machine <sid> <DynaRun exe> [/with-driver <zip> [/unverified <sha256>]]: the elevated install stage
+{
+    int rc;
+    lstrcpynW(g_exe, c->argv[3], MAX_PATH);
+    CoInitialize(NULL);
+    rc = machine_install(&c->opts, c->argv[2]);
+    if (!rc && c->dzip) rc = driver_prep_stage(c->argv[2], c->dzip, c->daccept);
+    return rc;
+}
+
+static int cmd_full(cmdline *c)                     // /full <sid> <msi> [/with-driver ...]: the same, with the DynaRun MSI first
+{
+    int rc;
+    CoInitialize(NULL);
+    rc = machine_full(&c->opts, c->argv[2], c->argv[3]);
+    if (!rc && c->dzip) rc = driver_prep_stage(c->argv[2], c->dzip, c->daccept);
+    return rc;
+}
+
+static int cmd_unmachine(cmdline *c)                // /unmachine [<sid>]: the elevated uninstall stage
+{
+    reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
+    CoInitialize(NULL);
+    return machine_uninstall(&c->opts, c->argc >= 3 && c->argv[2][0] == 'S' && c->argv[2][1] == '-' ? c->argv[2] : NULL);
+}
+
+static int cmd_uninstall(cmdline *c) { return uninstall(&c->opts); }
+static int cmd_checkupdate(cmdline *c) { (void)c; return update_check(); }
+static int cmd_update(cmdline *c) { (void)c; return update_run(after_args(2)); }
+static int cmd_offer(cmdline *c) { (void)c; return update_offer(); }
+
+// min_args: the verb is only taken with that many arguments (the program counts); with fewer, the command line is no verb and the wizard (or /quiet install) runs.
+// The elevated driver verbs take 2 and check their own arguments (a /driver-prep without them is an error exit, not the wizard).
+static const verb VERBS[] = {
+    { L"/machine", 4, cmd_machine },
+    { L"/full", 4, cmd_full },
+    { L"/unmachine", 2, cmd_unmachine },
+    { L"/driver", 2, cmd_driver },                  // driver.c
+    { L"/driver-continue", 2, cmd_driver_continue },
+    { L"/driver-prep", 2, cmd_driver_prep },
+    { L"/driver-install", 2, cmd_driver_install },
+    { L"/driver-cancel", 2, cmd_driver_cancel },
+    { L"/uninstall", 2, cmd_uninstall },
+    { L"/checkupdate", 2, cmd_checkupdate },
+    { L"/update", 2, cmd_update },
+    { L"/offer", 2, cmd_offer },
+};
+
+static const verb *verb_find(int argc, WCHAR **argv)
 {
     int i;
-    for (i = 1; i < argc; i++) {
-        if (!lstrcmpiW(argv[i], L"/quiet")) o->quiet = TRUE;
-        else if (!lstrcmpiW(argv[i], L"/close")) o->close = TRUE;
-        else if (!lstrcmpiW(argv[i], L"/notaskbar")) o->pin = FALSE;
-        else if (!lstrcmpiW(argv[i], L"/noautostart")) o->autostart = FALSE;
-        else if (!lstrcmpiW(argv[i], L"/pin")) *pin = TRUE;
-        else if (!lstrcmpiW(argv[i], L"/keep")) o->keep = TRUE;
-        else if (i >= 4 && !lstrcmpiW(argv[i], L"/with-driver") && i + 1 < argc) *dzip = argv[++i];                                 // after the SID and the path: see install_fix_driver
-        else if (i >= 4 && !lstrcmpiW(argv[i], L"/unverified") && i + 1 < argc) { if (lstrlenW(argv[i + 1]) == 64) *daccept = argv[i + 1]; i++; }
-    }
+    if (argc < 2) return NULL;
+    for (i = 0; i < (int)(sizeof(VERBS) / sizeof(VERBS[0])); i++)
+        if (argc >= VERBS[i].min_args && !lstrcmpiW(argv[1], VERBS[i].name)) return &VERBS[i];
+    return NULL;
+}
+
+// Runs the verb of the command line: its exit code, or DRV_NOVERB when argv[1] is none (the caller then installs or opens the wizard).
+static int verb_run(cmdline *c)
+{
+    const verb *v = verb_find(c->argc, c->argv);
+    return v ? v->run(c) : DRV_NOVERB;
 }
 
 void WinMainCRTStartup(void)
 {
     typedef BOOL (WINAPI *SetDefaultDllDirectories_t)(DWORD);
     SetDefaultDllDirectories_t sdd = (SetDefaultDllDirectories_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetDefaultDllDirectories");
-    int argc, rc; BOOL pin = FALSE; WCHAR **argv; const WCHAR *dzip = NULL, *daccept = NULL; install_opts opts; install_result res;
+    int rc; cmdline c; install_result res;
     if (sdd) sdd(0x800);                    // LOAD_LIBRARY_SEARCH_SYSTEM32: no DLL is searched for in the exe's folder or the current folder
-    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    c.argv = CommandLineToArgvW(GetCommandLineW(), &c.argc);
     g_zh = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
     init_paths();
-    install_opts_default(&opts);
     res.pin = PIN_NOT_ASKED;                // only the wizard shows it
-    parse_switches(argc, argv, &opts, &pin, &dzip, &daccept);
-    if (argc >= 2 && (!lstrcmpiW(argv[1], L"/machine") || !lstrcmpiW(argv[1], L"/full"))) opts.pin = pin;   // the elevated stage: as asked
-    if (argc >= 4 && !lstrcmpiW(argv[1], L"/machine")) {
-        lstrcpynW(g_exe, argv[3], MAX_PATH);
-        CoInitialize(NULL);
-        rc = machine_install(&opts, argv[2]);
-        if (!rc && dzip) rc = driver_prep_stage(argv[2], dzip, daccept);
-    } else if (argc >= 4 && !lstrcmpiW(argv[1], L"/full")) {
-        CoInitialize(NULL);
-        rc = machine_full(&opts, argv[2], argv[3]);
-        if (!rc && dzip) rc = driver_prep_stage(argv[2], dzip, daccept);
-    } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/unmachine")) {
-        reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
-        CoInitialize(NULL);
-        rc = machine_uninstall(&opts, argc >= 3 && argv[2][0] == 'S' && argv[2][1] == '-' ? argv[2] : NULL);
-    } else if (argc >= 2 && (rc = driver_verb(argc, argv, &opts)) != DRV_NOVERB) {
-        // /driver, /driver-continue (the wizard at the driver pages), /driver-prep, /driver-install, /driver-cancel (driver.c)
-    } else if (argc >= 2 && !lstrcmpiW(argv[1], L"/uninstall")) rc = uninstall(&opts);
-    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/checkupdate")) rc = update_check();
-    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/update")) rc = update_run(after_args(2));
-    else if (argc >= 2 && !lstrcmpiW(argv[1], L"/offer")) rc = update_offer();
-    else if (opts.quiet) rc = locate_dynarun() ? install_fix(&opts, &res) : RC_FAIL;
-    else rc = wizard(&opts);
+    cmd_parse(&c);
+    if (c.argc >= 2 && (!lstrcmpiW(c.argv[1], L"/machine") || !lstrcmpiW(c.argv[1], L"/full"))) c.opts.pin = c.pin;   // the elevated stage: as asked
+    rc = verb_run(&c);
+    if (rc == DRV_NOVERB) rc = c.opts.quiet ? (locate_dynarun() ? install_fix(&c.opts, &res) : RC_FAIL) : wizard(&c.opts);
     // the elevated part (/machine, /full) ends here: let the wizard that started it take the foreground back
     AllowSetForegroundWindow(ASFW_ANY);
     ExitProcess(rc);
