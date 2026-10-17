@@ -13,6 +13,10 @@
 #include "zip_extract_all.h"
 #include <stdio.h>
 
+// the search callback of driver_fetch, called on one zip / one folder (no walk, nothing recorded)
+static BOOL zip_known_cb(const WCHAR *zip) { known_ctx k; zero(&k, sizeof(k)); return known_cb(zip, &k); }
+static BOOL dir_known_cb(const WCHAR *dir) { known_ctx k; zero(&k, sizeof(k)); k.isdir = TRUE; return known_cb(dir, &k); }
+
 // what setup.c calls elsewhere and the tests do not need
 int wizard(const install_opts *init) { (void)init; return 0; }
 int update_check(void) { return 0; }
@@ -660,7 +664,8 @@ static void test_files(void)
 
 /* ---------- the folder walk, the layout test and driver_check (synthetic packages only) ---------- */
 
-static BOOL has_marker(const WCHAR *dir) { WCHAR p[MAX_PATH]; wsprintfW(p, L"%s\\marker.txt", dir); return exists(p); }
+static BOOL has_marker(const WCHAR *dir, void *ctx) { WCHAR p[MAX_PATH]; (void)ctx; wsprintfW(p, L"%s\\marker.txt", dir); return exists(p); }
+static const pkg_search s_marker = { has_marker, NULL, NULL };
 
 static void touch_file(const WCHAR *path)
 {
@@ -678,19 +683,19 @@ static void test_check(void)
     wsprintfW(b, L"%s\\b", a);    CreateDirectoryW(b, NULL);
     wsprintfW(c, L"%s\\c", b);    CreateDirectoryW(c, NULL);
     wsprintfW(p, L"%s\\marker.txt", c); touch_file(p);
-    CHECK(!pkg_find_dir_in(root, 0, has_marker, o) && !o[0], L"walk: depth 0 looks at the root only");
-    CHECK(!pkg_find_dir_in(root, 2, has_marker, o) && !o[0], L"walk: a folder three levels down is out of reach for depth 2");
-    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, c), L"walk: depth 3 finds it and returns its path");
+    CHECK(!pkg_find_dir_in(root, 0, &s_marker, o) && !o[0], L"walk: depth 0 looks at the root only");
+    CHECK(!pkg_find_dir_in(root, 2, &s_marker, o) && !o[0], L"walk: a folder three levels down is out of reach for depth 2");
+    CHECK(pkg_find_dir_in(root, 3, &s_marker, o) && !lstrcmpiW(o, c), L"walk: depth 3 finds it and returns its path");
     wsprintfW(p, L"%s\\marker.txt", b); touch_file(p);
-    CHECK(pkg_find_dir_in(root, 3, has_marker, o) && !lstrcmpiW(o, b), L"walk: the nearest approved folder wins");
+    CHECK(pkg_find_dir_in(root, 3, &s_marker, o) && !lstrcmpiW(o, b), L"walk: the nearest approved folder wins");
     wsprintfW(p, L"%s\\marker.txt", root); touch_file(p);
-    CHECK(pkg_find_dir_in(root, 0, has_marker, o) && !lstrcmpiW(o, root), L"walk: the root itself can be approved");
+    CHECK(pkg_find_dir_in(root, 0, &s_marker, o) && !lstrcmpiW(o, root), L"walk: the root itself can be approved");
     wsprintfW(p, L"%s\\nothing", root);
-    CHECK(!pkg_find_dir_in(p, 2, has_marker, o) && !o[0], L"walk: a folder that does not exist finds nothing");
+    CHECK(!pkg_find_dir_in(p, 2, &s_marker, o) && !o[0], L"walk: a folder that does not exist finds nothing");
     {   // a name that leaves no room for the walk is refused, not overrun
         WCHAR longp[MAX_PATH + 40]; int i;
         lstrcpyW(longp, root); for (i = lstrlenW(longp); i < MAX_PATH; i++) longp[i] = 'x'; longp[MAX_PATH] = 0;
-        CHECK(!pkg_find_dir_in(longp, 2, has_marker, o), L"walk: a path that is too long is refused");
+        CHECK(!pkg_find_dir_in(longp, 2, &s_marker, o), L"walk: a path that is too long is refused");
     }
 
     // driver_layout_ok: ftdibus.inf (a file) with i386 and amd64 folders beside it

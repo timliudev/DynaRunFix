@@ -114,28 +114,25 @@ static void search_dirs(WCHAR dirs[4][MAX_PATH])
     SHGetSpecialFolderPathW(NULL, dirs[3], CSIDL_PERSONAL, FALSE);
 }
 
-typedef BOOL (*zip_accept_fn)(const WCHAR *path);
-
-// Where the search says what it looks at (the caller sets it; NULL = silent): one line per folder, and per zip that is skipped for its size.
-void (*g_pkg_log)(const WCHAR *line);
-static void plog(const WCHAR *a, const WCHAR *b)
+// Where the search says what it looks at (s->log, NULL = silent): one line per folder, and per zip that is skipped for its size.
+static void plog(const pkg_search *s, const WCHAR *a, const WCHAR *b)
 {
     static WCHAR l[2 * MAX_PATH + 80];
-    if (!g_pkg_log || lstrlenW(a) + lstrlenW(b) + 1 >= (int)(sizeof(l) / sizeof(l[0]))) return;
+    if (!s || !s->log || lstrlenW(a) + lstrlenW(b) + 1 >= (int)(sizeof(l) / sizeof(l[0]))) return;
     lstrcpyW(l, a); lstrcatW(l, b);
-    g_pkg_log(l);
+    s->log(l);
 }
 
 // Two modes. accept given: the first zip (at most maxsize bytes) that accept() approves - by its content, whatever it is called. prefix given
 // instead: the newest zip whose name starts with prefix, whatever it contains (*bt: its time, in/out).
-static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, zip_accept_fn accept, const WCHAR *prefix, FILETIME *bt, WCHAR *out);
-typedef struct { BOOL subdirs; DWORD maxsize; zip_accept_fn accept; const WCHAR *prefix; FILETIME *bt; WCHAR *out; BOOL found; int plen; } zipfind_ctx;
+static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, const pkg_search *s, const WCHAR *prefix, FILETIME *bt, WCHAR *out);
+typedef struct { BOOL subdirs; DWORD maxsize; const pkg_search *s; const WCHAR *prefix; FILETIME *bt; WCHAR *out; BOOL found; int plen; } zipfind_ctx;
 
 static void zip_one(zipfind_ctx *c, const WCHAR *p, const WIN32_FIND_DATAW *fd)
 {
     int n;
     if (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-        if (c->subdirs && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && find_zip_in(p, FALSE, c->maxsize, c->accept, c->prefix, c->bt, c->out)) c->found = TRUE;
+        if (c->subdirs && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && find_zip_in(p, FALSE, c->maxsize, c->s, c->prefix, c->bt, c->out)) c->found = TRUE;
         return;
     }
     if (fd->dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN)) return;   // cloud-only: do not download it just to look
@@ -147,8 +144,8 @@ static void zip_one(zipfind_ctx *c, const WCHAR *p, const WIN32_FIND_DATAW *fd)
         lstrcpyW(c->out, p); *c->bt = fd->ftLastWriteTime; c->found = TRUE;
         return;
     }
-    if (fd->nFileSizeHigh || fd->nFileSizeLow > c->maxsize) { plog(L"  skipped (too big for a driver package): ", p); return; }   // the driver package is a few MB
-    if (c->accept(p)) { lstrcpyW(c->out, p); c->found = TRUE; }
+    if (fd->nFileSizeHigh || fd->nFileSizeLow > c->maxsize) { plog(c->s, L"  skipped (too big for a driver package): ", p); return; }   // the driver package is a few MB
+    if (c->s->accept(p, c->s->ctx)) { lstrcpyW(c->out, p); c->found = TRUE; }
 }
 
 // (the walk goes on after every entry, except once a zip is found when not looking for the newest by name)
@@ -159,80 +156,80 @@ static BOOL zip_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
     return c->prefix || !c->found;
 }
 
-static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, zip_accept_fn accept, const WCHAR *prefix, FILETIME *bt, WCHAR *out)
+static BOOL find_zip_in(const WCHAR *dir, BOOL subdirs, DWORD maxsize, const pkg_search *s, const WCHAR *prefix, FILETIME *bt, WCHAR *out)
 {
     WCHAR p[MAX_PATH * 2]; zipfind_ctx c;
-    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) { plog(L"zip search: a folder with no usable path", L""); return FALSE; }
-    plog(prefix ? L"zip search by name in " : L"zip search by content in ", dir);
-    c.subdirs = subdirs; c.maxsize = maxsize; c.accept = accept; c.prefix = prefix; c.bt = bt; c.out = out; c.found = FALSE; c.plen = prefix ? lstrlenW(prefix) : 0;
-    if (dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, zip_entry, &c) == WALK_NOOPEN) { plog(L"  the folder cannot be read or does not exist", L""); return FALSE; }
+    if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH) { plog(s, L"zip search: a folder with no usable path", L""); return FALSE; }
+    plog(s, prefix ? L"zip search by name in " : L"zip search by content in ", dir);
+    c.subdirs = subdirs; c.maxsize = maxsize; c.s = s; c.prefix = prefix; c.bt = bt; c.out = out; c.found = FALSE; c.plen = prefix ? lstrlenW(prefix) : 0;
+    if (dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, zip_entry, &c) == WALK_NOOPEN) { plog(s, L"  the folder cannot be read or does not exist", L""); return FALSE; }
     return c.found;
 }
 
-// The first zip (at most maxsize bytes) in the folders pkg_find_local looks in (and one level into Downloads) that accept() approves.
-BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out)
+// The first zip (at most maxsize bytes) in the folders pkg_find_local looks in (and one level into Downloads) that s->accept() approves.
+BOOL pkg_find_zip_if(DWORD maxsize, const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; int i;
     out[0] = 0;
     search_dirs(dirs);
-    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, maxsize, accept, NULL, NULL, out)) return TRUE;
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, maxsize, s, NULL, NULL, out)) return TRUE;
     return FALSE;
 }
 
 // The newest zip whose name starts with prefix in those folders (the candidate when no zip has the right content).
-BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out)
+BOOL pkg_find_zip_named(const WCHAR *prefix, const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; FILETIME bt; int i; BOOL found = FALSE;
     out[0] = 0; bt.dwLowDateTime = bt.dwHighDateTime = 0;
     search_dirs(dirs);
-    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, 0, NULL, prefix, &bt, out)) found = TRUE;
+    for (i = 0; i < 4; i++) if (find_zip_in(dirs[i], i == 1, 0, s, prefix, &bt, out)) found = TRUE;
     return found;
 }
 
-// Depth-limited walk: accept(dir) for dir itself, then for its sub-folders down to `depth` levels (never into a link). *budget: the most folders
+// Depth-limited walk: s->accept(dir) for dir itself, then for its sub-folders down to `depth` levels (never into a link). *budget: the most folders
 // still to be looked at in all (so a big Documents folder cannot make it slow).
-static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, BOOL (*accept)(const WCHAR *dir), WCHAR *out);
-typedef struct { int depth, *budget; BOOL (*accept)(const WCHAR *dir); WCHAR *out; BOOL found; } dirfind_ctx;
+static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, const pkg_search *s, WCHAR *out);
+typedef struct { int depth, *budget; const pkg_search *s; WCHAR *out; BOOL found; } dirfind_ctx;
 
 static BOOL dir_entry(const WCHAR *p, const WIN32_FIND_DATAW *fd, void *vc)
 {
     dirfind_ctx *c = vc;
     if ((fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        c->found = find_dir_in(p, c->depth - 1, c->budget, c->accept, c->out);
+        c->found = find_dir_in(p, c->depth - 1, c->budget, c->s, c->out);
     return !c->found && *c->budget >= 0;
 }
 
-static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+static BOOL find_dir_in(const WCHAR *dir, int depth, int *budget, const pkg_search *s, WCHAR *out)
 {
     WCHAR p[MAX_PATH * 2]; dirfind_ctx c;
     if (!dir[0] || lstrlenW(dir) + 4 >= MAX_PATH || --*budget < 0) return FALSE;
-    if (accept(dir)) { lstrcpyW(out, dir); return TRUE; }
+    if (s->accept(dir, s->ctx)) { lstrcpyW(out, dir); return TRUE; }
     if (depth <= 0) return FALSE;
-    c.depth = depth; c.budget = budget; c.accept = accept; c.out = out; c.found = FALSE;
+    c.depth = depth; c.budget = budget; c.s = s; c.out = out; c.found = FALSE;
     dir_walk(dir, p, MAX_PATH * 2, MAX_PATH, dir_entry, &c);
     return c.found;
 }
 
-// The first folder that accept() approves, in the folders pkg_find_local looks in: the setup's folder, Desktop and Documents one level down,
+// The first folder that s->accept() approves, in the folders pkg_find_local looks in: the setup's folder, Desktop and Documents one level down,
 // Downloads two levels down (Downloads\Dyna Pro USB\64-Bit Drivers), at most 600 folders in all.
-BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+BOOL pkg_find_dirs(const pkg_search *s, WCHAR *out)
 {
     static WCHAR dirs[4][MAX_PATH]; int i, budget = 600;
     out[0] = 0;
     search_dirs(dirs);
     for (i = 0; i < 4; i++) {
-        plog(L"folder search in ", dirs[i]);
-        if (find_dir_in(dirs[i], i == 1 ? 2 : 1, &budget, accept, out)) return TRUE;
+        plog(s, L"folder search in ", dirs[i]);
+        if (find_dir_in(dirs[i], i == 1 ? 2 : 1, &budget, s, out)) return TRUE;
     }
     return FALSE;
 }
 
 // The same walk below one given folder (the folder the user picked).
-BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out)
+BOOL pkg_find_dir_in(const WCHAR *root, int depth, const pkg_search *s, WCHAR *out)
 {
     int budget = 600;
     out[0] = 0;
-    return find_dir_in(root, depth, &budget, accept, out);
+    return find_dir_in(root, depth, &budget, s, out);
 }
 
 BOOL pkg_find_local(WCHAR *out)

@@ -114,11 +114,13 @@ typedef struct {
 } zipent;
 
 BOOL pkg_find_local(WCHAR *out);            // a DynaRun MSI, or a zip with an .msi inside, in Downloads/Desktop/Documents or next to us
-BOOL pkg_find_zip_if(DWORD maxsize, BOOL (*accept)(const WCHAR *path), WCHAR *out);   // the first zip (at most maxsize bytes) in the same places that accept() approves
-extern void (*g_pkg_log)(const WCHAR *line);   // set to log the folders the zip searches look in (NULL: silent)
-BOOL pkg_find_dirs(BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // the first folder accept() approves, in the same places (two levels down in Downloads)
-BOOL pkg_find_dir_in(const WCHAR *root, int depth, BOOL (*accept)(const WCHAR *dir), WCHAR *out);   // accept() for root and the folders up to `depth` levels below it
-BOOL pkg_find_zip_named(const WCHAR *prefix, WCHAR *out);   // the newest zip whose name starts with prefix in the same places
+// What a search for a driver package looks at and tells: accept(path, ctx) approves a zip / folder (the walk stops at the first one), log (NULL: silent)
+// gets one line per folder looked at. pkg_find_zip_named uses only log (s may be NULL there).
+typedef struct { BOOL (*accept)(const WCHAR *path, void *ctx); void *ctx; void (*log)(const WCHAR *line); } pkg_search;
+BOOL pkg_find_zip_if(DWORD maxsize, const pkg_search *s, WCHAR *out);   // the first zip (at most maxsize bytes) in the same places that s->accept() approves
+BOOL pkg_find_dirs(const pkg_search *s, WCHAR *out);   // the first folder s->accept() approves, in the same places (two levels down in Downloads)
+BOOL pkg_find_dir_in(const WCHAR *root, int depth, const pkg_search *s, WCHAR *out);   // s->accept() for root and the folders up to `depth` levels below it
+BOOL pkg_find_zip_named(const WCHAR *prefix, const pkg_search *s, WCHAR *out);   // the newest zip whose name starts with prefix in the same places
 void pkg_reject(const WCHAR *path);       // not the DynaRun setup after all: pkg_find_local skips it
 int pkg_download(WCHAR *out, progress_fn cb, volatile LONG *cancel, DWORD *err);
 BOOL pkg_url_ok(const WCHAR *u, const WCHAR *hosts);   // https and on one of the ';'-separated hosts (NULL = any)
