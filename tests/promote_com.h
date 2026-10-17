@@ -45,7 +45,7 @@ static int com_roots(WCHAR roots[][MAX_PATH])
 {
     WCHAR *e; int n = 0;
     g_com_nfolder = 0;
-    if (g_exe_trusted && g_exe[0]) {
+    if (g_tc.exe_trusted && g_exe[0]) {
         lstrcpyW(roots[n], g_exe); for (e = roots[n] + lstrlenW(roots[n]); e > roots[n] && *e != '\\'; e--); *e = 0;
         if (roots[n][0]) g_com_nfolder = ++n;
     }
@@ -112,7 +112,7 @@ static BOOL com_path_ok(const WCHAR *raw, BOOL typelib, WCHAR roots[][MAX_PATH],
     CloseHandle(h);
     if (!i) { *why = L"not a disk file"; return FALSE; }
     lstrcpyW(par, lng); for (s = par + lstrlenW(par); s > par && *s != '\\'; s--); *s = 0;
-    if (g_is_writable(lng) || g_is_writable(par)) { *why = L"the file or its folder can be changed by ordinary users"; return FALSE; }
+    if (g_is_writable(&g_tc, lng) || g_is_writable(&g_tc, par)) { *why = L"the file or its folder can be changed by ordinary users"; return FALSE; }
     return TRUE;
 }
 

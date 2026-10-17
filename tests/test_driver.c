@@ -487,9 +487,9 @@ static void test_misc(void)
     } else wprintf(L"info: could not create the protected folder here (%lu): ACL checks skipped\n", GetLastError());
 }
 
-static BOOL fake_ok(const WCHAR *p) { (void)p; return FALSE; }      // "not user-writable"
-static BOOL fake_bad(const WCHAR *p) { (void)p; return TRUE; }
-static BOOL fake_bad_exe(const WCHAR *p) { int n = lstrlenW(p); return n > 4 && !lstrcmpiW(p + n - 4, L".exe"); }   // only a file ending in .exe
+static BOOL fake_ok(const trust_ctx *t, const WCHAR *p) { (void)t; (void)p; return FALSE; }      // "not user-writable"
+static BOOL fake_bad(const trust_ctx *t, const WCHAR *p) { (void)t; (void)p; return TRUE; }
+static BOOL fake_bad_exe(const trust_ctx *t, const WCHAR *p) { int n = lstrlenW(p); return n > 4 && !lstrcmpiW(p + n - 4, L".exe"); }   // only a file ending in .exe
 
 static void mb_file(const WCHAR *dir, const WCHAR *name)
 {
@@ -504,7 +504,7 @@ static void test_make_base(void)
 {
     static const WCHAR SID[] = L"S-1-5-21-1-2-3-1001";
     WCHAR b[MAX_PATH], f[MAX_PATH], g[MAX_PATH]; HANDLE h;
-    BOOL (*saved)(const WCHAR *) = g_is_writable;
+    BOOL (*saved)(const trust_ctx *, const WCHAR *) = g_is_writable;
     g_is_writable = fake_ok;
     wsprintfW(b, L"%s\\mb_new", g_base);
     CHECK(make_base(b, FALSE, SID) && exists(b), L"no folder yet: created");

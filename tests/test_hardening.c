@@ -20,6 +20,7 @@ static BOOL WINAPI test_ShellExecuteExW(SHELLEXECUTEINFOW *se)
 }
 #define ShellExecuteExW test_ShellExecuteExW
 #include "../src/setup.c"
+static trust_ctx g_tc;      // the user SID and the exe trust of the checks below (a stage of the installer makes its own)
 #include "promote_com.h"
 #include <stdio.h>
 
@@ -61,7 +62,7 @@ static void sh(const WCHAR *cmdline)
     }
 }
 
-static BOOL fake_writable(const WCHAR *p) { return wcsstr(p, L"\\writable") != NULL; }
+static BOOL fake_writable(const trust_ctx *t, const WCHAR *p) { (void)t; return wcsstr(p, L"\\writable") != NULL; }
 
 static void setup_tree(void)
 {
@@ -90,17 +91,17 @@ static void setup_tree(void)
 static void test_user_writable(void)
 {
     WCHAR c[1000], sid[200], pf[MAX_PATH];
-    CHECK(!user_writable(L"C:\\Windows\\System32\\kernel32.dll"), L"kernel32.dll is not user-writable");
-    CHECK(!user_writable(L"C:\\Windows\\System32"), L"System32 is not user-writable");
-    CHECK(user_writable(L"C:\\this\\does\\not\\exist.dll"), L"a path that cannot be read counts as writable");
-    user_sid(sid, 200); lstrcpyW(g_user_sid, sid);
+    CHECK(!user_writable(&g_tc, L"C:\\Windows\\System32\\kernel32.dll"), L"kernel32.dll is not user-writable");
+    CHECK(!user_writable(&g_tc, L"C:\\Windows\\System32"), L"System32 is not user-writable");
+    CHECK(user_writable(&g_tc, L"C:\\this\\does\\not\\exist.dll"), L"a path that cannot be read counts as writable");
+    user_sid(sid, 200); lstrcpyW(g_tc.user_sid, sid);
     // an Everyone ACE, whoever owns the folder
     wsprintfW(c, L"icacls \"%s\\sub\" /grant *S-1-1-0:(OI)(CI)M >nul", g_root); sh(c);
-    { WCHAR s[MAX_PATH]; wsprintfW(s, L"%s\\sub", g_root); CHECK(user_writable(s), L"folder with an Everyone-modify ACE is writable"); }
+    { WCHAR s[MAX_PATH]; wsprintfW(s, L"%s\\sub", g_root); CHECK(user_writable(&g_tc, s), L"folder with an Everyone-modify ACE is writable"); }
     // the folder of an installed DynaRun, read only: printed, not asserted
     if (SHGetSpecialFolderPathW(NULL, pf, CSIDL_PROGRAM_FILESX86, FALSE)) {
         lstrcatW(pf, L"\\Dyna Pro Dynamometers");
-        if (exists(pf)) wprintf(L"info: installed DynaRun folder: user_writable = %d\n", user_writable(pf));
+        if (exists(pf)) wprintf(L"info: installed DynaRun folder: user_writable = %d\n", user_writable(&g_tc, pf));
     }
 }
 
@@ -148,7 +149,7 @@ static void test_paths(void)
     for (i = 0; i < 590; i++) longp[i] = 'a'; longp[590] = 0;
     wsprintfW(r, L"%s\\%s.ocx", g_root, longp); CHECK(!com_path_ok(r, FALSE, roots, 2, &why), L"path far too long");
     // DynaRun's folder not trusted: only the system roots count (com_roots)
-    g_com_nfolder = 0; g_exe_trusted = FALSE; g_exe[0] = 0;
+    g_com_nfolder = 0; g_tc.exe_trusted = FALSE; g_exe[0] = 0;
     { WCHAR rr[3][MAX_PATH]; int n = com_roots(rr); CHECK(n >= 1 && under(rr[0], L"C:\\Windows") == under(rr[0], L"C:\\Windows") && g_com_nfolder == 0, L"no DynaRun root when untrusted"); }
     g_com_nfolder = 1;
     // the real check (not the fake): a file the current user created is not trusted by user_writable's owner rule unless elevated
@@ -379,20 +380,20 @@ static void test_check_exe(void)
     wsprintfW(bin, L"%s\\bin", g_base);
     g_is_writable = fake_writable;
     wsprintfW(g_exe, L"%s\\DynaRun V3.exe", bin);
-    CHECK(check_exe() && g_exe_trusted, L"a good exe in a folder users cannot change: trusted");
+    CHECK(check_exe(&g_tc) && g_tc.exe_trusted, L"a good exe in a folder users cannot change: trusted");
     g_is_writable = user_writable;
-    CHECK(check_exe() && (!g_exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
+    CHECK(check_exe(&g_tc) && (!g_tc.exe_trusted || is_admin()), L"with the real ACL check a user-owned folder is not trusted (unless elevated)");
     g_is_writable = fake_writable;
-    wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(), L"another file name is refused");
-    wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(), L"a missing exe is refused");
-    g_exe[0] = 0; CHECK(!check_exe(), L"an empty path is refused");
-    lstrcpyW(g_exe, L"DynaRun V3.exe"); CHECK(!check_exe(), L"a relative path is refused");
-    lstrcpyW(g_exe, L"\\\\localhost\\c$\\x\\DynaRun V3.exe"); CHECK(!check_exe(), L"a UNC path is refused");
+    wsprintfW(g_exe, L"%s\\Other.exe", bin); CHECK(!check_exe(&g_tc), L"another file name is refused");
+    wsprintfW(g_exe, L"%s\\nothere\\DynaRun V3.exe", g_base); CHECK(!check_exe(&g_tc), L"a missing exe is refused");
+    g_exe[0] = 0; CHECK(!check_exe(&g_tc), L"an empty path is refused");
+    lstrcpyW(g_exe, L"DynaRun V3.exe"); CHECK(!check_exe(&g_tc), L"a relative path is refused");
+    lstrcpyW(g_exe, L"\\\\localhost\\c$\\x\\DynaRun V3.exe"); CHECK(!check_exe(&g_tc), L"a UNC path is refused");
     wsprintfW(c, L"mklink /J \"%s\\binlink\" \"%s\" >nul", g_base, bin); sh(c);
     wsprintfW(g_exe, L"%s\\binlink\\DynaRun V3.exe", g_base);
-    CHECK(check_exe() && !g_exe_trusted, L"a path through a junction is usable but not trusted");
+    CHECK(check_exe(&g_tc) && !g_tc.exe_trusted, L"a path through a junction is usable but not trusted");
     h = CreateFileW(L"C:\\Windows\\System32\\hostname.exe", 0, 7, NULL, OPEN_EXISTING, 0, NULL); CloseHandle(h);
-    g_exe[0] = 0; g_exe_trusted = FALSE;
+    g_exe[0] = 0; g_tc.exe_trusted = FALSE;
 }
 
 /* ---------- 6. delete_tree ---------- */

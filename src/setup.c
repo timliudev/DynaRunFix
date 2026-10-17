@@ -87,8 +87,11 @@ BOOL g_zh;
 int g_drvmode;                    // DRV_MODE_*: the wizard starts at the driver pages (driver.c, wizard.c)
 HWND g_hwnd;
 WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
-static WCHAR g_user_sid[200];     // the user who started the setup (elevated stage: from its command line)
-static BOOL g_exe_trusted;        // check_exe: DynaRun's exe and folder cannot be changed by ordinary users
+// What the ACL decisions of a stage depend on, passed to the functions that decide (never kept in a global): each stage makes one.
+typedef struct {
+    WCHAR user_sid[200];          // the user who started the setup (elevated stage: from its command line); "" = none known
+    BOOL exe_trusted;             // set by check_exe: DynaRun's exe and folder cannot be changed by ordinary users
+} trust_ctx;
 #define TITLE T(L"DynaRunFix Setup", L"DynaRunFix 安裝程式")
 
 /* ---------- DLLs: only from the system folder ---------- */
@@ -371,11 +374,11 @@ static BOOL sid_in(PSID s, const WCHAR *const *list)
 // TRUE when ordinary users could change what is at path (or when that cannot be told). Not user-writable: owned by SYSTEM,
 // the Administrators or TrustedInstaller, and no ACE that applies to the object itself gives Everyone, Users, Authenticated Users,
 // Interactive, Power Users or the user who started the setup a write, delete or permission right.
-static BOOL user_writable(const WCHAR *path)
+static BOOL user_writable(const trust_ctx *t, const WCHAR *path)
 {
     static const WCHAR *const owners[] = { L"S-1-5-18", L"S-1-5-32-544", L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", NULL };
     static const WCHAR *const others[] = { L"S-1-1-0", L"S-1-5-32-545", L"S-1-5-11", L"S-1-5-4", L"S-1-5-32-547", NULL };
-    const WCHAR *const me[2] = { g_user_sid, NULL };
+    const WCHAR *const me[2] = { t->user_sid, NULL };
     PSID owner = NULL; PACL dacl = NULL; PSECURITY_DESCRIPTOR sd = NULL; BOOL bad = TRUE; DWORD i; ACCESS_ALLOWED_ACE *a;
     if (GetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, NULL, &dacl, NULL, &sd)) return TRUE;
     if (owner && dacl && sid_in(owner, owners)) {            // no DACL = full access for everyone: bad
@@ -383,20 +386,22 @@ static BOOL user_writable(const WCHAR *path)
         for (i = 0; i < dacl->AceCount && !bad; i++) {
             if (!GetAce(dacl, i, (void **)&a)) { bad = TRUE; break; }
             if (a->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || (a->Header.AceFlags & INHERIT_ONLY_ACE) || !(a->Mask & WRITE_MASK)) continue;
-            if (sid_in((PSID)&a->SidStart, others) || (g_user_sid[0] && sid_in((PSID)&a->SidStart, me))) bad = TRUE;
+            if (sid_in((PSID)&a->SidStart, others) || (t->user_sid[0] && sid_in((PSID)&a->SidStart, me))) bad = TRUE;
         }
     }
     LocalFree(sd);
     return bad;
 }
 
-static BOOL (*g_is_writable)(const WCHAR *path) = user_writable;     // the tests replace this
+static BOOL (*g_is_writable)(const trust_ctx *t, const WCHAR *path) = user_writable;     // the tests replace this
 
-// driver.c: may ordinary users (and the user who started the setup, sid) change what is at path?
+// driver.c: may ordinary users (and the user who started the setup, sid; NULL: no such user is known) change what is at path?
 BOOL path_user_writable(const WCHAR *path, const WCHAR *sid)
 {
-    if (sid && sid[0]) lstrcpynW(g_user_sid, sid, 200);
-    return g_is_writable(path);
+    trust_ctx t;
+    zero(&t, sizeof(t));
+    if (sid) lstrcpynW(t.user_sid, sid, 200);
+    return g_is_writable(&t, path);
 }
 
 static BOOL is_dynarun_name(const WCHAR *p)
@@ -409,13 +414,13 @@ static BOOL is_dynarun_name(const WCHAR *p)
 typedef DWORD (WINAPI *GetFinalPathNameByHandleW_t)(HANDLE, LPWSTR, DWORD, DWORD);
 
 // The elevated stage does not trust the DynaRun path it was given on its command line. It must be an absolute path on a
-// fixed drive, named DynaRun V3.exe, an existing file. g_exe_trusted says whether what the elevated stage writes there
+// fixed drive, named DynaRun V3.exe, an existing file. t->exe_trusted says whether what the elevated stage writes there
 // (manifest), starts (the borrowed time stamp) and registers (COM servers in that folder) is safe: no link in the path, and
-// neither the folder nor the exe changeable by ordinary users. FALSE: the path is unusable; g_exe_trusted FALSE only: skip those steps.
-static BOOL check_exe(void)
+// neither the folder nor the exe changeable by ordinary users. FALSE: the path is unusable; exe_trusted FALSE only: skip those steps.
+static BOOL check_exe(trust_ctx *t)
 {
     WCHAR root[4], fin[MAX_PATH + 8], dir[MAX_PATH], *e; HANDLE h; GetFinalPathNameByHandleW_t f; DWORD n;
-    g_exe_trusted = FALSE;
+    t->exe_trusted = FALSE;
     if (!g_exe[0] || lstrlenW(g_exe) >= MAX_PATH - 1 || !is_dynarun_name(g_exe)) return FALSE;
     if (!((g_exe[0] >= 'A' && g_exe[0] <= 'Z') || (g_exe[0] >= 'a' && g_exe[0] <= 'z')) || g_exe[1] != ':' || g_exe[2] != '\\') return FALSE;
     lstrcpynW(root, g_exe, 4);
@@ -432,7 +437,7 @@ static BOOL check_exe(void)
     // with GetFinalPathNameByHandleW (Vista and later) the final path must be the path given: no link anywhere in it
     if (f && (!n || n >= MAX_PATH + 8 || fin[0] != '\\' || fin[1] != '\\' || fin[2] != '?' || fin[3] != '\\' || lstrcmpiW(fin + 4, g_exe))) return TRUE;
     lstrcpyW(dir, g_exe); for (e = dir + lstrlenW(dir); e > dir && *e != '\\'; e--); *e = 0;
-    g_exe_trusted = !g_is_writable(dir) && !g_is_writable(g_exe);
+    t->exe_trusted = !g_is_writable(t, dir) && !g_is_writable(t, g_exe);
     return TRUE;
 }
 
@@ -769,6 +774,19 @@ typedef int (WINAPI *MsiGetComponentPathW_t)(LPCWSTR, LPCWSTR, LPWSTR, DWORD *);
 static MsiGetShortcutTargetW_t pMsiGetShortcutTarget;
 static MsiGetComponentPathW_t pMsiGetComponentPath;
 
+// Looks up the two MSI functions, once (more calls do nothing). msi.dll is loaded by its full path in the system folder (load_system_dll), never
+// searched for. Both pointers stay NULL when msi.dll or a function is missing: classify then skips its check of advertised shortcuts.
+static void msi_api_init(void)
+{
+    static BOOL done; HMODULE msi;
+    if (done) return;
+    done = TRUE;
+    if (!(msi = load_system_dll(L"msi.dll"))) return;
+    pMsiGetShortcutTarget = (MsiGetShortcutTargetW_t)GetProcAddress(msi, "MsiGetShortcutTargetW");
+    pMsiGetComponentPath = (MsiGetComponentPathW_t)GetProcAddress(msi, "MsiGetComponentPathW");
+    if (!pMsiGetComponentPath) pMsiGetShortcutTarget = NULL;
+}
+
 static IShellLinkW *load_link(const WCHAR *p)
 {
     IShellLinkW *sl; IPersistFile *pf; HRESULT hr = E_FAIL;
@@ -799,6 +817,7 @@ static int classify(const WCHAR *p)
     if (!lstrcmpiW(t, g_launcher) || launcher_path_like(t)) return LNK_OURS;
     if (!lstrcmpiW(t, g_exe)) return LNK_DYNARUN;
     // the original setup is an MSI: its shortcuts are "advertised" and point to the product, not the exe
+    msi_api_init();
     if (pMsiGetShortcutTarget && !pMsiGetShortcutTarget(p, prod, feat, comp) &&
         pMsiGetComponentPath(prod, comp, t, &n) >= 0 && !lstrcmpiW(t, g_exe)) r = LNK_DYNARUN;
     return r;
@@ -1030,12 +1049,6 @@ static BOOL fix_folder(const WCHAR *dir, int id, BOOL common, BOOL deep, void *v
 static int fix_shortcuts(BOOL common, HKEY backup)     // returns the number of DynaRun shortcuts on the Desktop
 {
     fix_ctx c;
-    HMODULE msi = load_system_dll(L"msi.dll");
-    if (msi) {
-        pMsiGetShortcutTarget = (MsiGetShortcutTargetW_t)GetProcAddress(msi, "MsiGetShortcutTargetW");
-        pMsiGetComponentPath = (MsiGetComponentPathW_t)GetProcAddress(msi, "MsiGetComponentPathW");
-        if (!pMsiGetComponentPath) pMsiGetShortcutTarget = NULL;
-    }
     c.backup = backup; c.desk = 0;
     shortcut_folders(SFU_FIX, common ? SF_COMMON : SF_USER, fix_folder, &c);
     return c.desk;
@@ -1502,11 +1515,11 @@ BOOL valid_user_sid(const WCHAR *sid)
 static int machine_install_locked(const install_opts *o, const WCHAR *sid)
 {
     static WCHAR p[MAX_PATH + 16];
-    HKEY k;
+    HKEY k; trust_ctx t;
     if (!valid_user_sid(sid)) { error2(o, T(L"The user account is not valid.", L"使用者帳戶無效。"), sid); return RC_FAIL; }
-    lstrcpynW(g_user_sid, sid, 200);
+    zero(&t, sizeof(t)); lstrcpynW(t.user_sid, sid, 200);
     if (still_running(o, L"install")) return RC_RUNNING;   // checked again here: DynaRun may have been started since
-    if (!check_exe()) { error2(o, T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return RC_FAIL; }
+    if (!check_exe(&t)) { error2(o, T(L"DynaRun V3.exe was not found at the given path.", L"在指定的路徑找不到 DynaRun V3.exe。"), g_exe); return RC_FAIL; }
     CreateDirectoryW(g_dir, NULL);
     if (!extract(1, g_launcher) || !extract(2, cat3(p, g_dir, L"\\dynafix.dll", NULL)) ||
         !extract(4, cat3(p, g_dir, L"\\LICENSE-miniz.txt", NULL)) || !extract(5, cat3(p, g_dir, L"\\LICENSE.txt", NULL))) {
@@ -1532,15 +1545,15 @@ static int machine_install_locked(const install_opts *o, const WCHAR *sid)
     driver_machine_stage(p);                            // the Start menu shortcut to the driver installation (p: the installed setup)
     if (!app_key_create(APP_MACHINE, &k)) return RC_FAIL;
     set_str(k, L"InstallDir", g_dir);
-    if (g_exe_trusted) set_str(k, L"DynaRunExe", g_exe);     // a path that ordinary users can change is not recorded for the elevated stages (uninstall) to use
+    if (t.exe_trusted) set_str(k, L"DynaRunExe", g_exe);     // a path that ordinary users can change is not recorded for the elevated stages (uninstall) to use
     else RegDeleteValueW(k, L"DynaRunExe");
 
     touch_report(o, recover_exe_time());                   // a time stamp an earlier run could not put back
     // the per-user COM registrations are not copied to HKLM any more (records of older versions are left alone)
-    if (!g_exe_trusted) setup_log(L"DynaRun's folder or exe can be changed by ordinary users (or its path contains a link): no manifest was written");
+    if (!t.exe_trusted) setup_log(L"DynaRun's folder or exe can be changed by ordinary users (or its path contains a link): no manifest was written");
 
     // garbled text under "Beta: Use Unicode UTF-8": external manifest with activeCodePage=Legacy
-    if (GetACP() == CP_UTF8 && g_exe_trusted && !exists(cat3(p, g_exe, L".manifest", NULL)) && extract(3, p)) {
+    if (GetACP() == CP_UTF8 && t.exe_trusted && !exists(cat3(p, g_exe, L".manifest", NULL)) && extract(3, p)) {
         set_dword(k, L"ManifestInstalled", 1);
         touch_report(o, touch(g_exe));
     }
@@ -1645,12 +1658,13 @@ static void drop_policy_of(const WCHAR *sid)
 static int machine_uninstall(const install_opts *o, const WCHAR *skip_sid)
 {
     static WCHAR p[MAX_PATH + 16], polsid[200]; static const WCHAR KEEP[] = L"com-copied.txt\0com-backup\0com-skipped.txt\0setup.log\0";   // the record of the COM copies stays
-    HKEY k; DWORD man = 0, n = 4; BOOL keep = FALSE, deleted = FALSE, stuck = FALSE;
+    HKEY k; DWORD man = 0, n = 4; BOOL keep = FALSE, deleted = FALSE, stuck = FALSE; trust_ctx t;
     if (!stage_lock()) { error2(o, busy_text(), NULL); return RC_FAIL; }
-    if (skip_sid && skip_sid[0] && valid_user_sid(skip_sid)) lstrcpynW(g_user_sid, skip_sid, 200); else skip_sid = NULL;
+    zero(&t, sizeof(t));
+    if (skip_sid && skip_sid[0] && valid_user_sid(skip_sid)) lstrcpynW(t.user_sid, skip_sid, 200); else skip_sid = NULL;
     if (o->close) close_programs();                  // the user agreed (or /close): DynaRun keeps files of the folder open
     if (!g_exe[0]) locate_dynarun();                 // not recorded (an untrusted path is not): the default folders
-    check_exe();                                     // g_exe is from HKLM; g_exe_trusted says whether to run it
+    check_exe(&t);                                   // g_exe is from HKLM; t.exe_trusted says whether to run it
     if (touch_report(o, recover_exe_time()) == TOUCH_STUCK) stuck = TRUE;
     restore_shortcuts(HKEY_LOCAL_MACHINE, APPKEY);
     unretarget_shell(TRUE);
@@ -1659,7 +1673,7 @@ static int machine_uninstall(const install_opts *o, const WCHAR *skip_sid)
     drop_policy_of(skip_sid); drop_policy_of(polsid);
     unretarget_all_users(skip_sid);
     if (app_key_open(APP_MACHINE, KEY_READ, &k)) { RegQueryValueExW(k, L"ManifestInstalled", NULL, NULL, (BYTE *)&man, &n); RegCloseKey(k); }
-    if (man == 1 && g_exe[0] && !g_exe_trusted && exists(cat3(p, g_exe, L".manifest", NULL)))
+    if (man == 1 && g_exe[0] && !t.exe_trusted && exists(cat3(p, g_exe, L".manifest", NULL)))
         setup_log(L"the manifest next to DynaRun V3.exe was left in place: DynaRun's folder or exe can be changed by ordinary users, so nothing is deleted or scheduled for deletion there");
     else if (man == 1 && g_exe[0] && exists(cat3(p, g_exe, L".manifest", NULL))) {
         if (!manifest_is_ours(p)) setup_log(L"the manifest next to DynaRun V3.exe is not the file DynaRunFix wrote (it was changed): left in place");
@@ -1673,7 +1687,7 @@ static int machine_uninstall(const install_opts *o, const WCHAR *skip_sid)
             warn(o, T(L"The manifest file next to DynaRun V3.exe is in use and will be deleted at the next restart.", L"DynaRun V3.exe 旁的 manifest 檔正在使用中，將在下次重新啟動時刪除。"));
         }
     }
-    if (deleted) { if (g_exe_trusted) { if (touch_report(o, touch(g_exe)) == TOUCH_STUCK) stuck = TRUE; } else setup_log(L"the manifest state was not refreshed: DynaRun's folder or exe can be changed by ordinary users"); }
+    if (deleted) { if (t.exe_trusted) { if (touch_report(o, touch(g_exe)) == TOUCH_STUCK) stuck = TRUE; } else setup_log(L"the manifest state was not refreshed: DynaRun's folder or exe can be changed by ordinary users"); }
     // Before the key goes: the driver part ends a waiting task and resumes BitLocker if DynaRunFix suspended it (the flag is in the key).
     // An installed driver stays.
     driver_machine_uninstall();
@@ -2039,11 +2053,12 @@ static int uninstall(const install_opts *given)
     // user's shortcuts, Run value and pins still work with the installed launcher.
     if (is_admin()) rc = machine_uninstall(o, sid);
     else {
+        trust_ctx t;
         // What runs elevated is the installed program in Program Files (administrators-only folder), never a copy in a folder the user can
         // write. Only when there is no installed copy (a broken install) is this file itself run, if it is not one of our %TEMP% copies.
-        lstrcpynW(g_user_sid, sid, 200);
+        zero(&t, sizeof(t)); lstrcpynW(t.user_sid, sid, 200);
         if (exists(p)) {
-            if (g_is_writable(g_dir) || g_is_writable(p)) {
+            if (g_is_writable(&t, g_dir) || g_is_writable(&t, p)) {
                 error2(o, T(L"The DynaRunFix folder can be changed by ordinary users, so its uninstaller is not run with administrator rights. Remove DynaRunFix as an administrator.",
                          L"DynaRunFix 資料夾可被一般使用者修改，因此不會以系統管理員權限執行其中的解除安裝程式。請以系統管理員身分移除 DynaRunFix。"), g_dir);
                 return RC_FAIL;
