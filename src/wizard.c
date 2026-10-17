@@ -26,7 +26,7 @@
 enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO, ID_DRV, ID_IMG, ID_INFO, ID_THIRD };
 enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
        P_DRV_INTRO, P_DRV_PRESS7, P_DRV_HASH, P_DRV_BDE, P_DRV_PREP, P_DRV_REBOOT, P_DRV_RETRY, P_DRV_WARN, P_DRV_INSTALL, P_DRV_DONE, P_DRV_ERROR };   // driver.c
-enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL };
+enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL, JOB_COUNT };   // the order is not used anywhere: JOBS[] says what each job is
 #define WM_PROGRESS (WM_APP + 1)
 #define WM_JOBDONE  (WM_APP + 2)
 #define WM_HINT     (WM_APP + 3)                    // the DynaRun update hint is known (wParam: 0 none, 1 newer version, 2 the site's file differs)
@@ -723,35 +723,70 @@ static void on_progress(DWORD done, DWORD total)
     PostMessageW(g_hwnd, WM_PROGRESS, done, total);
 }
 
+// What a job runs on the worker thread (job_proc), and what is done with its result on the UI thread (JOBS[].on_done, below).
+static int jp_acquire(void)                          // the DynaRun setup or the driver: a copy on this computer first, else the download
+{
+    int rc;
+    on_progress((DWORD)-1, 2);                       // the page shows "looking" (a moving bar) until a download starts
+    if (g_acq == &ACQ_DRIVER) {
+        rc = driver_fetch(g_drvzip, on_progress, &g_cancel, &g_neterr, &g_drv_how, g_drv_hex, &g_drv_size, g_drv_rep, 1500);
+        if (rc == PK_OK || rc == DRV_W_HASH) {
+            on_progress((DWORD)-1, 1);               // the page says "checking" (marquee) while the BitLocker state is asked
+            g_drv_bl = driver_bitlocker();           // here, not while the next page is built: the WMI query can block for seconds
+        }
+    } else {
+        g_pkg_found = g_acq_local_ok && pkg_find_local(g_pkg);
+        if (g_pkg_found) rc = PK_OK;
+        else { g_pkg_ours = TRUE; rc = pkg_download(g_pkg, on_progress, &g_cancel, &g_neterr); }
+    }
+    return rc;
+}
+static int jp_extract(void)
+{
+    int rc = pkg_extract_checked(&g_zip, g_pw, g_msi, 400UL * 1024UL * 1024UL, on_progress, &g_cancel);   // a size cap, and a free target (shared with the driver)
+    SecureZeroMemory(g_pw, sizeof(g_pw));            // the password is not needed any more
+    return rc;
+}
+static int jp_install_all(void) { return g_pre ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); }   // g_pre: the driver's preparation in the same elevated stage
+static int jp_install_fix(void) { return g_pre ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); }
+static int jp_drv_prep(void)
+{
+    // "install anyway" accepts exactly this zip (its SHA-256), nothing else.
+    return driver_prep(&g_jobopts, g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
+}
+static int jp_drv_install(void) { return driver_install(&g_jobopts); }
+static int jp_drv_cancel(void) { return driver_cancel(&g_jobopts); }
+
+static void jd_acquire(int job, int rc);
+static void jd_extract(int job, int rc);
+static void jd_install(int job, int rc);
+static void jd_drv_prep(int job, int rc);
+static void jd_drv_install(int job, int rc);
+static void jd_drv_cancel(int job, int rc);
+
+// One row per job, indexed by the JOB_* value (nothing depends on the order of the values).
+//   proc        runs on the worker thread; returns the job's result code
+//   on_done     runs on the UI thread when the worker has ended (job_done), with the job and its result
+//   keep_up     the elevated stage or a system tool works: the UAC prompt and msiexec's window take the foreground, so ID_KEEPUP keeps the wizard behind them
+//   bring_front the wizard comes back in front of other windows when the job is done (the elevated part allows it)
+typedef struct {
+    int (*proc)(void);
+    void (*on_done)(int job, int rc);
+    BOOL keep_up, bring_front;
+} job_desc;
+static const job_desc JOBS[JOB_COUNT] = {
+    [JOB_ACQUIRE]     = { jp_acquire,     jd_acquire,     FALSE, FALSE },
+    [JOB_EXTRACT]     = { jp_extract,     jd_extract,     FALSE, FALSE },
+    [JOB_INSTALL_ALL] = { jp_install_all, jd_install,     TRUE,  TRUE  },
+    [JOB_INSTALL_FIX] = { jp_install_fix, jd_install,     TRUE,  TRUE  },
+    [JOB_DRV_PREP]    = { jp_drv_prep,    jd_drv_prep,    TRUE,  TRUE  },
+    [JOB_DRV_INSTALL] = { jp_drv_install, jd_drv_install, TRUE,  TRUE  },
+    [JOB_DRV_CANCEL]  = { jp_drv_cancel,  jd_drv_cancel,  TRUE,  TRUE  },
+};
+
 static DWORD WINAPI job_proc(LPVOID unused)
 {
-    int rc = RC_FAIL;
-    switch (g_job) {
-    case JOB_ACQUIRE:                                // the DynaRun setup or the driver: a copy on this computer first, else the download
-        on_progress((DWORD)-1, 2);                   // the page shows "looking" (a moving bar) until a download starts
-        if (g_acq == &ACQ_DRIVER) {
-            rc = driver_fetch(g_drvzip, on_progress, &g_cancel, &g_neterr, &g_drv_how, g_drv_hex, &g_drv_size, g_drv_rep, 1500);
-            if (rc == PK_OK || rc == DRV_W_HASH) {
-                on_progress((DWORD)-1, 1);           // the page says "checking" (marquee) while the BitLocker state is asked
-                g_drv_bl = driver_bitlocker();       // here, not while the next page is built: the WMI query can block for seconds
-            }
-        } else {
-            g_pkg_found = g_acq_local_ok && pkg_find_local(g_pkg);
-            if (g_pkg_found) rc = PK_OK;
-            else { g_pkg_ours = TRUE; rc = pkg_download(g_pkg, on_progress, &g_cancel, &g_neterr); }
-        }
-        break;
-    case JOB_EXTRACT:  rc = pkg_extract_checked(&g_zip, g_pw, g_msi, 400UL * 1024UL * 1024UL, on_progress, &g_cancel); SecureZeroMemory(g_pw, sizeof(g_pw)); break;   // a size cap, and a free target (shared with the driver)   // the password is not needed any more
-    case JOB_INSTALL_ALL: rc = g_pre ? install_all_driver(&g_jobopts, &g_result, g_msi, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_all(&g_jobopts, &g_result, g_msi); break;   // g_pre: the driver's preparation in the same elevated stage
-    case JOB_INSTALL_FIX: rc = g_pre ? install_fix_driver(&g_jobopts, &g_result, g_drvzip, g_drv_allow ? g_drv_hex : NULL) : install_fix(&g_jobopts, &g_result); break;
-    case JOB_DRV_PREP:
-        // "install anyway" accepts exactly this zip (its SHA-256), nothing else. (No comment after the call on the line of a break: it once swallowed the
-        // break, and the install followed the prep at once, without the restart.)
-        rc = driver_prep(&g_jobopts, g_drvzip[0] ? g_drvzip : L"-", g_drv_allow ? g_drv_hex : NULL);
-        break;
-    case JOB_DRV_INSTALL: rc = driver_install(&g_jobopts); break;
-    case JOB_DRV_CANCEL: rc = driver_cancel(&g_jobopts); break;
-    }
+    int rc = JOBS[g_job].proc();
     PostMessageW(g_hwnd, WM_JOBDONE, g_job, rc);
     (void)unused;
     return 0;
@@ -776,7 +811,7 @@ static void start_job(int job, int page)
     set_page(page);
     g_jobopts = g_opts;                              // the job runs with the options as they are now
     g_thread = CreateThread(NULL, 0, job_proc, NULL, 0, &tid);
-    if (job == JOB_INSTALL_ALL || job == JOB_INSTALL_FIX || job >= JOB_DRV_PREP) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
+    if (JOBS[job].keep_up) SetTimer(g_hwnd, ID_KEEPUP, 300, NULL);
 }
 
 /* ---------- steps ---------- */
@@ -1190,74 +1225,87 @@ static void choose_driver_source(void)
     acq_driver_result(rc);
 }
 
+static void jd_acquire(int job, int rc) { (void)job; acq_done(rc); }
+
+static void jd_extract(int job, int rc)
+{
+    (void)job;
+    if (rc == PK_OK) { after_extract(); return; }
+    drop_msi();                                      // a failed or cancelled extraction leaves no decrypted copy
+    if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); return; }
+    if (g_pkg_found && rc == PK_FORMAT) {            // a copy found on this computer that is damaged (not a usable zip): not offered again; a password or disk problem keeps its own page
+        WCHAR nm[100];
+        lstrcpynW(nm, file_name(g_pkg), 100);
+        pkg_reject(g_pkg);
+        g_acq = &ACQ_SETUP; g_pkg_found = FALSE;
+        wsprintfW(g_note, T(L"The file found on this computer (%s) is damaged, so it will not be used.", L"在這台電腦上找到的檔案（%s）已損毀，所以不使用它。"), nm);
+        set_page(P_FAIL);
+        return;
+    }
+    if (rc == PK_PASSWORD) { lstrcpyW(g_note, T(L"Wrong password, or the file is damaged. Please check the password.", L"密碼不正確，或檔案已損毀。請再確認密碼。")); set_page(P_PASSWORD); return; }
+    lstrcpyW(g_note, T(L"The setup could not be unpacked. Is the disk full?", L"無法解開安裝檔，硬碟空間是否不足？"));
+    set_page(P_ERROR);
+}
+
+static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INSTALL_FIX
+{
+    if (g_pre && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
+        cleanup_files();
+        g_fix_done = TRUE;
+        if (rc == DRV_SUCCESS) drv_reboot_now();
+        else if (rc == DRV_W_BDE) set_page(P_DRV_BDE);
+        else drv_error(rc);
+        return;
+    }
+    if (rc == RC_OK) { cleanup_files(); set_page(P_DONE); return; }
+    if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
+    if (rc == RC_CANCEL) {
+        lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
+        set_page(g_pre ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // g_pre: the page with the button that started it
+        return;
+    }
+    wsprintfW(g_note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
+                        L"安裝沒有完成（代碼 %d）。\n\n請重新開機後再執行一次本程式。"), rc);
+    set_page(P_ERROR);
+}
+
+static void jd_drv_prep(int job, int rc)
+{
+    (void)job;
+    if (rc == DRV_SUCCESS) { drv_reboot_now(); return; }
+    if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); return; }      // armed, but BitLocker is still on: the user decides
+    if (rc == RC_CANCEL) {
+        lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
+        set_page(g_drvmode == DRV_MODE_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
+        return;
+    }
+    drv_error(rc);
+}
+
+static void jd_drv_install(int job, int rc)
+{
+    (void)job;
+    if (rc == DRV_SUCCESS) { g_drv_have = FALSE; set_page(P_DRV_DONE); return; }
+    if (rc == RC_CANCEL) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); return; }
+    if (rc == DRV_E_ENFORCED) {                        // this start still checks signatures: nothing was installed, the restart stays armed
+        lstrcpyW(g_note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
+        set_page(P_DRV_RETRY); return;
+    }
+    drv_error(rc);
+}
+
+static void jd_drv_cancel(int job, int rc)
+{
+    (void)job; (void)rc;
+    DestroyWindow(g_hwnd);                           // cancelled (or not allowed to: nothing else can be done from here)
+}
+
 static void job_done(int job, int rc)
 {
     WaitForSingleObject(g_thread, INFINITE); CloseHandle(g_thread); g_thread = NULL; g_busy = FALSE;
     if (g_close_asked) { g_opts.close = FALSE; g_close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
     if (g_closing) { DestroyWindow(g_hwnd); return; }
-    switch (job) {
-    case JOB_ACQUIRE: acq_done(rc); break;
-    case JOB_EXTRACT:
-        if (rc == PK_OK) { after_extract(); break; }
-        drop_msi();                                  // a failed or cancelled extraction leaves no decrypted copy
-        if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); break; }
-        if (g_pkg_found && rc == PK_FORMAT) {        // a copy found on this computer that is damaged (not a usable zip): not offered again; a password or disk problem keeps its own page
-            WCHAR nm[100];
-            lstrcpynW(nm, file_name(g_pkg), 100);
-            pkg_reject(g_pkg);
-            g_acq = &ACQ_SETUP; g_pkg_found = FALSE;
-            wsprintfW(g_note, T(L"The file found on this computer (%s) is damaged, so it will not be used.", L"在這台電腦上找到的檔案（%s）已損毀，所以不使用它。"), nm);
-            set_page(P_FAIL);
-            break;
-        }
-        if (rc == PK_PASSWORD) { lstrcpyW(g_note, T(L"Wrong password, or the file is damaged. Please check the password.", L"密碼不正確，或檔案已損毀。請再確認密碼。")); set_page(P_PASSWORD); break; }
-        lstrcpyW(g_note, T(L"The setup could not be unpacked. Is the disk full?", L"無法解開安裝檔，硬碟空間是否不足？"));
-        set_page(P_ERROR);
-        break;
-    case JOB_INSTALL_ALL:
-    case JOB_INSTALL_FIX:
-        if (g_pre && FIX_DONE(rc)) {            // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
-            cleanup_files();
-            g_fix_done = TRUE;
-            if (rc == DRV_SUCCESS) drv_reboot_now();
-            else if (rc == DRV_W_BDE) set_page(P_DRV_BDE);
-            else drv_error(rc);
-            break;
-        }
-        if (rc == RC_OK) { cleanup_files(); set_page(P_DONE); break; }
-        if (rc == RC_RUNNING) { g_pending = job; set_page(P_RUNNING); break; }   // DynaRun was started meanwhile
-        if (rc == RC_CANCEL) {
-            lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" to install.", L"沒有安裝：需要在 Windows 詢問時按「是」才能安裝。"));
-            set_page(g_pre ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // g_pre: the page with the button that started it
-            break;
-        }
-        wsprintfW(g_note, T(L"The installation did not finish (code %d).\n\nRestart the computer and run this program again.",
-                            L"安裝沒有完成（代碼 %d）。\n\n請重新開機後再執行一次本程式。"), rc);
-        set_page(P_ERROR);
-        break;
-    case JOB_DRV_PREP:
-        if (rc == DRV_SUCCESS) { drv_reboot_now(); break; }
-        if (rc == DRV_W_BDE) { set_page(P_DRV_BDE); break; }      // armed, but BitLocker is still on: the user decides
-        if (rc == RC_CANCEL) {
-            lstrcpyW(g_note, T(L"Nothing was changed: Windows needs your \"Yes\" first.", L"沒有做任何變更：需要在 Windows 詢問時按「是」。"));
-            set_page(g_drvmode == DRV_MODE_CONTINUE ? P_DRV_RETRY : P_DRV_PRESS7);
-            break;
-        }
-        drv_error(rc);
-        break;
-    case JOB_DRV_INSTALL:
-        if (rc == DRV_SUCCESS) { g_drv_have = FALSE; set_page(P_DRV_DONE); break; }
-        if (rc == RC_CANCEL) { lstrcpyW(g_note, T(L"Nothing was installed: Windows needs your \"Yes\" first.", L"沒有安裝：需要在 Windows 詢問時按「是」。")); set_page(P_DRV_WARN); break; }
-        if (rc == DRV_E_ENFORCED) {                        // this start still checks signatures: nothing was installed, the restart stays armed
-            lstrcpyW(g_note, T(L"Driver signature checking is still on in this Windows session, so nothing was installed. The restart with key 7 is needed first.", L"這次 Windows 啟動時簽章檢查還開著，所以沒有安裝任何東西。需要先重新開機並按 7。"));
-            set_page(P_DRV_RETRY); break;
-        }
-        drv_error(rc);
-        break;
-    case JOB_DRV_CANCEL:
-        DestroyWindow(g_hwnd);                       // cancelled (or not allowed to: nothing else can be done from here)
-        break;
-    }
+    JOBS[job].on_done(job, rc);
 }
 
 static void on_primary(void)
@@ -1639,7 +1687,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_JOBDONE:
         KillTimer(h, ID_KEEPUP);
         // after the elevated part (which allows it) the wizard comes back in front of other windows
-        if (w == JOB_INSTALL_ALL || w == JOB_INSTALL_FIX || w >= JOB_DRV_PREP) bring_front(h);
+        if (JOBS[w].bring_front) bring_front(h);
         job_done((int)w, (int)l); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; RECT c; HDC dc = BeginPaint(h, &ps); HPEN pen, old;

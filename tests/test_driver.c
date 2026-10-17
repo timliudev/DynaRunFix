@@ -765,31 +765,50 @@ static void test_check(void)
 // the prep (no restart in between). Every `case JOB_...:` of job_proc in src\wizard.c must have a break outside of comments before the next one.
 static void test_job_table(void)
 {
-    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = read_file(L"src\\wizard.c", &n); int labels = 0;
+    char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = read_file(L"src\\wizard.c", &n); int jobs = 0, rows = 0;
     if (!f) { wprintf(L"info: src\\wizard.c not found from this folder: the job table is not checked\n"); return; }
     t = (char *)f;
-    a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
-    CHECK(a && end, L"job_proc is in src\\wizard.c");
-    for (c = a ? strstr(a, "case JOB_") : NULL; c && c < end; c = next) {
-        char *p, *stop; BOOL has_break = FALSE;
-        next = strstr(c + 5, "case JOB_"); stop = next && next < end ? next : end;
-        for (p = c; p < stop && !has_break; p++) {
-            if (p[0] == '/' && p[1] == '/') { while (p < stop && *p != '\n') p++; continue; }       // a comment runs to the end of its line
-            if (!strncmp(p, "break;", 6)) has_break = TRUE;
-        }
-        CHECK(has_break, L"every case of job_proc ends with a break that is not inside a comment");
-        labels++;
-        if (!(next && next < end)) break;
+    // every job has a row in JOBS[] with a proc (jp_*) and an on_done (jd_*); a job without a row would call a NULL pointer
+    a = strstr(t, "enum { JOB_ACQUIRE"); end = a ? strchr(a, '}') : NULL;
+    CHECK(a && end, L"the JOB_* enum is in src\\wizard.c");
+    for (c = a; c && end && c < end; c++) if (!strncmp(c, "JOB_", 4) && strncmp(c, "JOB_COUNT", 9)) { jobs++; while (c < end && *c != ',' && *c != ' ') c++; }
+    CHECK(jobs >= 7, L"all seven jobs were looked at");
+    a = strstr(t, "static const job_desc JOBS["); end = a ? strstr(a, "};") : NULL;
+    CHECK(a && end, L"the job table JOBS[] is in src\\wizard.c");
+    for (c = a ? strstr(a, "= {") : NULL, c = c ? strstr(c, "[JOB_") : NULL; c && c < end; c = next) {
+        char *row_end; BOOL has_proc, has_done;
+        next = strstr(c + 5, "[JOB_"); if (next && next >= end) next = NULL;
+        row_end = next ? next : end;
+        has_proc = FALSE; has_done = FALSE;
+        for (a = c; a < row_end; a++) { if (!strncmp(a, "jp_", 3)) has_proc = TRUE; if (!strncmp(a, "jd_", 3)) has_done = TRUE; }
+        CHECK(has_proc && has_done, L"every row of JOBS[] names a proc (jp_*) and an on_done (jd_*)");
+        rows++;
+        if (!next) break;
     }
-    CHECK(labels >= 7, L"all seven jobs were looked at");
+    CHECK(rows == jobs, L"JOBS[] has exactly one row per job");
+    // each proc ends with a return that is not inside a comment (a comment once swallowed the break that ended a job's case)
+    for (c = t, rows = 0; (c = strstr(c, "static int jp_")) != NULL; c += 14) {
+        char *p, *stop; BOOL has_return = FALSE;
+        stop = strstr(c, "\nstatic "); if (!stop) stop = t + n;
+        for (p = c; p < stop && !has_return; p++) {
+            if (p[0] == '/' && p[1] == '/') { while (p < stop && *p != '\n') p++; continue; }       // a comment runs to the end of its line
+            if (!strncmp(p, "return ", 7)) has_return = TRUE;
+        }
+        CHECK(has_return, L"every job proc returns its result code outside of a comment");
+        rows++;
+    }
+    CHECK(rows == jobs, L"every job has its own proc function");
+    // job_proc and job_done go through the table
+    a = strstr(t, "static DWORD WINAPI job_proc"); end = a ? strstr(a, "WM_JOBDONE") : NULL;
+    CHECK(a && end && strstr(a, "JOBS[g_job].proc()") && strstr(a, "JOBS[g_job].proc()") < end, L"job_proc runs the proc of the job's row");
     // g_opts.close (forwarded to the elevated stage as /close) is the user's consent for one install job: the button that sets it
     // records that (g_close_asked) and job_done takes it back, so a later stage does not close a DynaRun started since
-    a = strstr(t, "static void job_done"); end = a ? strstr(a, "switch (job)") : NULL;
-    CHECK(a && end, L"job_done is in src\\wizard.c");
+    a = strstr(t, "static void job_done"); end = a ? strstr(a, "JOBS[job].on_done") : NULL;
+    CHECK(a && end, L"job_done is in src\\wizard.c and hands the result to the job's on_done");
     for (c = a; c && end && c < end; c++) if (!strncmp(c, "g_opts.close = FALSE", 20)) break;
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
-    for (c = t, labels = 0; (c = strstr(c, "g_opts.close = TRUE")) != NULL; c += 19) labels++;
-    CHECK(labels == 1 && strstr(t, "g_opts.close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_opts.close only together with g_close_asked");
+    for (c = t, jobs = 0; (c = strstr(c, "g_opts.close = TRUE")) != NULL; c += 19) jobs++;
+    CHECK(jobs == 1 && strstr(t, "g_opts.close = TRUE; g_close_asked = TRUE"), L"the wizard sets g_opts.close only together with g_close_asked");
     release(f);
 }
 
