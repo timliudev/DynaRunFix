@@ -1,17 +1,17 @@
 # 重構紀錄（已完成，2026-10-18）
 
-依據：2026-10-17 逐行讀完 `src/` 全部模組、`tests/`、`build.cmd` 後擬定的計畫；本文件記錄實際結果。分支 `refactor/solid`，僅在本機，Tim 審完 git tree 才上遠端。
+依據：2026-10-17 逐行讀完 `src/` 全部模組、`tests/`、`build.cmd` 後擬定的計畫；本文件記錄實際結果。已合併進 `develop`。
 
 ## 原則（執行時維持）
 
 - **行為不變**：每一步都是純重構；疑似 bug 另案驗證、另開 commit。
-- **小步、可驗證**：每步單獨編譯、在 VM 跑測試與回歸清單、單獨 commit。主機只編輯、編譯、commit。
+- **小步、可驗證**：每步單獨編譯、跑單元測試與回歸清單（`tests/VM_CHECKLIST.md`）、單獨 commit。
 - **跨行程 ABI 不動**：elevated stage 的命令列動詞與參數位置、行程結束碼的數值、log mutex 名稱與格式、`CwpProc` 匯出、`setup.rc` 資源 ID、`DRF_VERSION` 巨集全部維持原樣，只加命名常數。
 - **測試仍可 include**：測試靠 `#include "../src/setup.c"`、`driver.c` 取用 static，所以拆檔後各 `.c` 仍是單一編譯單元。
 
 ## 決定
 
-Tim 的決定：
+維護者的決定：
 
 1. 範圍：P0–P6 全部做，並行進行。
 2. 結果碼：只加名稱，數值不變（跨行程 ABI 不變）。
@@ -51,14 +51,14 @@ Tim 的決定：
 2. `g_pkg_log` 常開：**不是 bug**。只有 `driver_fetch` 路徑會寫入；已改成參數（P3.2）。
 3. `classify` 的 `pMsi*` 為 NULL：**不是 bug**。`restore`／`unretarget` 只用 `LNK_OURS` 判斷，在 MSI 查詢之前就決定；仍新增 `msi_api_init`（P2.4，由 `classify` 呼叫，只執行一次），所以各路徑（含 uninstall）都會載入 msi.dll。
 4. `prep_locked` 提早 return 未清理：**已修**，948ee1f（準備失敗時清除已暫存檔案與 `accepted.txt`）。
-5. `peg_ldr_note` 在 loader lock 下呼叫 `logf`／`patch_base`：依 Tim 決定**不修**。沒有死鎖（具名 mutex 最多等 2 秒＋檔案 I/O，不呼叫 LoadLibrary），且 patch 不能延後。但發現相關競態並修正，cb1aa28（loader callback 以非阻塞方式取得 `peg_check` 的 busy 旗標，拿不到就延後）。
+5. `peg_ldr_note` 在 loader lock 下呼叫 `logf`／`patch_base`：依維護者決定**不修**。沒有死鎖（具名 mutex 最多等 2 秒＋檔案 I/O，不呼叫 LoadLibrary），且 patch 不能延後。但發現相關競態並修正，cb1aa28（loader callback 以非阻塞方式取得 `peg_check` 的 busy 旗標，拿不到就延後）。
 6. worker 無鎖寫入 `g_drv_*`、`g_neterr`、`g_hint_*`：**不是 bug**，`job_done` 在 UI 讀取前已 join worker；唯一的良性競態是 `g_lastpct`，改成只有 worker 寫入，1c8498e。
 7. `g_close` 設成 TRUE 後不再恢復：**已修**，2a1faa5（「關閉 DynaRun 並安裝」的同意只涵蓋一次安裝 job）。
 8. 死碼：移到 tests，0609115（另 e66d23d 移走其餘測試專用 COM 輔助）。
 - 額外修正：0791e0e，APPDATA 路徑過長時捷徑／釘選程式碼會溢位，改為略過該資料夾。
 
-## 分支與驗證
+## 合併與驗證
 
-- 分支：`claude/refactor-main-ab9bcd`（c860db5）、`claude/refactor-dynafix-65b202`（cb1aa28）、`claude/refactor-update-7ac5e6`（b4a59b6），皆從 main 912e3d4 分出，依序合併進 `refactor/solid`（merge commit ad34711、117eb7b、0582a1a）；125d521 移除合併後重複的 `driver_prep_stage` stub；3923d63 文件對齊。
-- 最終 VM 驗證（3923d63，w11zhtw）：單元測試 9/9 PASS；VM_CHECKLIST A 30 PASS／2 SKIP，B 23 PASS／13 SKIP；dynafix 8/8。證據：`C:\Data\legal\DynaRunFix\2026-10-18-solid\`。
-- 未驗證：標準使用者章節（5 項，需手動）、7.5 redirect（需受信任的自簽憑證）、BitLocker、Win8／7／XP、合併後版本的更新檢查（§8；已在 update 分支以 A–I 驗證）。
+- 重構分三條並行線（主程式／setup 與 wizard、dynafix、update），皆從 main 912e3d4 分出，依序合併進 `refactor/solid`（merge commit ad34711、117eb7b、0582a1a）；各線主要 commit 為 c860db5、cb1aa28、b4a59b6。125d521 移除合併後重複的 `driver_prep_stage` stub；3923d63 文件對齊。
+- 最終驗證（3923d63）：單元測試與 dynafix 測試通過，`tests/VM_CHECKLIST.md` 回歸清單通過；其中需手動或需特殊環境的項目未執行（見下）。
+- 未驗證：標準使用者相關的手動章節、7.5 redirect（需受信任的自簽憑證）、BitLocker、Win8／7／XP、合併後版本的更新檢查（§8；已在 update 分支驗證）。
