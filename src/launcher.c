@@ -601,53 +601,41 @@ static void read_dynarun_exe(HKEY root, const char *sub, char *exe, DWORD size)
 }
 
 #ifndef DRF_NO_MAIN
-void WinMainCRTStartup(void)
+// The launcher's arguments: the command line after the program name.
+static char *own_args(void)
 {
-    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], line[3 * MAX_PATH], ev[64], *p, *cmd, *args;
-    PROCESS_INFORMATION pi; HMODULE hd; HHOOK hk; HANDLE e, h; DWORD n = MAX_PATH; int i; BOOL ask, wasadmin, reported; ULONGLONG dl;
-
-    // From here on DLLs are looked for in System32 only (not the current folder, not the PATH). dynafix.dll is loaded by its full path.
-    {
-        typedef BOOL (WINAPI *sddd_t)(DWORD);
-        sddd_t sddd = (sddd_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetDefaultDllDirectories");   // Vista+ / KB2533623
-        if (sddd) sddd(0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
-    }
-
-    // dynafix.dll lives next to this launcher
-    n = GetModuleFileNameA(NULL, dll, MAX_PATH);
-    if (!n || n >= MAX_PATH - 16) fail_w(L"The folder of DynaRunFix.exe is too deep.", L"DynaRunFix.exe 所在的資料夾路徑太長。");
-    p = dll + lstrlenA(dll); while (p > dll && *p != '\\') p--; lstrcpyA(p, "\\dynafix.dll");
-
-    cmd = GetCommandLineA();
+    char *cmd = GetCommandLineA();
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; } else while (*cmd && *cmd != ' ') cmd++;
     while (*cmd == ' ') cmd++;
-    // "/wasadmin": this is the copy an elevated launcher started with the shell's token (see relaunch_non_elevated). Only
-    // believed when this process is not elevated (see below); an elevated process that is given it ignores it.
-    wasadmin = prefix(&cmd, VERB_WASADMIN);
-    {   // An elevated launcher starts nothing but its copy with the shell's token: no DynaRun, no LEProc, no updater.
-        HANDLE tk;
-        g_elevated = !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tk) || (i = token_elevated(tk), CloseHandle(tk), i);
-        if (g_elevated) {
-            {
-                int rl;
-                if (wasadmin) llog("launcher: /wasadmin ignored: this process is elevated, so it was not started by us with a non-elevated token\r\n", 0, 0);
-                rl = relaunch_non_elevated();
-                if (!rl)
-                    fail_w(L"DynaRunFix was started as administrator, but Windows did not give it the token of the desktop user, "
-                           L"so DynaRun is not started: DynaRunFix never runs DynaRun with more rights than a normal start from the desktop.\n\n"
-                           L"Possible reasons: the desktop (Explorer) is not running, or the \"Secondary Logon\" service is disabled.\n\n"
-                           L"Start DynaRunFix again in the normal way (not \"Run as administrator\").",
-                           L"DynaRunFix 是以系統管理員身分啟動的，但 Windows 沒有提供桌面使用者的權杖，"
-                           L"因此不會啟動 DynaRun：DynaRunFix 一律不會以高於「從桌面正常啟動」的權限執行 DynaRun。\n\n"
-                           L"可能原因：桌面（檔案總管）未執行，或「Secondary Logon」服務已停用。\n\n"
-                           L"請以一般方式（不要選「以系統管理員身分執行」）重新開啟 DynaRunFix。");
-                if (rl == 1) ExitProcess(0);   // the copy carries on; rl == 2: the shell token is elevated too, carry on here
-            }
-        }
-    }
-    trim_log();
-    log_start(cmd);
-    ask = TRUE;
+    return cmd;
+}
+
+// An elevated launcher starts nothing but its copy with the shell's token: no DynaRun, no LEProc, no updater. Sets g_elevated;
+// returns only when this process carries on (not elevated, or the shell token is elevated too).
+static void elevation_gate(BOOL wasadmin)
+{
+    HANDLE tk; int i, rl;
+    g_elevated = !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tk) || (i = token_elevated(tk), CloseHandle(tk), i);
+    if (!g_elevated) return;
+    if (wasadmin) llog("launcher: /wasadmin ignored: this process is elevated, so it was not started by us with a non-elevated token\r\n", 0, 0);
+    rl = relaunch_non_elevated();
+    if (!rl)
+        fail_w(L"DynaRunFix was started as administrator, but Windows did not give it the token of the desktop user, "
+               L"so DynaRun is not started: DynaRunFix never runs DynaRun with more rights than a normal start from the desktop.\n\n"
+               L"Possible reasons: the desktop (Explorer) is not running, or the \"Secondary Logon\" service is disabled.\n\n"
+               L"Start DynaRunFix again in the normal way (not \"Run as administrator\").",
+               L"DynaRunFix 是以系統管理員身分啟動的，但 Windows 沒有提供桌面使用者的權杖，"
+               L"因此不會啟動 DynaRun：DynaRunFix 一律不會以高於「從桌面正常啟動」的權限執行 DynaRun。\n\n"
+               L"可能原因：桌面（檔案總管）未執行，或「Secondary Logon」服務已停用。\n\n"
+               L"請以一般方式（不要選「以系統管理員身分執行」）重新開啟 DynaRunFix。");
+    if (rl == 1) ExitProcess(0);   // the copy carries on; rl == 2: the shell token is elevated too, carry on here
+}
+
+// The arguments after "/wasadmin" (already taken) and after log_start: "/noupdate"..., "/autostart", "/restart <pid>", then the
+// DynaRun V3.exe to start (the recorded one when none is given) into exe, its folder into dir (both MAX_PATH). Sets g_update.
+static void parse_args(char *cmd, char *exe, char *dir)
+{
+    char *p; BOOL ask = TRUE;
     while (flag(&cmd, VERB_NOUPDATE)) ask = FALSE;   // from the setup's /update: it has just asked
     // "/autostart" (the sign-in Run value): at sign-in the desktop is still being set up (taskbar, resolution, DPI) and
     // DynaRun lays its screen out from the size it sees at start: wait for the taskbar and 3 s of an unchanged size
@@ -670,100 +658,100 @@ void WinMainCRTStartup(void)
         cmd = p; while (*cmd == ' ') cmd++;
         ask = FALSE;
     }
-    args = cmd;
     // DynaRun always starts first; the update (check, offer) is dealt with after it runs (finish), only when it was started
     // here and neither "/noupdate", "/autostart" nor "/restart" was given
     g_update = ask;
     if (*cmd == '"') { cmd++; lstrcpynA(exe, cmd, MAX_PATH); p = exe; while (*p && *p != '"') p++; *p = 0; }
     else if (*cmd) lstrcpynA(exe, cmd, MAX_PATH);
     else {
-        read_dynarun_exe(HKEY_LOCAL_MACHINE, "SOFTWARE\\DynaRunFix", exe, sizeof(exe));
+        read_dynarun_exe(HKEY_LOCAL_MACHINE, "SOFTWARE\\DynaRunFix", exe, MAX_PATH);
     }
     lstrcpyA(dir, exe); p = dir + lstrlenA(dir); while (p > dir && *p != '\\') p--; *p = 0;
+}
 
-    g_pid = running();
-    if (g_pid) {
-        g_update = FALSE;   // attaching to a DynaRun that is already there: nothing is offered
-        h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, g_pid);
-        if (h) CloseHandle(h);
-        else if (GetLastError() == ERROR_ACCESS_DENIED) {   // DynaRun is never raised
-            llog("launcher: the running DynaRun cannot be opened (it runs with more rights than this launcher)\r\n", 0, 0);
-            fail_w(L"DynaRun is running with administrator rights. Close it and start it again through DynaRunFix.", L"DynaRun 正以系統管理員權限執行。請關閉後，再透過 DynaRunFix 啟動。");
+// With Windows' UTF-8 option on, DynaRun is started through Locale Emulator (le\LEProc.exe next to this launcher, profile
+// LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too. Only for a Traditional Chinese system locale
+// (legacy code page 950): the LE profile is zh-TW. Other locales get just the manifest, which selects their own legacy code page.
+// TRUE (le = its path, MAX_PATH) when DynaRun is to be started that way.
+static BOOL use_le(const char *dll, char *le)
+{
+    char ev[64], *p;
+    lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
+    if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
+    // Also for a zh-TW system locale whose FontAssoc lacks ANSI(00)=YES (Windows installed in English,
+    // locale changed later): LE gives DynaRun the Big5 code page and charset for every window, including
+    // tooltips and OCX controls that dynafix's font hooks do not reach.
+    return !lstrcmpA(ev, "950") && (GetACP() == CP_UTF8 || (GetACP() == 950 && !fontassoc())) &&
+           GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES;
+}
+
+// DynaRun through Locale Emulator: sets g_pid, and hooks DynaRun early (early_hook) when its first thread is found in time.
+static void start_le(HMODULE hd, const char *le, const char *exe, const char *dir)
+{
+    char line[3 * MAX_PATH]; PROCESS_INFORMATION pi; ULONGLONG dl;
+    wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
+    // LE creates DynaRun suspended (to load its own dll) and resumes it: catch it right away. LEProc runs in a
+    // job, so DynaRun's creation is reported at once (polling the process list can be late: VB reads the
+    // screen size before its first form, and dynafix must be in place by then); polling is the fallback.
+    {
+        HANDLE job = CreateJobObjectA(NULL, NULL), port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+        JOBOBJECT_ASSOCIATE_COMPLETION_PORT jp; BOOL injob = FALSE;
+        if (job && port) {
+            jp.CompletionKey = job; jp.CompletionPort = port;
+            injob = SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &jp, sizeof(jp));
         }
-    } else {
-        {   // never with more rights than a normal start; a one-time notice says so when the launcher was started as administrator or the layer is set
-            if (wasadmin && !g_elevated) { llog("launcher: was started as administrator and started itself again non-elevated\r\n", 0, 0); show_notice(1); }
-            else if (runasadmin(exe)) { llog("launcher: RUNASADMIN compatibility layer is set for DynaRun and ignored\r\n", 0, 0); show_notice(2); }
-        }
-        {   // before DynaRun runs (see early_hook)
-            DWORD t0 = GetTickCount();
-            hd = LoadLibraryA(dll);
-            llog("launcher: dynafix.dll loaded in %u ms (error %u)\r\n", GetTickCount() - t0, hd ? 0 : GetLastError());
-        }
-        // With Windows' UTF-8 option on, start DynaRun through Locale Emulator (le\LEProc.exe next to this
-        // launcher, profile LE_PROFILE in le\LEConfig.xml) so GDI-drawn labels use the zh-TW code page too.
-        // Only for a Traditional Chinese system locale (legacy code page 950): the LE profile is zh-TW.
-        // Other locales get just the manifest, which selects their own legacy code page.
-        lstrcpyA(le, dll); p = le + lstrlenA(le); while (p > le && *p != '\\') p--; lstrcpyA(p, "\\le\\LEProc.exe");
-        if (!GetLocaleInfoA(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE, ev, sizeof(ev))) ev[0] = 0;
-        // Also for a zh-TW system locale whose FontAssoc lacks ANSI(00)=YES (Windows installed in English,
-        // locale changed later): LE gives DynaRun the Big5 code page and charset for every window, including
-        // tooltips and OCX controls that dynafix's font hooks do not reach.
-        if (!lstrcmpA(ev, "950") && (GetACP() == CP_UTF8 || (GetACP() == 950 && !fontassoc())) &&
-            GetFileAttributesA(le) != INVALID_FILE_ATTRIBUTES) {
-            wsprintfA(line, "\"%s\" -runas " LE_PROFILE " \"%s\"", le, exe);
-            // LE creates DynaRun suspended (to load its own dll) and resumes it: catch it right away. LEProc runs in a
-            // job, so DynaRun's creation is reported at once (polling the process list can be late: VB reads the
-            // screen size before its first form, and dynafix must be in place by then); polling is the fallback.
-            {
-                HANDLE job = CreateJobObjectA(NULL, NULL), port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
-                JOBOBJECT_ASSOCIATE_COMPLETION_PORT jp; BOOL injob = FALSE;
-                if (job && port) {
-                    jp.CompletionKey = job; jp.CompletionPort = port;
-                    injob = SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &jp, sizeof(jp));
-                }
-                if (!spawn(le, line, dir, CREATE_SUSPENDED, &pi)) fail("Cannot start Locale Emulator");
-                injob = injob && AssignProcessToJobObject(job, pi.hProcess);
-                ResumeThread(pi.hThread);
-                if (injob) {
-                    DWORD msg; ULONG_PTR key; LPOVERLAPPED ov; ULONGLONG t, jdl = tick64() + 30000;
-                    while (!g_pid && (t = tick64()) < jdl && GetQueuedCompletionStatus(port, &msg, &key, &ov, (DWORD)(jdl - t)))
-                        if (msg == JOB_OBJECT_MSG_NEW_PROCESS && (DWORD)(UINT_PTR)ov != pi.dwProcessId && is_dynarun((DWORD)(UINT_PTR)ov))
-                            g_pid = (DWORD)(UINT_PTR)ov;
-                    if (g_pid) {   // its first thread, at once (a thread list of the whole system takes too long)
-                        typedef LONG (NTAPI *gnt_t)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, HANDLE *);
-                        typedef DWORD (WINAPI *gti_t)(HANDLE);
-                        gnt_t gnt = (gnt_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtGetNextThread");
-                        gti_t gti = (gti_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadId");
-                        HANDLE hp = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, g_pid), ht = NULL;
-                        if (hp && gnt && gti && !gnt(hp, NULL, THREAD_QUERY_INFORMATION, 0, 0, &ht)) { g_first = gti(ht); CloseHandle(ht); }
-                        if (hp) CloseHandle(hp);
-                    }
-                }
-                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        if (!spawn(le, line, dir, CREATE_SUSPENDED, &pi)) fail("Cannot start Locale Emulator");
+        injob = injob && AssignProcessToJobObject(job, pi.hProcess);
+        ResumeThread(pi.hThread);
+        if (injob) {
+            DWORD msg; ULONG_PTR key; LPOVERLAPPED ov; ULONGLONG t, jdl = tick64() + 30000;
+            while (!g_pid && (t = tick64()) < jdl && GetQueuedCompletionStatus(port, &msg, &key, &ov, (DWORD)(jdl - t)))
+                if (msg == JOB_OBJECT_MSG_NEW_PROCESS && (DWORD)(UINT_PTR)ov != pi.dwProcessId && is_dynarun((DWORD)(UINT_PTR)ov))
+                    g_pid = (DWORD)(UINT_PTR)ov;
+            if (g_pid) {   // its first thread, at once (a thread list of the whole system takes too long)
+                typedef LONG (NTAPI *gnt_t)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, HANDLE *);
+                typedef DWORD (WINAPI *gti_t)(HANDLE);
+                gnt_t gnt = (gnt_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtGetNextThread");
+                gti_t gti = (gti_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadId");
+                HANDLE hp = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, g_pid), ht = NULL;
+                if (hp && gnt && gti && !gnt(hp, NULL, THREAD_QUERY_INFORMATION, 0, 0, &ht)) { g_first = gti(ht); CloseHandle(ht); }
+                if (hp) CloseHandle(hp);
             }
-            for (dl = tick64() + 30000; !g_pid && !(g_pid = running()) && tick64() < dl; ) Sleep(1);
-            if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
-            {
-                DWORD tid = g_first; HANDLE h0 = OpenProcess(SYNCHRONIZE, FALSE, g_pid);
-                for (dl = tick64() + 3000; !tid && !(tid = first_thread(g_pid)) && tick64() < dl; ) Sleep(1);
-                if (tid && h0) early_hook(hd, g_pid, tid, h0);
-                if (h0) CloseHandle(h0);
-            }
-        } else {
-            charset_env();
-            if (!spawn(exe, NULL, dir, CREATE_SUSPENDED, &pi)) {
-                if (GetLastError() == ERROR_ELEVATION_REQUIRED) llog("launcher: DynaRun V3.exe insists on elevation, not started\r\n", 0, 0);
-                fail("Cannot start DynaRun V3.exe");
-            }
-            g_pid = pi.dwProcessId;
-            // Without the early hook the dll is attached once the first window shows up.
-            ResumeThread(pi.hThread);
-            early_hook(hd, g_pid, pi.dwThreadId, pi.hProcess);
-            WaitForInputIdle(pi.hProcess, 30000);
-            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         }
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     }
+    for (dl = tick64() + 30000; !g_pid && !(g_pid = running()) && tick64() < dl; ) Sleep(1);
+    if (!g_pid) fail("DynaRun V3.exe did not start under Locale Emulator");
+    {
+        DWORD tid = g_first; HANDLE h0 = OpenProcess(SYNCHRONIZE, FALSE, g_pid);
+        for (dl = tick64() + 3000; !tid && !(tid = first_thread(g_pid)) && tick64() < dl; ) Sleep(1);
+        if (tid && h0) early_hook(hd, g_pid, tid, h0);
+        if (h0) CloseHandle(h0);
+    }
+}
+
+// DynaRun directly: sets g_pid and hooks DynaRun early (early_hook).
+static void start_plain(HMODULE hd, const char *exe, const char *dir)
+{
+    PROCESS_INFORMATION pi;
+    charset_env();
+    if (!spawn(exe, NULL, dir, CREATE_SUSPENDED, &pi)) {
+        if (GetLastError() == ERROR_ELEVATION_REQUIRED) llog("launcher: DynaRun V3.exe insists on elevation, not started\r\n", 0, 0);
+        fail("Cannot start DynaRun V3.exe");
+    }
+    g_pid = pi.dwProcessId;
+    // Without the early hook the dll is attached once the first window shows up.
+    ResumeThread(pi.hThread);
+    early_hook(hd, g_pid, pi.dwThreadId, pi.hProcess);
+    WaitForInputIdle(pi.hProcess, 30000);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+}
+
+// dynafix.dll has not reported in from DynaRun g_pid (yet; an early hook that worked has finished already): find DynaRun's GUI
+// thread, hook it with the dll at path dll, and finish.
+static void hook_and_finish(const char *dll)
+{
+    char line[3 * MAX_PATH]; HMODULE hd; HHOOK hk; HANDLE e; BOOL reported; ULONGLONG dl;
     for (dl = tick64() + 60000; !g_tid; ) { g_best = 0; EnumWindows(findwin, 0); if (g_tid || tick64() >= dl) break; Sleep(100); }
     if (!g_tid) fail("DynaRun window not found");
     // just started: the VB main form may not exist yet (a splash or helper window comes first); wait a moment for it
@@ -794,5 +782,56 @@ void WinMainCRTStartup(void)
     UnhookWindowsHookEx(hk);
     if (e) CloseHandle(e);
     finish();
+}
+
+void WinMainCRTStartup(void)
+{
+    char exe[MAX_PATH], dir[MAX_PATH], dll[MAX_PATH], le[MAX_PATH], *p, *cmd;
+    HMODULE hd; HANDLE h; DWORD n; BOOL wasadmin;
+
+    // From here on DLLs are looked for in System32 only (not the current folder, not the PATH). dynafix.dll is loaded by its full path.
+    {
+        typedef BOOL (WINAPI *sddd_t)(DWORD);
+        sddd_t sddd = (sddd_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetDefaultDllDirectories");   // Vista+ / KB2533623
+        if (sddd) sddd(0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+    }
+
+    // dynafix.dll lives next to this launcher
+    n = GetModuleFileNameA(NULL, dll, MAX_PATH);
+    if (!n || n >= MAX_PATH - 16) fail_w(L"The folder of DynaRunFix.exe is too deep.", L"DynaRunFix.exe 所在的資料夾路徑太長。");
+    p = dll + lstrlenA(dll); while (p > dll && *p != '\\') p--; lstrcpyA(p, "\\dynafix.dll");
+
+    cmd = own_args();
+    // "/wasadmin": this is the copy an elevated launcher started with the shell's token (see relaunch_non_elevated). Only
+    // believed when this process is not elevated (see elevation_gate); an elevated process that is given it ignores it.
+    wasadmin = prefix(&cmd, VERB_WASADMIN);
+    elevation_gate(wasadmin);
+    trim_log();
+    log_start(cmd);
+    parse_args(cmd, exe, dir);
+
+    g_pid = running();
+    if (g_pid) {
+        g_update = FALSE;   // attaching to a DynaRun that is already there: nothing is offered
+        h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, g_pid);
+        if (h) CloseHandle(h);
+        else if (GetLastError() == ERROR_ACCESS_DENIED) {   // DynaRun is never raised
+            llog("launcher: the running DynaRun cannot be opened (it runs with more rights than this launcher)\r\n", 0, 0);
+            fail_w(L"DynaRun is running with administrator rights. Close it and start it again through DynaRunFix.", L"DynaRun 正以系統管理員權限執行。請關閉後，再透過 DynaRunFix 啟動。");
+        }
+    } else {
+        {   // never with more rights than a normal start; a one-time notice says so when the launcher was started as administrator or the layer is set
+            if (wasadmin && !g_elevated) { llog("launcher: was started as administrator and started itself again non-elevated\r\n", 0, 0); show_notice(1); }
+            else if (runasadmin(exe)) { llog("launcher: RUNASADMIN compatibility layer is set for DynaRun and ignored\r\n", 0, 0); show_notice(2); }
+        }
+        {   // before DynaRun runs (see early_hook)
+            DWORD t0 = GetTickCount();
+            hd = LoadLibraryA(dll);
+            llog("launcher: dynafix.dll loaded in %u ms (error %u)\r\n", GetTickCount() - t0, hd ? 0 : GetLastError());
+        }
+        if (use_le(dll, le)) start_le(hd, le, exe, dir);
+        else start_plain(hd, exe, dir);
+    }
+    hook_and_finish(dll);
 }
 #endif
