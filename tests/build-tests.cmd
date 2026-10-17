@@ -1,7 +1,7 @@
 @echo off
 rem Builds the log test harness (tests\logtest.c). Not part of build.cmd / the release.
 rem Usage: tests\build-tests.cmd [outdir] [path\to\dynafix.c] [path\to\launcher.c] [extra cl options, e.g. /DOLD_SRC for a revision without w2u]
-rem   outdir defaults to build\tests; the two sources default to ..\src (give another copy to test an older revision).
+rem   outdir defaults to build\tests; the two sources default to ..\src (give another copy to test an older revision; dynafix_*.inc.c and applog.h must sit beside it as in src).
 rem Needs build\version.h, i.e. run build.cmd once first. The harness uses the normal CRT with /GS and /RTC1
 rem (stack cookies and run-time checks), unlike the release build, so an overflow in logf/llog is caught.
 setlocal

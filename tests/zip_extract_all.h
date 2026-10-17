@@ -1,6 +1,6 @@
 // zip_extract_all: extracts every entry (stored or deflate, not encrypted) of a zip below dest (which must exist); an unsafe name, a damaged entry or a zip
 // larger than the limits fails the whole call (PK_FORMAT). *nfiles: files written. Nothing in the shipped code unpacks a whole zip (the driver and the
-// DynaRun setup unpack only the entries a pinned table names), so it is not part of src\package.c; it is kept here, compiled by tests	est_driver.c
+// DynaRun setup unpack only the entries a pinned table names), so it is not part of src\package.c; it is kept here, compiled by tests\test_driver.c
 // (include it after src\setup.c), as a user of zip_walk / zip_extract / zip_name_safe and for the extraction tests.
 
 #define ZIP_MAX_FILES 500

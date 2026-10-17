@@ -2,7 +2,7 @@
 
 Manual checks for a build of `DynaRunFix-Setup.exe` that the automated tests cannot cover (UAC, the wizard, the restart for the driver, the network).
 Run them in a throw-away VM (Windows 10 or 11, snapshot before each section). Do not run them on the development host.
-The texts in quotes are the English ones from the source (`src\wizard.c` and `src\wizard\*.h`, `src\setup.c`, `src\update.c`); a Traditional Chinese Windows shows the Chinese pair.
+The texts in quotes are the English ones from the source (`src\wizard.c` and `src\wizard\*.h` (strings in `src\wizard\strings.h`), `src\setup.c` and `src\setup\*.h` (strings in `src\setup\strings.h`), `src\update.c`); a Traditional Chinese Windows shows the Chinese pair.
 
 Build first with `build.cmd` (the setup is `build\DynaRunFix-Setup.exe`). A dev build is version `dev` and never takes part in the update check.
 

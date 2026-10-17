@@ -46,7 +46,7 @@ jobs:
         shell: cmd
         run: call tests\build-hardening-tests.cmd || exit /b 1
 
-      # Driver tests (src\driver.c, the zip extraction of src\package.c); they use only %TEMP%\drf-drv-<pid>, no system tool is started.
+      # Driver tests (src\driver.c, the zip reading and staging of src\package.c; the whole-zip extraction lives only in tests\zip_extract_all.h); they use only %TEMP%\drf-drv-<pid>, no system tool is started.
       - name: Driver tests
         shell: cmd
         run: call tests\build-driver-tests.cmd || exit /b 1
