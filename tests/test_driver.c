@@ -829,6 +829,15 @@ static void test_job_table(void)
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
     for (c = t, jobs = 0; (c = strstr(c, "wz.opts.close = TRUE")) != NULL; c += 20) jobs++;
     CHECK(jobs == 1 && strstr(t, "wz.opts.close = TRUE; wz.close_asked = TRUE"), L"the wizard sets wz.opts.close only together with wz.close_asked");
+    // the check page's details start with the identity of the setup (source, MSI version, manufacturer), then the file (path, size, SHA-256)
+    a = strstr(t, "static void build_info(void)"); end = a ? strstr(a + 10, "\nstatic ") : NULL;
+    if (a && end) {
+        char *p1 = strstr(a, "TX(S_SOURCE)"), *p2 = strstr(a, "TX(S_PRODUCT_VERSION)"), *p3 = strstr(a, "TX(S_MANUFACTURER)"), *p4 = strstr(a, "TX(S_FILE)"), *p5 = strstr(a, "TX(S_SIZE)"), *p6 = strstr(a, "SHA-256");
+        CHECK(p1 && p2 && p3 && p4 && p5 && p6 && p6 < end, L"build_info writes all of the lines");
+        CHECK(p1 && p2 && p3 && p4 && p5 && p6 && p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5 && p5 < p6, L"build_info: source, ProductVersion and Manufacturer come before path, size and SHA-256");
+    } else CHECK(FALSE, L"build_info is in the wizard source");
+    // the version gate has one constant for the tested version and one function that classifies
+    CHECK(strstr(t, "dynarun_ver_class(wz.ver)") != NULL && strstr(t, "3.26.0\"") == NULL, L"the wizard classifies with dynarun_ver_class and has no copy of the tested version");
     release(f);
 }
 

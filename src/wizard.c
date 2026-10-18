@@ -24,14 +24,15 @@
 #define WIDEN(x) WIDEN2(x)
 
 enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO, ID_DRV, ID_IMG, ID_INFO, ID_THIRD };
-enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
+enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_VER4, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
        P_DRV_INTRO, P_DRV_PRESS7, P_DRV_HASH, P_DRV_BDE, P_DRV_PREP, P_DRV_REBOOT, P_DRV_RETRY, P_DRV_WARN, P_DRV_INSTALL, P_DRV_DONE, P_DRV_ERROR,   // driver.c
        P_COUNT };
-enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL, JOB_COUNT };   // the order is not used anywhere: JOBS[] says what each job is
+enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_INSTALL_MSI, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL, JOB_COUNT };   // the order is not used anywhere: JOBS[] says what each job is
 #define WM_PROGRESS (WM_APP + 1)
 #define WM_JOBDONE  (WM_APP + 2)
 #define WM_HINT     (WM_APP + 3)                    // the DynaRun update hint is known (wParam: 0 none, 1 newer version, 2 the site's file differs)
 #define TIMER_RUNNING 1
+#define TIMER_NOTIFY  2                     // the temporary tray icon of alert_user is taken away again
 
 // What the acquire flow needs to know about the thing it gets: the DynaRun V3 setup and the Dyna Pro USB driver go through the same pages (looking for
 // a copy on this computer, download with pause / resume, one error page); only these texts, the "partial download" test, the search and the check differ.
@@ -56,7 +57,9 @@ static const acq_desc ACQ_DRIVER = { L"the Dyna Pro USB driver", L"驅動程式"
 //   FLOW_DRIVER_ONLY       only the driver is the job: /driver (straight to the driver pages), or DynaRun and its fix are installed (this version) and only the
 //                          driver is missing (the first page offers just that, and "Reinstall the fix..." turns it into FLOW_MAIN).
 //   FLOW_DRIVER_CONTINUE   /driver-continue, the sign-in task after the restart: the driver pages that follow the restart.
-enum { FLOW_MAIN, FLOW_MAIN_WITH_DRIVER, FLOW_DRIVER_ONLY, FLOW_DRIVER_CONTINUE };
+//   FLOW_MSI_ONLY          the setup is DynaRun V4 or later and the user chose "Install original software only": Dyna Pro's MSI alone, no fix, no shortcuts, no driver.
+//                          Set by the V4 page; after_extract takes it back (a new package is a new decision).
+enum { FLOW_MAIN, FLOW_MAIN_WITH_DRIVER, FLOW_DRIVER_ONLY, FLOW_DRIVER_CONTINUE, FLOW_MSI_ONLY };
 
 // Everything the wizard knows about the run, in one place. OWNED BY THE UI THREAD: only the window procedure and what it calls read or write it.
 // A worker thread never touches it: what a job needs is copied into g_in by start_job, what it produces is written to g_out, and job_done merges
@@ -75,10 +78,11 @@ typedef struct {
     int nfound;                                             // packages pkg_find_local has handed us so far
     HANDLE thread;
     WCHAR pkg[MAX_PATH], msi[MAX_PATH], ver[64], note[1100];
+    int verclass;                                           // VER_*: dynarun_ver_class of the setup's ProductVersion (ver), set by after_extract
     zipent zip;
     char pw[256];
     char *rtf;
-    WCHAR info[2200];                                       // what the license page shows about the package (path, size, SHA-256, MSI version/manufacturer)
+    WCHAR info[2200];                                       // what the check page shows about the package (source, MSI version/manufacturer, path, size, SHA-256)
     DWORD neterr, total;
     BOOL paused, pause_req;                                 // download paused (worker ended, .part kept) / pause asked, worker still stopping
     int hint;                                               // DynaRun update hint (pkg_update_hint): 0 none, 1 a newer version is published, 2 the site's zip differs from the last download
@@ -130,14 +134,14 @@ static hint_out g_hint_out;
 
 static volatile LONG g_cancel;                          // the one value both sides use while a job runs: the UI sets 1 (cancel) / 2 (pause), the worker polls it
 static int g_dpi;                                       // the window's own resources and layout numbers (UI thread only, not part of the run's state)
-static HFONT g_font, g_big;
+static HFONT g_font, g_big, g_small;                  // g_small: the text boxes (the license text and the details of the setup file)
 static HBRUSH g_white, g_grey;
 static HBITMAP g_bmp[2], g_shown;                             // the two screenshots (decoded once) and the scaled one in the picture control
 static int g_bw[2], g_bh[2], g_img, g_shown_img = -1, g_shown_w, g_shown_h;
 static WCHAR pgbuf[2600];             // the text of the page being built (one page at a time, on the UI thread)
 // What one page is (PAGES[], below): its builder, what its buttons do, what closing the window does.
 typedef struct { UINT key; int id; BOOL (*when)(void); } hotkey;     // Alt+key clicks the control id (when is NULL, or says the shortcut is on)
-enum { PF_NOCLOSE = 1 };
+enum { PF_NOCLOSE = 1, PF_TOPMOST = 2 };   // PF_TOPMOST: topmost while the page is shown in the sign-in task's run (FLOW_DRIVER_CONTINUE), see set_topmost
 typedef struct {
     void (*enter)(void);
     void (*primary)(void);

@@ -116,6 +116,12 @@ static void enter_done(void)
 {
     wz.result = RC_OK;                                   // everything is installed
     WCHAR *b = pgbuf;
+    if (wz.flow == FLOW_MSI_ONLY) {                      // Dyna Pro's software alone (V4 or later): nothing of ours to start or to hint at
+        text(ID_TITLE, TX(S_MSI_DONE_TITLE));
+        text(ID_BODY, TX(S_MSI_DONE_BODY));
+        buttons(TX(S_CLOSE), NULL, NULL);
+        return;
+    }
     text(ID_TITLE, TX(S_DONE));
     lstrcpyW(b, TX(S_EVERYTHING_IS_INSTALLED_FROM_NOW));
     pin_hint(b);
@@ -136,6 +142,7 @@ static void enter_error(void)
 
 static int jp_install_all(void) { return g_in.flow == FLOW_MAIN_WITH_DRIVER ? install_all_driver(&g_in.opts, &g_out.instres, g_in.msi, g_in.drvzip, g_in.drv_allow ? g_in.drv_hex : NULL) : install_all(&g_in.opts, &g_out.instres, g_in.msi); }   // FLOW_MAIN_WITH_DRIVER: the driver's preparation in the same elevated stage
 static int jp_install_fix(void) { return g_in.flow == FLOW_MAIN_WITH_DRIVER ? install_fix_driver(&g_in.opts, &g_out.instres, g_in.drvzip, g_in.drv_allow ? g_in.drv_hex : NULL) : install_fix(&g_in.opts, &g_out.instres); }
+static int jp_install_msi(void) { return install_msi_only(&g_in.opts, g_in.msi); }   // FLOW_MSI_ONLY: Dyna Pro's MSI alone
 static void mo_install(void) { wz.instres = g_out.instres; }                // the pin hint
 
 static void jd_install(int job, int rc);
@@ -158,6 +165,7 @@ static const job_desc JOBS[JOB_COUNT] = {
     [JOB_EXTRACT]     = { jp_extract,     NULL,       jd_extract,     FALSE, FALSE },
     [JOB_INSTALL_ALL] = { jp_install_all, mo_install, jd_install,     TRUE,  TRUE  },
     [JOB_INSTALL_FIX] = { jp_install_fix, mo_install, jd_install,     TRUE,  TRUE  },
+    [JOB_INSTALL_MSI] = { jp_install_msi, NULL,       jd_install,     TRUE,  TRUE  },
     [JOB_DRV_PREP]    = { jp_drv_prep,    NULL,       jd_drv_prep,    TRUE,  TRUE  },
     [JOB_DRV_INSTALL] = { jp_drv_install, NULL,       jd_drv_install, TRUE,  TRUE  },
     [JOB_DRV_CANCEL]  = { jp_drv_cancel,  NULL,       jd_drv_cancel,  TRUE,  TRUE  },
@@ -240,7 +248,7 @@ static void choose_exe(void)
     set_page(P_HELLO);
 }
 
-static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INSTALL_FIX
+static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INSTALL_FIX / JOB_INSTALL_MSI
 {
     if (wz.flow == FLOW_MAIN_WITH_DRIVER && FIX_DONE(rc)) {                    // the fix is installed, and the driver step ran in the same elevated stage: its result (as for JOB_DRV_PREP)
         cleanup_files();
@@ -254,7 +262,7 @@ static void jd_install(int job, int rc)             // JOB_INSTALL_ALL / JOB_INS
     if (rc == RC_RUNNING) { wz.pending = job; set_page(P_RUNNING); return; }   // DynaRun was started meanwhile
     if (rc == RC_CANCEL) {
         lstrcpyW(wz.note, TX(S_NOTHING_WAS_INSTALLED_WINDOWS_NEEDS_2));
-        set_page(wz.flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
+        set_page(wz.flow == FLOW_MAIN_WITH_DRIVER ? P_DRV_PRESS7 : job == JOB_INSTALL_ALL || job == JOB_INSTALL_MSI ? P_LICENSE : P_HELLO);   // FLOW_MAIN_WITH_DRIVER: the page with the button that started it
         return;
     }
     wsprintfW(wz.note, TX(S_THE_INSTALLATION_DID_NOT_FINISH), rc);
@@ -268,6 +276,9 @@ static void job_done(int job, int rc)
     if (wz.close_asked) { wz.opts.close = FALSE; wz.close_asked = FALSE; }   // the consent was for the job that has just ended: a later stage must not close a DynaRun started since without asking (/close from the command line stays)
     if (wz.closing) { DestroyWindow(g_hwnd); return; }
     JOBS[job].on_done(job, rc);
+    // a long step is over and the wizard waits for the user (also when the job went on to a page that asks something): call them back if they are elsewhere.
+    // Not when the window is going, another job already runs, or the page is the automatic restart.
+    if (!wz.busy && !wz.closing && IsWindow(g_hwnd) && !(wz.page == P_DRV_REBOOT && !wz.drv_noreboot)) alert_user();
 }
 
 // The first page's options are read when it is left, whichever button leaves it.
@@ -335,6 +346,7 @@ static void ext_hello(void)                                                     
 static BOOL when_drv_avail(void) { return wz.drv_avail; }
 static const hotkey KEYS_HELLO[] = { { 'T', ID_PIN, NULL }, { 'S', ID_AUTO, NULL }, { 'D', ID_DRV, when_drv_avail }, { 0 } };
 static const hotkey KEYS_LICENSE[] = { { 'A', ID_CHECK, NULL }, { 0 } };
+static const hotkey KEYS_VER4[] = { { 'U', ID_CHECK, NULL }, { 0 } };
 
 // One row per page, indexed by the P_* value. A NULL handler means: nothing happens (second: the page closes).
 //   enter    builds the page (the controls, texts and buttons it shows); set_page has reset everything before it
@@ -342,6 +354,9 @@ static const hotkey KEYS_LICENSE[] = { { 'A', ID_CHECK, NULL }, { 0 } };
 //   close    what closing the window does on this page, after the common refusals; NULL: ends the wizard
 //   keys     the page's Alt+key shortcuts
 //   flags    PF_NOCLOSE: closing the window is refused
+//            PF_TOPMOST: in the sign-in task's run after the restart (FLOW_DRIVER_CONTINUE) the page is topmost while it waits for the user, so the programs that
+//                        start with Windows cannot cover it. Not on the page that runs the driver install (P_DRV_INSTALL): Windows' own warning dialog has to be
+//                        visible there, so topmost ends when the user clicks "Install" (set_page of the next page) and keep_up looks after the order of the windows.
 // A new page: a P_* value, an enter_* function, a row here.
 static const page_desc PAGES[P_COUNT] = {
     [P_HELLO]       = { enter_hello,       pri_hello,       NULL,           thr_hello, ext_hello,        NULL,         KEYS_HELLO,   0 },
@@ -349,7 +364,8 @@ static const page_desc PAGES[P_COUNT] = {
     [P_FAIL]        = { enter_fail,        pri_fail,        sec_fail,       thr_fail,  ext_dynapro,      NULL,         NULL,         0 },
     [P_PASSWORD]    = { enter_password,    pri_password,    NULL,           NULL,      choose_file,      NULL,         NULL,         0 },
     [P_EXTRACT]     = { enter_extract,     NULL,            NULL,           NULL,      NULL,             NULL,         NULL,         0 },
-    [P_CHECK]       = { enter_check,       pri_check,       NULL,           NULL,      ext_dynapro,      NULL,         NULL,         0 },
+    [P_CHECK]       = { enter_check,       pri_check,       NULL,           thr_check, ext_dynapro,      NULL,         NULL,         0 },
+    [P_VER4]        = { enter_ver4,        pri_ver4,        sec_ver4,       thr_cancel, NULL,            NULL,         KEYS_VER4,    0 },
     [P_LICENSE]     = { enter_license,     pri_license,     NULL,           NULL,      ext_dynapro,      NULL,         KEYS_LICENSE, 0 },
     [P_RUNNING]     = { enter_running,     pri_running,     NULL,           NULL,      NULL,             NULL,         NULL,         0 },
     [P_INSTALL]     = { enter_install,     NULL,            sec_none,       NULL,      NULL,             NULL,         NULL,         PF_NOCLOSE },
@@ -361,8 +377,8 @@ static const page_desc PAGES[P_COUNT] = {
     [P_DRV_BDE]     = { enter_drv_bde,     pri_drv_bde,     sec_drv_cancel, NULL,      ext_recovery_key, cls_drv_bde,  NULL,         0 },
     [P_DRV_PREP]    = { enter_drv_prep,    NULL,            NULL,           NULL,      NULL,             NULL,         NULL,         PF_NOCLOSE },
     [P_DRV_REBOOT]  = { enter_drv_reboot,  end_wizard,      NULL,           NULL,      NULL,             NULL,         NULL,         0 },
-    [P_DRV_RETRY]   = { enter_drv_retry,   pri_drv_retry,   sec_drv_cancel, NULL,      NULL,             cls_drv_task, NULL,         0 },
-    [P_DRV_WARN]    = { enter_drv_warn,    pri_drv_warn,    sec_drv_cancel, NULL,      NULL,             cls_drv_task, NULL,         0 },
+    [P_DRV_RETRY]   = { enter_drv_retry,   pri_drv_retry,   sec_drv_cancel, NULL,      NULL,             cls_drv_task, NULL,         PF_TOPMOST },
+    [P_DRV_WARN]    = { enter_drv_warn,    pri_drv_warn,    sec_drv_cancel, NULL,      NULL,             cls_drv_task, NULL,         PF_TOPMOST },
     [P_DRV_INSTALL] = { enter_drv_install, NULL,            NULL,           NULL,      NULL,             NULL,         NULL,         PF_NOCLOSE },
     [P_DRV_DONE]    = { enter_drv_done,    pri_drv_done,    NULL,           NULL,      NULL,             NULL,         NULL,         0 },
     [P_DRV_ERROR]   = { enter_drv_error,   end_wizard,      NULL,           NULL,      ext_manual,       NULL,         NULL,         0 },
@@ -380,6 +396,7 @@ static void set_page(int p)
     PAGES[p].enter();
     wz.note[0] = 0;
     g_building = FALSE;
+    set_topmost(g_hwnd, (PAGES[p].flags & PF_TOPMOST) && wz.flow == FLOW_DRIVER_CONTINUE);
     layout();
     if (!GetFocus() || !IsWindowEnabled(GetFocus()) || !(GetWindowLongW(GetFocus(), GWL_STYLE) & WS_VISIBLE))
         SetFocus(GetNextDlgTabItem(g_hwnd, NULL, FALSE));       // something must hold the keyboard focus
@@ -456,7 +473,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
         }
         if (w == ID_KEEPUP) keep_up(h);
+        if (w == TIMER_NOTIFY) alert_clear();
         return 0;
+    case WM_ACTIVATE:                               // the user is back: the flashing stops by itself, the notification goes
+        if (LOWORD(w) != WA_INACTIVE) alert_clear();
+        break;
     case WM_HINT:
         wz.hint = (int)w;
         if (wz.hint) { lstrcpyW(wz.hint_inst, g_hint_out.inst); lstrcpyW(wz.hint_new, g_hint_out.nw); }
@@ -485,7 +506,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         SetTextColor((HDC)w, (HWND)l == H(ID_STATUS) && wz.status_err ? RGB(192, 0, 0) : GetSysColor(COLOR_WINDOWTEXT));
         return (LRESULT)g_white;
     case WM_CLOSE: on_close(); return 0;
-    case WM_DESTROY: SecureZeroMemory(wz.pw, sizeof(wz.pw)); SecureZeroMemory(g_in.pw, sizeof(g_in.pw)); SetWindowTextW(H(ID_EDIT), L""); drop_msi(); PostQuitMessage(0); return 0;
+    case WM_DESTROY: alert_clear(); SecureZeroMemory(wz.pw, sizeof(wz.pw)); SecureZeroMemory(g_in.pw, sizeof(g_in.pw)); SetWindowTextW(H(ID_EDIT), L""); drop_msi(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, m, w, l);
 }
@@ -506,6 +527,7 @@ int wizard(const install_opts *init)
     lf = nm.lfMessageFont; pick_face(&lf); lf.lfQuality = CLEARTYPE_QUALITY;
     lf.lfHeight = -S(17); lf.lfWeight = FW_NORMAL; g_font = CreateFontIndirectW(&lf);   // larger than usual: easy to read
     lf.lfHeight = -S(28); lf.lfWeight = FW_BOLD; g_big = CreateFontIndirectW(&lf);
+    lf.lfHeight = -MulDiv(10, g_dpi, 72); lf.lfWeight = FW_NORMAL; g_small = CreateFontIndirectW(&lf);   // 10 pt: the license text and the details of the setup file
     g_white = CreateSolidBrush(RGB(255, 255, 255));
     g_grey = CreateSolidBrush(RGB(243, 243, 243));
 
@@ -536,6 +558,7 @@ int wizard(const install_opts *init)
     }
     ShowWindow(g_hwnd, SW_SHOWNORMAL);
     SetForegroundWindow(g_hwnd);
+    if (wz.flow == FLOW_DRIVER_CONTINUE) alert_user();         // the sign-in task after the restart: the start-up programs may hold the foreground; flash and notify then
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_TAB) {          // Tab between the visible controls
             HWND n = GetNextDlgTabItem(g_hwnd, GetFocus(), GetKeyState(VK_SHIFT) < 0);
