@@ -1,9 +1,12 @@
-# DynaRunFix
+# DynaRunFix: Windows 10/11 fix for DynaRun V3 (Dyna Pro dynamometer) / Dyna Pro 馬力機軟體 DynaRun V3 的 Win10/11 修正
 
 [![build](https://github.com/timliudev/DynaRunFix/actions/workflows/build.yml/badge.svg)](https://github.com/timliudev/DynaRunFix/actions/workflows/build.yml)
 
-A small compatibility shim that stops the **main-screen flicker** of the *DynaRun V3* dynamometer
-software (Dyna Pro Dynamometers, S68 and similar rigs) when it runs **natively on Windows 10 / 11**.
+DynaRunFix is an unofficial compatibility fix that stops the **main-screen flicker** of *DynaRun V3*, the Dyna Pro dynamometer software (S68 and similar rigs), when it runs **natively on Windows 10 / 11**.<br>
+DynaRunFix 是非官方的相容性修正，讓 Dyna Pro 馬力機的 *DynaRun V3* 軟體（S68 等機型）**原生在 Windows 10 / 11 執行時主畫面不再閃爍**。
+
+Its installer can also set up DynaRun V3 and the Dyna Pro USB driver; it does not include DynaRun itself.<br>
+安裝程式也能替你安裝 DynaRun V3 與 Dyna Pro USB 驅動程式；本專案不含 DynaRun 本體。
 
 [繁體中文說明在下方](#繁體中文)
 
