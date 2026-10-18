@@ -88,7 +88,8 @@ v1.8.0 (released 2026-10-18):
 - New: a version check of Dyna Pro's setup. 3.26.0 (the tested version) installs as before; another 3.x, or a version that cannot be read, shows a notice (tested only with 3.26.0, report problems at [GitHub issues](https://github.com/timliudev/DynaRunFix/issues)) and the install goes on; **DynaRun 4 or later** gets its own page that explains it may not need the fix and offers *Install original software only* (Dyna Pro's setup alone: no fix, no driver) next to *Install the fix anyway*.
 - Changed: the *Check the installer* page shows the source, the MSI's version and manufacturer first, in a smaller font, and fits without scrolling; for a setup found on this computer, *Download it* takes the file from Dyna Pro's website instead.
 - Changed: **the first start no longer asks for permission** (no UAC prompt) for Dyna Pro's configuration helper `Setup_<n>.exe`: it only writes `HKCU\Software\DynaPro`, so it is started without elevation.
-- Changed (setup wizard): while Dyna Pro's setup installs, the wizard stays directly behind msiexec's progress window (not always on top); after the restart the driver pages that wait for a click are kept on top of start-up windows (not while the driver installs, so Windows' warning stays visible); when a long step ends and the wizard is not in front, its taskbar button flashes and Windows shows a notification.
+- Changed (setup wizard): while Dyna Pro's setup installs, the wizard stays directly behind msiexec's progress window (not always on top); after the restart the driver pages that wait for a click are kept on top of start-up windows (not while the driver installs, so Windows' warning stays visible); when a background step ends, the wizard is not in front and it now waits for a click, its taskbar button flashes and Windows shows a notification.
+- Changed (security): the SHA-256 shown on the *Check the installer* page is handed to the elevated step, which does not run Dyna Pro's setup if its own copy has another SHA-256; the version and manufacturer read from the MSI are cleaned (control characters) and cut before they are shown or logged.
 
 v1.7.2 (released 2026-10-18):
 - Fix: a very long `%APPDATA%` path (about 200 characters or more) no longer overflows a buffer in the shortcut and taskbar pin code; the folder that does not fit is skipped.
@@ -126,17 +127,18 @@ All versions: [CHANGELOG.md](../CHANGELOG.md).
    DynaRun setup zip or `Setup.msi` already in *Downloads*, on the desktop, in *Documents* or next to the
    installer), asks for the **setup password you got
    from Dyna Pro**, shows a *Check the installer* page (a box you can copy from, in a smaller font so that all of it fits without scrolling: first where the file came from, the MSI's version and manufacturer, then the file's full path, size and SHA-256; for a setup found on this computer the page also has *Download it*, which gets the file from Dyna Pro's website instead), then Dyna Pro's license (read from the setup and shown by DynaRunFix itself) and installs DynaRun V3 and the fix only after you accept it (if the
-   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead).
+   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead). The SHA-256 on that page is also what the install is held to: the elevated step (`/full`, `/msi-only`, which take it as `/msi-sha256 <64 hex digits>` and are refused without it) copies the MSI into an administrators-only folder, computes the SHA-256 of that copy and stops with an error, running nothing, if it is not the one you were shown (the file in your folder could have been replaced after the page). A setup whose SHA-256 could not be read (shown as `?`) is not installed.
    If DynaRun V3 is already installed, it only installs the fix. If DynaRun V3 is installed in a folder the setup does not find, the first page has *Installed elsewhere...* to point it at `DynaRun V3.exe`. Windows asks once for permission: click **Yes**. That one prompt is for the whole install; when the driver is ticked too it covers the driver's preparation as well (the driver pages come before the install, see below).
    **Version check.** The MSI's ProductVersion is classified in one place (`dynarun_ver_class` in `src\package.c`; the UpgradeCode and product name check stays). Exactly 3.26.0, the version the fix was tested with: nothing changes.
    Another 3.x (or older): a notice on the *Check the installer* and license pages says it was tested only with 3.26.0, that there may be additional problems, and where to report them (<https://github.com/timliudev/DynaRunFix/issues>); the install goes on.
    A version that cannot be read: a notice too, the install goes on. Version 4 or later (possibly no longer a Visual Basic 6 program, perhaps native Windows 10/11, so it may not need the fix): after *Check the installer* a page says so and
    suggests installing Dyna Pro's software alone first and trying it. *Install the fix anyway* (right-most) stays disabled until *I understand that DynaRunFix has not been tested with this version* is ticked. *Install original software only*
    goes on to the license page and then installs Dyna Pro's setup alone (one administrator prompt, the same checked copy of the MSI): no fix, no change of shortcuts, no taskbar pin, no start at sign-in, and **no USB driver**
-   (the driver step belongs to the fix: it exists for V3's unsigned FTDI driver and was never checked with V4; the driver box of the first page is ignored). If V4 then shows the old problems, run this setup again: it finds the installed DynaRun and offers the fix.
+   (the driver step belongs to the fix: it exists for V3's unsigned FTDI driver and was never checked with V4; the driver box of the first page is ignored). Its last page, *Dyna Pro's software is installed*, has *Close* only, which just closes the wizard (it does not start DynaRun). If V4 then shows the old problems, run this setup again: it finds the installed DynaRun and offers the fix.
+   The check box of the V4 page and of the license page starts unticked every time the page is shown, also when you come back to it after declining the administrator prompt.
    **Windows and notifications.** While the elevated install runs, the wizard keeps itself directly behind the window of the install that has the foreground (the UAC prompt, Dyna Pro's progress window "Please wait while Windows configures ...", the driver warning), above all other windows,
-   but never always-on-top: you can switch to another program, and a program you switched to is left alone. When a long step ends (download, extraction, install, driver steps) or the wizard waits for you after the restart, and it is not the window in front, its taskbar button flashes
-   and Windows shows a notification (a temporary tray icon; it goes after 10 seconds or when you return). After the restart the driver pages that wait for your click (*Last step*, *7 was not pressed*) are kept on top of the programs that start with Windows; they stop being on top when you click *Install*, so that Windows' red warning is not hidden.
+   but never always-on-top: you can switch to another program, and a program you switched to is left alone (the log says only that an unrelated window has the foreground, not whose it is). **Alert.** When a background step (download, extraction, install, driver step) has ended and the wizard now waits for your click, and it is not the window in front, its taskbar button flashes
+   and Windows shows a notification (a temporary tray icon; it goes after 10 seconds, when you return, or when the wizard ends). Nothing happens when the wizard starts the next step by itself (for example the extraction right after the download), while its window is closing, on the page that restarts the computer by itself, or when the wizard is in front; after the restart the sign-in start calls you once, when the wizard opens. After the restart the driver pages that wait for your click (*Last step*, *7 was not pressed*) are kept on top of the programs that start with Windows; they stop being on top when you click *Install*, so that Windows' red warning is not hidden.
    A download that is interrupted is retried by itself (after 1, 2, 4, 8 and 15 seconds; the count starts over whenever data arrived), the page shows
    the first error of the failed attempts, the *Pause* button stops it cleanly and *Resume* (or, after an error, *Continue download*) carries on from
    the part that is already there; *Open website* and *Choose file...* remain as ways around it. When Windows says the computer is not connected to a
@@ -217,7 +219,7 @@ Windows XP, 7, 10 and 11 are supported (the driver option needs Windows 10 or 11
 - `/uninstall`: uninstalls (also what *Programs and Features* runs); with `/quiet` it asks nothing and removes only the fix (DynaRun V3 stays), a running DynaRun is closed only if `/close` is also given, and files that are in use are removed at the next restart; `/notaskbar`, `/noautostart`: leave out the taskbar pin and the start with Windows (below); `/keep`: leave the pin, the start at sign-in and the desktop shortcut as they are (what an update uses).
 - `/driver`: opens the driver pages of the wizard directly (download, restart, install), without installing DynaRun or the fix; this is what the Start menu shortcut runs.
 - `/driver-cancel`: takes back a started driver installation (the scheduled task, the one-time boot option and the BitLocker suspension); it installs and removes no driver. It must be run from an administrator command prompt: otherwise it exits with code 1 and does nothing.
-- Internal (do not run them by hand): `/driver-continue` (what the scheduled task `DynaRunFix-DriverContinue` starts after the restart), `/driver-prep`, `/driver-install`, `/machine`, `/full`, `/msi-only`, `/unmachine`, `/checkupdate`, `/update`, `/offer`.
+- Internal (do not run them by hand): `/driver-continue` (what the scheduled task `DynaRunFix-DriverContinue` starts after the restart), `/driver-prep`, `/driver-install`, `/machine`, `/full`, `/msi-only`, `/unmachine`, `/checkupdate`, `/update`, `/offer`. `/full` and `/msi-only` also need `/msi-sha256 <64 hexadecimal digits>` after the MSI path (the SHA-256 the wizard showed); without a valid value they exit with code 1 and run nothing.
 
 Exit codes of the setup:
 
@@ -791,7 +793,8 @@ v1.8.0(2026-10-18 發行):
 - 新增:檢查 Dyna Pro 安裝檔的版本。3.26.0(測試過的版本)照舊安裝;其他 3.x 或讀不到版本時會顯示提示(只在 3.26.0 測試過,有問題請到 [GitHub issues](https://github.com/timliudev/DynaRunFix/issues) 回報),安裝繼續;**DynaRun 4 以上**有獨立的頁面,說明它可能不需要修正,並提供「僅安裝原版軟體」(只安裝 Dyna Pro 的安裝檔:不裝修正、不裝驅動程式)與「仍要安裝修正」。
 - 變更:「確認安裝檔」頁先顯示來源、MSI 的版本與製造商,字型較小、不需捲動就能看完;在這台電腦上找到的安裝檔,可按「改從官網下載」改用 Dyna Pro 官網的檔案。
 - 變更:**第一次啟動不再詢問是否允許變更**(沒有 UAC 提示):Dyna Pro 的設定程式 `Setup_<編號>.exe` 只寫入 `HKCU\Software\DynaPro`,所以改為不提升權限啟動。
-- 變更(安裝精靈):Dyna Pro 的安裝程式執行時,精靈會緊貼在 msiexec 進度視窗後面(不是永遠在最上層);重新開機後等待點擊的驅動程式頁面會蓋過開機啟動的視窗(驅動程式安裝中則不會,Windows 的警告才看得到);長時間的步驟結束而精靈不在最前面時,工作列按鈕會閃爍,並顯示 Windows 通知。
+- 變更(安裝精靈):Dyna Pro 的安裝程式執行時,精靈會緊貼在 msiexec 進度視窗後面(不是永遠在最上層);重新開機後等待點擊的驅動程式頁面會蓋過開機啟動的視窗(驅動程式安裝中則不會,Windows 的警告才看得到);背景步驟結束、精靈不在最前面而且現在等你點擊時,工作列按鈕會閃爍,並顯示 Windows 通知。
+- 變更(安全性):「確認安裝檔」頁顯示的 SHA-256 會傳給提升權限的步驟,該步驟自己的副本 SHA-256 不同時就不會執行 Dyna Pro 的安裝檔;從 MSI 讀到的版本與製造商會先清掉控制字元並截斷,才顯示或寫入 log。
 
 v1.7.2(2026-10-18 發行):
 - 修正:%APPDATA% 路徑非常長(約 200 個字元以上)時,捷徑與工作列釘選程式碼不再造成緩衝區溢位;放不下的資料夾會被略過。
@@ -824,17 +827,18 @@ v1.6.0(2026-10-17 發行):
 
 2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
-   先顯示「確認安裝檔」頁（可以複製文字的框，字型較小、不需捲動就能看完：先是檔案的來源、MSI 的版本與製造商，再是檔案的完整路徑、大小與 SHA-256；在這台電腦上找到的安裝檔，頁面另有「改從官網下載」，改用 Dyna Pro 官網的檔案），再顯示 Dyna Pro 的授權合約（取自安裝檔，由 DynaRunFix 自己顯示），你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。DynaRun V3 裝在安裝程式找不到的資料夾時，第一頁有「已裝在其他位置…」可以指定 `DynaRun V3.exe`。
+   先顯示「確認安裝檔」頁（可以複製文字的框，字型較小、不需捲動就能看完：先是檔案的來源、MSI 的版本與製造商，再是檔案的完整路徑、大小與 SHA-256；在這台電腦上找到的安裝檔，頁面另有「改從官網下載」，改用 Dyna Pro 官網的檔案），再顯示 Dyna Pro 的授權合約（取自安裝檔，由 DynaRunFix 自己顯示），你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。該頁顯示的 SHA-256 也是安裝時要符合的值：提升權限的步驟（`/full`、`/msi-only`，以 `/msi-sha256 <64 個十六進位字元>` 取得它，沒有就拒絕執行）把 MSI 複製到只有系統管理員能用的資料夾，計算那份副本的 SHA-256，和你看到的不同就顯示錯誤並結束，什麼都不執行（你資料夾裡的檔案可能在顯示該頁之後被換掉）。讀不到 SHA-256（顯示為 `?`）的安裝檔不會被安裝。已經裝好 DynaRun V3 時，只會安裝修正。DynaRun V3 裝在安裝程式找不到的資料夾時，第一頁有「已裝在其他位置…」可以指定 `DynaRun V3.exe`。
    Windows 會詢問一次是否允許變更，請按 **是**。這是整個安裝只問的一次；同時勾選驅動程式時，它也涵蓋驅動程式的準備（驅動程式的頁面會排在安裝之前，見下方）。
    **版本檢查。** 安裝檔 MSI 的 ProductVersion 只在一個地方分類(`src\package.c` 的 `dynarun_ver_class`;升級代碼與產品名稱的檢查照舊)。剛好是 3.26.0(修正測試過的版本):沒有任何變化。
    其他 3.x(或更舊):「確認安裝檔」頁與授權合約頁會顯示提示——只在 3.26.0 測試過、可能有額外問題、請到 <https://github.com/timliudev/DynaRunFix/issues> 回報;安裝繼續。
    讀不到版本:同樣顯示提示,安裝繼續。4 以上(可能已不是 Visual Basic 6 程式,也許是原生 Windows 10/11,所以可能不需要修正):「確認安裝檔」之後會有一頁說明,並建議先單獨安裝 Dyna Pro 的軟體試用。
    必須勾選「我了解 DynaRunFix 未在此版本測試過」,最右邊的「仍要安裝修正」才能按。「僅安裝原版軟體」會先到授權合約頁,再只安裝 Dyna Pro 的安裝檔(一次系統管理員確認,同樣是檢查過的 MSI 副本):
    不裝修正、不改捷徑、不釘選工作列、不設開機自動啟動,也**不裝 USB 驅動程式**(驅動程式步驟屬於修正:它是為 V3 未簽章的 FTDI 驅動程式而設,沒有以 V4 檢查過;第一頁的驅動程式核取方塊會被忽略)。
-   之後如果 V4 出現舊的問題,再執行一次本程式:它會找到已安裝的 DynaRun 並提供安裝修正。
+   它的最後一頁「Dyna Pro 的軟體已安裝」只有「關閉」,按下去只會關閉精靈(不會啟動 DynaRun)。之後如果 V4 出現舊的問題,再執行一次本程式:它會找到已安裝的 DynaRun 並提供安裝修正。
+   V4 頁與授權合約頁的核取方塊,每次顯示該頁時都是未勾選,從被拒絕的系統管理員確認回到該頁時也一樣。
    **視窗順序與通知。** 提升權限的安裝進行時,精靈會讓自己緊貼在目前取得前景、屬於安裝流程的視窗後面(UAC 提示、Dyna Pro 的進度視窗「Please wait while Windows configures ...」、驅動程式警告),並在其他視窗之上,
-   但不是永遠在最上層:你可以切換到別的程式,切過去的程式不會被干擾。長時間的步驟(下載、解壓縮、安裝、驅動程式步驟)結束,或重新開機後精靈等你操作,而它不是最前面的視窗時,工作列按鈕會閃爍,
-   並顯示 Windows 通知(暫時的系統匣圖示;10 秒後或你回來時消失)。重新開機後等待你點擊的驅動程式頁面(「最後一步」、「沒有按 7」)會蓋過開機啟動的程式;按下「安裝」後就不再置頂,Windows 的紅色警告才不會被擋住。
+   但不是永遠在最上層:你可以切換到別的程式,切過去的程式不會被干擾。背景步驟(下載、解壓縮、安裝、驅動程式步驟)結束、精靈現在等你點擊,而它不是最前面的視窗時,工作列按鈕會閃爍,
+   並顯示 Windows 通知(暫時的系統匣圖示;10 秒後、你回來時,或精靈結束時消失)。精靈自己接著做下一個步驟時(例如下載後馬上解壓縮)、視窗正在關閉時、自動重新開機的那一頁,以及精靈在最前面時,都不會通知;重新開機後登入時的繼續,會在精靈開啟時通知一次。切過去的程式不會被干擾(log 只會寫「有無關的視窗在前景」,不寫是誰的)。重新開機後等待你點擊的驅動程式頁面(「最後一步」、「沒有按 7」)會蓋過開機啟動的程式;按下「安裝」後就不再置頂,Windows 的紅色警告才不會被擋住。
    下載中斷時會自動重試（依序等 1、2、4、8、15 秒；只要有資料進來就重新計數），頁面會顯示失敗過程中的第一個錯誤；「暫停」會乾淨地停止，
    「繼續」（錯誤之後是「繼續下載」）會從已經下載的部分接續；「開啟官網」與「選擇檔案…」仍然可用。Windows 說電腦完全沒有連上網路時，錯誤頁會立刻出現（不用等重試）；主機不回應時 10 秒就放棄。驅動程式走同樣的頁面（先找電腦上現有的，再下載）；它的「選擇檔案…」可以選 zip，或已解開它的資料夾裡的 ftdibus.inf。
    精靈第一頁最多有三個核取方塊:釘選到工作列、開機時自動啟動 DynaRun,以及(Windows 10/11 且尚未安裝驅動程式時)**同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**(見下方)。
@@ -884,7 +888,7 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
 - `/uninstall`：解除安裝（「程式和功能」執行的也是它）；加上 `/quiet` 時不問任何問題、只移除修正（DynaRun V3 保留），執行中的 DynaRun 只有同時加 `/close` 才會被關閉，使用中的檔案在下次重新啟動時移除；`/notaskbar`、`/noautostart`：不釘選到工作列、不在開機時啟動（見下方）；`/keep`：讓釘選、開機自動啟動和桌面捷徑維持原樣（更新時使用）。
 - `/driver`：直接開啟精靈的驅動程式頁面（下載、重新開機、安裝），不安裝 DynaRun 或修正；開始功能表捷徑執行的就是它。
 - `/driver-cancel`：撤回已開始的驅動程式安裝（排程工作、一次性開機選項與 BitLocker 暫停）；它不安裝也不移除驅動程式。必須在以系統管理員身分開啟的命令提示字元中執行，否則以結束代碼 1 結束，什麼都不做。
-- 內部使用（請勿手動執行）：`/driver-continue`（重新開機後排程工作 `DynaRunFix-DriverContinue` 啟動的）、`/driver-prep`、`/driver-install`、`/machine`、`/full`、`/msi-only`、`/unmachine`、`/checkupdate`、`/update`、`/offer`。
+- 內部使用（請勿手動執行）：`/driver-continue`（重新開機後排程工作 `DynaRunFix-DriverContinue` 啟動的）、`/driver-prep`、`/driver-install`、`/machine`、`/full`、`/msi-only`、`/unmachine`、`/checkupdate`、`/update`、`/offer`。`/full` 與 `/msi-only` 在 MSI 路徑之後還需要 `/msi-sha256 <64 個十六進位字元>`(精靈顯示過的 SHA-256);沒有有效值就以結束代碼 1 結束,什麼都不執行。
 
 安裝程式的結束代碼：
 
