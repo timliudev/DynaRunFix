@@ -28,6 +28,12 @@ Windows asks for elevation when a helper is started (a UAC prompt was observed).
 name and description; installer detection is the likely reason, which was not checked further. That prompt is a side effect,
 not the cause of the hang (below).
 
+**Since v1.8.0 there is no prompt.** The helper needs no administrator rights: Process Monitor shows that it only writes `HKCU\Software\DynaPro` (and
+files under `%APPDATA%`), which a non-elevated process can do (see "Ruled out: UAC virtualization" below). `dynafix.dll` therefore starts it with the compatibility
+layer `RunAsInvoker` in `__COMPAT_LAYER`, set for that one `ShellExecuteExA` call and put back right after it, so Windows' installer detection does not ask for
+elevation. Earlier versions (since v1.4.0) deliberately kept the prompt, by taking `RunAsInvoker` out of DynaRun's environment, so the helper ran exactly as without DynaRunFix;
+the prompt turned out to be unnecessary. DynaRun's other child processes still get the unchanged environment.
+
 ## Ruled out: UAC virtualization
 
 File/registry virtualization would hide the helper's writes from the non-elevated DynaRun only if they went to
@@ -60,10 +66,10 @@ All in memory, no DynaRun file is changed.
 
 | Part | Change | Status |
 |---|---|---|
-| `dynafix.dll` | Wraps the Windows function `ShellExecuteA` for DynaRun (it hooks the VB runtime's `GetProcAddress` import to hand out its wrapper). For `System Data\Setup_<digits>.exe` (exact match; any other file passes through untouched) it runs the helper with `ShellExecuteExA`, waits for it (one UAC prompt), puts back the `Default_Language` DynaRun had stored before the helper ran, and restarts DynaRun through `DynaRunFix.exe /restart <pid>` — so DynaRun never gets stuck. | Verified, Win11 zh-TW, DynaRun 3.26.0 |
+| `dynafix.dll` | Wraps the Windows function `ShellExecuteA` for DynaRun (it hooks the VB runtime's `GetProcAddress` import to hand out its wrapper). For `System Data\Setup_<digits>.exe` (exact match; any other file passes through untouched) it runs the helper with `ShellExecuteExA` without elevation (`__COMPAT_LAYER` has `RunAsInvoker` for that one call, no UAC prompt; the log says `setup helper started without elevation (RunAsInvoker)`), waits for it, puts back the `Default_Language` DynaRun had stored before the helper ran, and restarts DynaRun through `DynaRunFix.exe /restart <pid>` — so DynaRun never gets stuck. | Verified, Win11 zh-TW, DynaRun 3.26.0 (with the UAC prompt, up to v1.7.2); the start without elevation (v1.8.0): to be verified in a VM, `tests\VM_CHECKLIST.md` section 10 |
 | `DynaRunFix.exe` (launcher) | Starts DynaRun with `CREATE_SUSPENDED`, resumes it and polls `SetWindowsHookEx(WH_CALLWNDPROC)` on its GUI thread until it succeeds (a thread can be hooked only once it has a message queue; before that the call fails with error 87). Through Locale Emulator it starts `LEProc.exe` suspended in a job object, is told at once when DynaRun's process is created and hooks DynaRun's first thread the same way. `dynafix.dll` is then loaded before the first window, so the splash screen and forms created at start-up are covered too. With `/restart <pid>` it first waits (up to 15 s) for the old DynaRun to end. `dynafix.dll` is loaded into the launcher *before* DynaRun is created: the first load of a just-installed dll took seconds on a fresh Win11, and when it happened after the resume DynaRun had already made its first windows and laid out its main screen for the full screen height. `hooked from start` only says the first thread was hooked; `windows DynaRun had before dynafix: 0` says the fix came in time. | Verified, Win11 (log: `hooked from start`), native zh-TW Win11; first start right after install verified on a fresh zh-TW Win11 VM (old order 4/4 wrong, new order 5/5 right) |
 | `DynaRunFix-Setup.exe` | Elevation from a mapped network drive (e.g. a VM shared folder) first copies the setup to `%TEMP%` and elevates the copy — the elevated process cannot see the user's mapped drives. Before, no UAC prompt appeared and the install failed silently. | Verified, Win11 (UAC names the `%TEMP%` copy) |
-| `DynaRunFix-Setup.exe` (wizard) | Comes back to the foreground after the elevated part (the elevated process calls `AllowSetForegroundWindow`; if msiexec's window still holds the foreground, the wizard is raised in z-order and activated through `AttachThreadInput`, else its taskbar button flashes). | Verified, Win11 (final page in front of a maximized Explorer) |
+| `DynaRunFix-Setup.exe` (wizard) | Comes back to the foreground after the elevated part (the elevated process calls `AllowSetForegroundWindow`; if msiexec's window still holds the foreground, the wizard is raised in z-order and activated through `AttachThreadInput`, else its taskbar button flashes and a notification appears). While the elevated part runs, a 300 ms timer keeps the wizard directly behind the foreground window of the install chain (msiexec, consent, drvinst, pnputil, dpinst, the elevated stage), never topmost. | Verified, Win11 (final page in front of a maximized Explorer) |
 | `dynafix.dll` (optional features) | While the selection screen is still open, reads which optional-feature buttons are green (controls inside the frame by position, hidden EB-150/EB-250 skipped). After the helper it writes the `System_Setup` flags that *存檔並離開* would write (`Auto_Climate_Enable` + `Property_Auto_Climate`, `Cooling_Fan_Enable`, `Int_AF_Ratio_Enable`, `Water_Cooler_Enable`) as `"-1"`, logs each value, then restarts DynaRun. Only buttons that are clearly read as green are written; if the buttons cannot be read reliably (or any colour is unclear), nothing is written and the log says so. | Verified, Win11 (cooling fan alone; climate + fan + AFR) and native zh-TW Win11 (v1.2.2 code); XP not tested |
 
 After the restart DynaRun comes up with the chosen model and language. With the optional-feature fix the
@@ -145,6 +151,10 @@ DynaRun V3 3.26.0 首次啟動流程的開發紀錄:哪裡出錯、DynaRunFix �
 S125 是 `Setup_103.exe`…,檔案描述為「Registry Setup <編號>」),它把該機型的預設值寫進 `HKCU\Software\DynaPro` 後結束。這些程式的名稱與描述含「Setup」;啟動時 Windows 會要求提升權限(觀察到 UAC 提示),可能的原因是安裝程式偵測,未進一步確認。
 UAC 只是附帶現象,不是卡住的原因。
 
+**v1.8.0 起沒有提示。** 這個設定程式不需要系統管理員權限:Process Monitor 顯示它只寫入 `HKCU\Software\DynaPro`(以及 `%APPDATA%` 下的檔案),未提升權限的行程就能做到(見下方「已排除:UAC 虛擬化」)。
+所以 `dynafix.dll` 在啟動它的那一次 `ShellExecuteExA` 呼叫前,把相容層 `RunAsInvoker` 加進 `__COMPAT_LAYER`,呼叫後立刻還原,Windows 的安裝程式偵測就不會要求提升權限。
+先前的版本(自 v1.4.0 起)刻意保留這個提示,方法是把 `RunAsInvoker` 從 DynaRun 的環境清掉,讓設定程式的行為與沒有 DynaRunFix 時完全一樣;事後證明這個提示並不必要。DynaRun 其他子行程的環境維持不變。
+
 ### 已排除:UAC 虛擬化
 
 所有設定都在 `HKCU\Software\DynaPro` 和 `%APPDATA%`,這兩處不會被虛擬化;同一個管理員帳號提升權限後寫的也是同一個 HKCU。
@@ -173,10 +183,10 @@ Process Monitor 也確認 DynaRun 下次啟動會讀到設定程式寫的值。
 
 | 元件 | 修改 | 狀態 |
 |---|---|---|
-| `dynafix.dll` | 為 DynaRun 包裝 Windows 的 `ShellExecuteA`(hook VB 執行階段的 `GetProcAddress` 匯入,交出包裝函式):遇到 `System Data\Setup_<數字>.exe`(完整路徑吻合才算,其他檔案原樣放行)時用 `ShellExecuteExA` 執行並等待(一次 UAC),寫回 DynaRun 先前存的 `Default_Language`,再以 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun,DynaRun 就不會卡住。 | 已驗證(Win11 繁中、3.26.0) |
+| `dynafix.dll` | 為 DynaRun 包裝 Windows 的 `ShellExecuteA`(hook VB 執行階段的 `GetProcAddress` 匯入,交出包裝函式):遇到 `System Data\Setup_<數字>.exe`(完整路徑吻合才算,其他檔案原樣放行)時以不提升權限的方式用 `ShellExecuteExA` 執行(只在這一次呼叫的 `__COMPAT_LAYER` 加上 `RunAsInvoker`,沒有 UAC 提示;log 會寫 `setup helper started without elevation (RunAsInvoker)`)並等待,寫回 DynaRun 先前存的 `Default_Language`,再以 `DynaRunFix.exe /restart <pid>` 重新啟動 DynaRun,DynaRun 就不會卡住。 | 已驗證(Win11 繁中、3.26.0;v1.7.2 以前含 UAC 提示);不提升權限的啟動方式(v1.8.0)待在虛擬機驗證,見 `tests\VM_CHECKLIST.md` 第 10 節 |
 | `DynaRunFix.exe` | 以 `CREATE_SUSPENDED` 啟動 DynaRun,恢復執行後輪詢 `SetWindowsHookEx`,直到其 GUI 執行緒有訊息佇列(之前會回傳錯誤 87)。經 Locale Emulator 時則把 `LEProc.exe` 暫停啟動並放進 job 物件,DynaRun 一建立就收到通知,再以同樣方式掛上它的第一個執行緒。這樣 `dynafix.dll` 在第一個視窗之前就載入,啟動畫面和一開始建立的表單也都涵蓋。`/restart <pid>` 時先等舊的 DynaRun 結束(最多 15 秒)。`dynafix.dll` 在建立 DynaRun 之前就先載入啟動器:剛安裝的 dll 第一次載入在全新 Win11 上要好幾秒,若在 DynaRun 開始執行後才載入,DynaRun 已建立最初的視窗並照整個螢幕高度排好主畫面。log 的 `hooked from start` 只代表掛上了第一個執行緒,`windows DynaRun had before dynafix: 0` 才代表來得及。 | 已驗證(Win11、原生繁中 Win11) |
 | `DynaRunFix-Setup.exe` | 從網路磁碟機(例如虛擬機共用資料夾)提升權限時,先複製到 `%TEMP%` 再提升(提升後的行程看不到使用者對應的網路磁碟機)。修正前不會出現 UAC,安裝無聲失敗。 | 已驗證(Win11) |
-| 安裝精靈 | 提升權限的部分結束後回到前景(`AllowSetForegroundWindow`;若前景仍被 msiexec 視窗佔住,改用 z-order + `AttachThreadInput`,再不行就閃爍工作列按鈕)。 | 已驗證(Win11) |
+| 安裝精靈 | 提升權限的部分結束後回到前景(`AllowSetForegroundWindow`;若前景仍被 msiexec 視窗佔住,改用 z-order + `AttachThreadInput`,再不行就閃爍工作列按鈕並顯示通知)。提升權限的部分執行時,300 毫秒的計時器會讓精靈緊貼在安裝流程中取得前景的視窗(msiexec、consent、drvinst、pnputil、dpinst、提升權限的階段本身)後面,但不置頂。 | 已驗證(Win11) |
 | `dynafix.dll`(選購功能) | 選擇畫面還開著時讀出哪些選購功能按鈕是綠色(依位置、略過隱藏的 EB-150/EB-250),設定程式結束後寫入「存檔並離開」會寫的 `"-1"` 旗標並記錄,再重新啟動 DynaRun。只寫入明確讀到是綠色的按鈕;讀不準(或顏色不明確)時什麼都不寫,並在 log 說明。 | 已驗證(Win11;原生繁中 Win11 以 v1.2.2 的程式碼測試);XP 未測 |
 
 v1.2.2 在全新原生繁中 Win11 上的紀錄(由 `DynaRunFix-Setup.exe` 1.2.2 下載並安裝 DynaRun 3.26.0;選中文、S68、勾選大氣監測與空燃比分析儀,
