@@ -29,9 +29,10 @@ typedef struct {
     const WCHAR *dzip;                      // /with-driver <zip>: only from argv[4] on (after the verb, the SID and the path), any value is taken
     const WCHAR *daccept;                   // /unverified <sha256> from argv[4] on, at any position (/machine, /full): the last one with 64 characters
     const WCHAR *daccept4;                  // ... only as argv[4] argv[5] (/driver-prep): the same value, or NULL
+    const WCHAR *msisha;                    // /msi-sha256 <64 hex digits> from argv[4] on: the SHA-256 the user saw for the setup's MSI (the last valid one), else NULL
 } cmdline;
 typedef int (*verb_fn)(cmdline *c);         // returns the exit code of the process
-typedef struct { const WCHAR *name; int min_args; verb_fn run; } verb;   // argv[1] (any case) is name and argc >= min_args
+typedef struct { const WCHAR *name; int min_args; verb_fn run; BOOL needs_msi_sha; } verb;   // argv[1] (any case) is name and argc >= min_args; needs_msi_sha: runs only with a valid /msi-sha256
 extern HWND g_hwnd;                                     // wizard window, owner of UAC prompts
 extern WCHAR g_self[MAX_PATH], g_dir[MAX_PATH], g_launcher[MAX_PATH], g_exe[MAX_PATH];
 #define T(en, zh) (g_zh ? (zh) : (en))
@@ -52,11 +53,12 @@ BOOL fix_current(void);                      // the fix is installed and is the 
 BOOL locate_dynarun(void);                  // fills g_exe from the registry or the default folders; no UI
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(const install_opts *o, install_result *res);                      // DynaRun is installed: elevated stage + user shortcuts. RC_OK, RC_CANCEL
-int install_all(const install_opts *o, install_result *res, const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL
+int install_all(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *msi_sha);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL. msi_sha: the SHA-256 (64 hex digits) the user saw for msi; the elevated stage checks its copy against it
+int install_msi_only(const install_opts *o, const WCHAR *msi, const WCHAR *msi_sha);          // Dyna Pro's MSI alone (a DynaRun that is not the tested V3): no fix, no shortcuts, no driver. RC_OK, RC_CANCEL, RC_*
 // The same, and the driver's preparation (driver_prep) in the SAME elevated stage: one UAC prompt for both. zip/accept as for driver_prep.
 // RC_OK; RC_CANCEL; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
 int install_fix_driver(const install_opts *o, install_result *res, const WCHAR *zip, const WCHAR *accept);
-int install_all_driver(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *zip, const WCHAR *accept);
+int install_all_driver(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *msi_sha, const WCHAR *zip, const WCHAR *accept);
 enum { RUN_DYNARUN = 1, RUN_LAUNCHER = 2, RUN_LEPROC = 4, RUN_CANCLOSE = 8, RUN_NOCLOSE = 16 };
 int running_programs(void);                 // RUN_* bits of the programs that hold files the setup replaces. RUN_CANCLOSE: one of them can be closed
                                             // by the setup; RUN_NOCLOSE: one cannot (another session, or its exe path cannot be told)

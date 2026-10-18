@@ -13,4 +13,5 @@ int zip_walk(const WCHAR *zip, zip_visit_fn fn, void *ctx);
 // An entry name that may be created below a folder: relative, '/' separators, no "..", ".", empty, "x:" / backslash / control or
 // reserved characters, no device names, no trailing dot or space. *isdir: the name ends in '/'.
 BOOL zip_name_safe(const char *name, DWORD nlen, BOOL *isdir);
+void msi_text(const char *s, WCHAR *out, int cch);   // an MSI property value as screen / log text: NUL-terminated in out[cch], cut to fit, control characters as spaces
 BOOL pkg_prepare_target(const WCHAR *path);   // free a path that is going to be written (a plain file is removed, a link removed itself, a folder refused)

@@ -181,7 +181,7 @@ static HWND add(const WCHAR *cls, DWORD style, int id)
 {
     DWORD ex = (id == ID_EDIT || id == ID_RICH || id == ID_INFO) ? WS_EX_CLIENTEDGE : 0;   // themed border like other Windows text boxes
     HWND c = CreateWindowExW(ex, cls, L"", WS_CHILD | WS_CLIPSIBLINGS | style, 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, NULL, NULL);
-    SendMessageW(c, WM_SETFONT, (WPARAM)(id == ID_TITLE ? g_big : g_font), FALSE);
+    SendMessageW(c, WM_SETFONT, (WPARAM)(id == ID_TITLE ? g_big : id == ID_RICH || id == ID_INFO ? g_small : g_font), FALSE);   // both text boxes in the same smaller font
     return c;
 }
 
@@ -240,6 +240,14 @@ static int status_need(void)
     return measure(ID_STATUS, c.right - 2 * S(32)) + S(8);
 }
 
+// Height the details box needs to show all its text without scrolling at width w (the text wrapped to what is left of the box after its border and the
+// scroll bar it always has, a line to spare for the differences between this measure and the edit control's own wrapping).
+static int info_need(int w)
+{
+    int h = measure(ID_INFO, w - S(16) - GetSystemMetrics(SM_CXVSCROLL)) + S(24);
+    return h < S(120) ? S(120) : h;
+}
+
 static void place(int id, int x, int y, int w, int h) { SetWindowPos(H(id), NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE); }
 
 // One top-down pass over the visible controls from their measured sizes. apply FALSE: nothing is moved, it returns the client height the page needs
@@ -264,13 +272,13 @@ static int stack(BOOL apply, int w, int bottom)
     }
     if (shown(ID_EDIT)) { if (apply) place(ID_EDIT, m, y, w < S(360) ? w : S(360), S(34)); y += S(34) + S(12); }
     if (shown(ID_PROG)) { if (apply) place(ID_PROG, m, y, w, S(20)); y += S(20) + S(10); }
-    if (shown(ID_RICH)) {
-        int cy = apply ? bottom - (sh ? sh + S(6) : S(16)) - S(28) : y + S(200) + S(10);   // the license text: at least ~200 px high; it gives way to the status line
-        if (apply) { place(ID_CHECK, m, cy, w, S(28)); place(ID_RICH, m, y, w, cy - S(10) - y); }
+    if (shown(ID_RICH) || shown(ID_CHECK)) {            // the accept check box sits at the bottom of the page (the license page, and the V4 page which has no text box)
+        int cy = apply ? bottom - (sh ? sh + S(6) : S(16)) - S(28) : y + (shown(ID_RICH) ? S(200) + S(10) : S(16));   // the license text: at least ~200 px high; it gives way to the status line
+        if (apply) { place(ID_CHECK, m, cy, w, S(28)); if (shown(ID_RICH)) place(ID_RICH, m, y, w, cy - S(10) - y); }
         y = cy + S(28) + (apply && sh ? S(4) : 0);
     }
-    if (shown(ID_INFO)) {                               // the details of the setup file: a read-only text box (selectable, copyable) with the rest of the page
-        int bh2 = apply ? bottom - S(16) - y - sh : S(200);
+    if (shown(ID_INFO)) {                               // the details of the setup file: a read-only text box (selectable, copyable): all of its text if the screen allows, else it scrolls
+        int need = info_need(w), bh2 = apply ? bottom - S(16) - y - sh : need;
         if (apply) place(ID_INFO, m, y, w, bh2 > S(60) ? bh2 : S(60));
         y += bh2 + S(16);
     }
@@ -356,6 +364,48 @@ static void bring_front(HWND h)
     }
 }
 
+// The window is topmost (above all other windows, whatever is activated) or not. Only the difference is applied: HWND_NOTOPMOST on a window that is not topmost
+// would still raise it above the other windows.
+static void set_topmost(HWND h, BOOL on)
+{
+    if (((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) == (on != FALSE)) return;
+    SetWindowPos(h, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+static NOTIFYICONDATAW *tray_data(NOTIFYICONDATAW *n)
+{
+    zero(n, sizeof(*n)); n->cbSize = NOTIFYICONDATAW_V3_SIZE; n->hWnd = g_hwnd; n->uID = 1;     // the size every Windows since XP knows
+    return n;
+}
+
+// The temporary tray icon (and its notification) is taken away; harmless when there is none.
+static void alert_clear(void)
+{
+    NOTIFYICONDATAW n;
+    KillTimer(g_hwnd, TIMER_NOTIFY);
+    Shell_NotifyIconW(NIM_DELETE, tray_data(&n));
+}
+
+// The one way the wizard calls the user back: the wizard waits for a click after a long or background step (a job ended, the sign-in start after the restart).
+// The taskbar button flashes until the window is activated and Windows shows a notification (a temporary tray icon with a balloon / toast; it goes after 10 s,
+// when the window is activated, or at the end). Nothing when the wizard is in front already: the user is looking at it.
+static void alert_user(void)
+{
+    NOTIFYICONDATAW n; FLASHWINFO f; WCHAR t[80];
+    if (!g_hwnd || !IsWindow(g_hwnd) || GetForegroundWindow() == g_hwnd) return;
+    f.cbSize = sizeof(f); f.hwnd = g_hwnd; f.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG; f.uCount = 0; f.dwTimeout = 0;
+    FlashWindowEx(&f);
+    GetWindowTextW(H(ID_TITLE), t, 80);
+    alert_clear();
+    tray_data(&n);
+    n.uFlags = NIF_ICON | NIF_TIP | NIF_INFO;
+    n.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(10));
+    lstrcpyW(n.szTip, L"DynaRunFix"); lstrcpyW(n.szInfoTitle, L"DynaRunFix");
+    wsprintfW(n.szInfo, TX(S_NOTIFY_TEXT), t);
+    n.dwInfoFlags = NIIF_INFO;
+    if (Shell_NotifyIconW(NIM_ADD, &n)) SetTimer(g_hwnd, TIMER_NOTIFY, 10000, NULL);
+}
+
 // Image name (no path) of the process that owns window w; "" when it cannot be read.
 static const WCHAR *owner_name(HWND w, WCHAR *buf, DWORD n)
 {
@@ -372,20 +422,28 @@ static const WCHAR *owner_name(HWND w, WCHAR *buf, DWORD n)
     return name;
 }
 
-// While the elevated part installs: the UAC prompt and msiexec's progress window take the foreground,
-// and afterwards Windows may activate Explorer, which then covers the wizard. Keep the wizard just
-// behind msiexec's window, and above Explorer; other programs the user switches to are left alone.
+// While the elevated part installs (every 300 ms): the window of the install chain that has the foreground (the UAC prompt, msiexec's progress window, the
+// driver warning) stays frontmost and the wizard is put directly behind it, above everything else: not topmost, so the user can still switch to another
+// program. A foreground window of an unrelated program is left alone (the user chose it); that it is there is logged once per change, without saying whose it
+// is (another program's name is none of the log's business). Explorer, which Windows activates after the prompt and which would cover the wizard, is put
+// behind the wizard once per change. A change is also the user coming back to the wizard and leaving it again: `last` follows the foreground window on every
+// round, so an Explorer that covers the wizard after the user has been there is a change.
 static void keep_up(HWND h)
 {
-    static WCHAR b[MAX_PATH]; const WCHAR *n; HWND fg = GetForegroundWindow(); DWORD pid = 0;
+    static WCHAR b[MAX_PATH]; static HWND last;
+    const WCHAR *n; HWND fg = GetForegroundWindow(); DWORD pid = 0; BOOL changed = fg != last;
+    last = fg;
     if (!fg || fg == h || IsIconic(h)) return;
     GetWindowThreadProcessId(fg, &pid);
     if (pid == GetCurrentProcessId()) return;
     n = owner_name(fg, b, MAX_PATH);
-    if (!lstrcmpiW(n, L"msiexec.exe") || !lstrcmpiW(n, L"consent.exe"))
+    if (in_install_chain(n))
         SetWindowPos(h, fg, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     else if (!lstrcmpiW(n, L"explorer.exe")) {
+        if (!changed) return;
         SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    } else if (changed) {
+        user_log(L"install: an unrelated window has the foreground (not part of the install, left alone)");
     }
 }

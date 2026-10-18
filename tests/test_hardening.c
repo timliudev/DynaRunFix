@@ -845,13 +845,13 @@ static void test_run_elevated_args(void)
 //  - /unverified keeps its value only when exactly 64 characters long, otherwise the value is consumed and dropped (no error);
 //  - unknown arguments are ignored; the last /with-driver wins; a later /unverified with a bad length does not clear an earlier good one.
 // (/driver-prep takes its hash by the narrower rule daccept4, see test_driver.c.) The verb table is test_verb_table.
-static install_opts g_po; static BOOL g_pin_seen; static const WCHAR *g_dz, *g_da, *g_da4;
+static install_opts g_po; static BOOL g_pin_seen; static const WCHAR *g_dz, *g_da, *g_da4, *g_ms;
 static void parse_case(int argc, WCHAR **argv)
 {
     cmdline c;
     c.argc = argc; c.argv = argv;
     cmd_parse(&c);
-    g_po = c.opts; g_pin_seen = c.pin; g_dz = c.dzip; g_da = c.daccept; g_da4 = c.daccept4;
+    g_po = c.opts; g_pin_seen = c.pin; g_dz = c.dzip; g_da = c.daccept; g_da4 = c.daccept4; g_ms = c.msisha;
 }
 #define PARSE(...) do { WCHAR *av_[] = { __VA_ARGS__ }; parse_case((int)(sizeof(av_) / sizeof(av_[0])), av_); } while (0)
 static void test_parse_switches(void)
@@ -913,6 +913,77 @@ static void test_parse_switches(void)
     }
 }
 
+// /msi-sha256 <64 hex digits>: the SHA-256 the user saw on the check page, handed to the elevated stages that run Dyna Pro's MSI (/full, /msi-only).
+// Rules: from argv[4] on only, case-insensitive, takes the next argument as its value; the value is kept only when it is exactly 64 hexadecimal digits (else
+// consumed and dropped); the last valid one wins. The verb table marks the two verbs that need it (needs_msi_sha) and verb_run refuses them without it.
+static int verb_case(int argc, WCHAR **argv) { cmdline c; c.argc = argc; c.argv = argv; cmd_parse(&c); return verb_run(&c); }
+static int g_vrc;
+#define VERB(...) do { WCHAR *vv_[] = { __VA_ARGS__ }; g_vrc = verb_case((int)(sizeof(vv_) / sizeof(vv_[0])), vv_); } while (0)
+static void test_msi_sha(void)
+{
+    WCHAR h64[80], h63[80], h65[80], hup[80], hbad[80], hlast[80], p[MAX_PATH], hex[65]; int i;
+    lstrcpyW(h64, L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); lstrcpyW(h63, h64); h63[63] = 0;
+    lstrcpyW(h65, h64); lstrcatW(h65, L"0"); lstrcpyW(hup, L"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
+    lstrcpyW(hbad, h64); hbad[10] = L'g'; lstrcpyW(hlast, h64); hlast[0] = L'f';
+    // the validator
+    CHECK(hex64_ok(h64) && hex64_ok(hup), L"msi sha: 64 hexadecimal digits, either case");
+    CHECK(!hex64_ok(h63) && !hex64_ok(h65) && !hex64_ok(hbad) && !hex64_ok(L"") && !hex64_ok(NULL), L"msi sha: 63 or 65 characters, a non-hex digit, empty and NULL are refused");
+    { WCHAR sp[80]; lstrcpyW(sp, h64); sp[5] = L' '; CHECK(!hex64_ok(sp), L"msi sha: a blank inside is refused"); }
+    { WCHAR z[80]; lstrcpyW(z, h64); z[0] = L'\u0661'; CHECK(!hex64_ok(z), L"msi sha: a non-ASCII digit is refused"); }
+    // the command line
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", h64);
+    CHECK(g_ms == h64, L"msi sha: /msi-sha256 at argv[4] with 64 hex digits");
+    PARSE(L"s", L"/msi-only", L"S-1", L"m.msi", L"/MSI-SHA256", hup, L"/quiet");
+    CHECK(g_ms == hup && g_po.quiet, L"msi sha: case-insensitive switch and digits, the next switch still counts");
+    PARSE(L"s", L"/full", L"S-1", L"/msi-sha256", h64);
+    CHECK(!g_ms, L"msi sha: at argv[3] it is ignored (index >= 4 only)");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256");
+    CHECK(!g_ms, L"msi sha: without a value");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", h63);
+    CHECK(!g_ms, L"msi sha: 63 characters: dropped");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", h65);
+    CHECK(!g_ms, L"msi sha: 65 characters: dropped");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", hbad);
+    CHECK(!g_ms, L"msi sha: 64 characters with a non-hex digit: dropped");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", L"/quiet");
+    CHECK(!g_ms && !g_po.quiet, L"msi sha: ODDITY like /unverified, it swallows a following switch as its value, which is no hash");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", h64, L"/msi-sha256", hlast);
+    CHECK(g_ms == hlast, L"msi sha: the last valid value wins");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/msi-sha256", h64, L"/msi-sha256", h63);
+    CHECK(g_ms == h64, L"msi sha: a later invalid value does not clear an earlier valid one");
+    PARSE(L"s", L"/full", L"S-1", L"m.msi", L"/with-driver", L"z.zip", L"/unverified", h63, L"/msi-sha256", h64);
+    CHECK(g_ms == h64 && g_dz && !g_da, L"msi sha: independent of /with-driver and /unverified");
+    PARSE(L"s", L"/machine", L"S-1", L"e");
+    CHECK(!g_ms, L"msi sha: none given: NULL");
+    // the verb table: the verbs that run Dyna Pro's MSI need it, and are refused (RC_FAIL, nothing run) without a valid one
+    { WCHAR *f4[] = { L"s", L"/full", L"S-1", L"m" }, *i4[] = { L"s", L"/msi-only", L"S-1", L"m" }, *m4[] = { L"s", L"/machine", L"S-1", L"e" }, *d2[] = { L"s", L"/driver-prep" };
+      CHECK(verb_find(4, f4) && verb_find(4, f4)->needs_msi_sha && verb_find(4, i4) && verb_find(4, i4)->needs_msi_sha, L"msi sha: /full and /msi-only are marked needs_msi_sha in the verb table");
+      CHECK(verb_find(4, m4) && !verb_find(4, m4)->needs_msi_sha && verb_find(2, d2) && !verb_find(2, d2)->needs_msi_sha, L"msi sha: /machine and the driver verbs are not"); }
+    VERB(L"s", L"/full", L"S-1", L"m.msi");
+    CHECK(g_vrc == RC_FAIL, L"msi sha: /full without /msi-sha256 is refused");
+    VERB(L"s", L"/msi-only", L"S-1", L"m.msi");
+    CHECK(g_vrc == RC_FAIL, L"msi sha: /msi-only without /msi-sha256 is refused");
+    VERB(L"s", L"/FULL", L"S-1", L"m.msi", L"/msi-sha256", h63);
+    CHECK(g_vrc == RC_FAIL, L"msi sha: /full with a 63 character value is refused");
+    VERB(L"s", L"/msi-only", L"S-1", L"m.msi", L"/msi-sha256", hbad);
+    CHECK(g_vrc == RC_FAIL, L"msi sha: /msi-only with a non-hex value is refused");
+    VERB(L"s", L"/full", L"S-1", L"/msi-sha256", h64);
+    CHECK(g_vrc == RC_FAIL, L"msi sha: a hash at argv[3] (where the MSI path belongs) does not count: refused");
+    VERB(L"s", L"/full", L"S-1");
+    CHECK(g_vrc == DRV_NOVERB, L"msi sha: /full with too few arguments is still no verb at all"); 
+    // the staged copy must be the file that was shown: its SHA-256 is compared with the value (any case)
+    wsprintfW(p, L"%s\\sha1.msi", g_base); mkfile(g_base, L"sha1.msi", "pretend this is an MSI");
+    CHECK(pkg_sha256(p, hex, NULL) && lstrlenW(hex) == 64, L"msi sha: the test file has a SHA-256");
+    CHECK(staged_is_shown(p, hex), L"msi sha: a staged copy with the shown hash is accepted");
+    { WCHAR up[80]; lstrcpyW(up, hex); for (i = 0; up[i]; i++) if (up[i] >= L'a' && up[i] <= L'f') up[i] = (WCHAR)(up[i] - 32); CHECK(staged_is_shown(p, up), L"msi sha: the hash is compared without regard to case"); }
+    CHECK(!staged_is_shown(p, h64), L"msi sha: another hash is refused");
+    CHECK(!staged_is_shown(p, NULL) && !staged_is_shown(p, L"") && !staged_is_shown(p, h63), L"msi sha: no hash, an empty one or a short one is refused");
+    mkfile(g_base, L"sha1.msi", "pretend this is an MSI, replaced");
+    CHECK(!staged_is_shown(p, hex), L"msi sha: a file changed after the check page no longer matches");
+    wsprintfW(p, L"%s\\sha-missing.msi", g_base);
+    CHECK(!staged_is_shown(p, hex), L"msi sha: a file that does not exist is refused");
+}
+
 // The verb table: argv[1] (any case, exact) and enough arguments. With too few arguments /machine and /full are no verb at all (the wizard or a /quiet
 // install runs instead), the elevated driver verbs and the others are taken with the verb alone. Only the lookup is called, nothing is run.
 static void test_verb_table(void)
@@ -923,6 +994,8 @@ static void test_verb_table(void)
     WCHAR *n1[] = { L"s" }; WCHAR *q2[] = { L"s", L"/quiet" }; WCHAR *p2[] = { L"s", L"driver" }; WCHAR *o2[] = { L"s", L"/offer" };
     CHECK(verb_find(3, m3) == NULL && verb_find(4, m4) != NULL, L"verbs: /machine needs argc >= 4");
     CHECK(verb_find(3, f3) == NULL && verb_find(4, f4) != NULL, L"verbs: /full needs argc >= 4");
+    { WCHAR *i3[] = { L"s", L"/msi-only", L"S-1" }; WCHAR *i4[] = { L"s", L"/MSI-ONLY", L"S-1", L"m" };
+      CHECK(verb_find(3, i3) == NULL && verb_find(4, i4) != NULL, L"verbs: /msi-only needs argc >= 4"); }
     CHECK(verb_find(2, u2) != NULL && verb_find(2, d2) != NULL && verb_find(2, o2) != NULL, L"verbs: /unmachine, /driver-prep, /offer need the verb only");
     CHECK(verb_find(2, x2) == NULL && verb_find(2, q2) == NULL && verb_find(2, p2) == NULL && verb_find(1, n1) == NULL, L"verbs: exact match only, no verb without argv[1]");
 }
@@ -1010,6 +1083,7 @@ int wmain(void)
     wprintf(L"[run_elevated arguments]\n"); test_run_elevated_args();
     wprintf(L"[command line switches]\n"); test_parse_switches();
     wprintf(L"[verb table]\n"); test_verb_table();
+    wprintf(L"[msi sha-256]\n"); test_msi_sha();
     wprintf(L"[shortcut folder lengths]\n"); test_sf_fit();
     wprintf(L"[result codes]\n"); test_result_codes();
     {   // clean up

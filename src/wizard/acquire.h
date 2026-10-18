@@ -77,14 +77,41 @@ static void enter_extract(void)
     buttons(NULL, TX(S_CANCEL), NULL);
 }
 
+// The notice for a setup whose version is not the tested one (not an error: the install goes on). VER_TESTED, and VER_V4PLUS (which has its own page), say nothing.
+static void ver_notice(void)
+{
+    static WCHAR t[700];
+    if (wz.verclass == VER_UNKNOWN) status(TX(S_VER_UNKNOWN_NOTICE), FALSE);
+    else if (wz.verclass == VER_UNTESTED) { wsprintfW(t, TX(S_VER_UNTESTED_NOTICE), wz.ver, DYNARUN_TESTED_VERSION); status(t, FALSE); }
+}
+
 static void enter_check(void)   // everything we know about the setup file, to compare with what Dyna Pro gives
 {
+    WCHAR *b = pgbuf;
     text(ID_TITLE, TX(S_CHECK_THE_INSTALLER));
-    text(ID_BODY, TX(S_COMPARE_THIS_WITH_WHAT_DYNA));
+    lstrcpyW(b, TX(S_COMPARE_THIS_WITH_WHAT_DYNA));
+    if (wz.pkg_found) lstrcatW(b, TX(S_FOUND_LOCAL_HINT));      // a copy found on this computer: the way to the website's file is offered
+    text(ID_BODY, b);
     SetWindowTextW(H(ID_INFO), wz.info);
     vis(ID_INFO, TRUE);
-    buttons(TX(S_NEXT), TX(S_CANCEL), TX(S_OPEN_WEBSITE));
+    buttons4(TX(S_NEXT), TX(S_CANCEL), wz.pkg_found ? TX(S_DOWNLOAD_INSTEAD) : NULL, TX(S_OPEN_WEBSITE));
     if (wz.note[0]) status(wz.note, TRUE);
+    else ver_notice();
+}
+
+// DynaRun V4 or later: the fix was never tested with it and V4 may not need it. Laid out like the license page: the check box where the accept box is, the
+// buttons "Install the fix anyway" (needs the box), "Install original software only", "Cancel".
+static void enter_ver4(void)
+{
+    WCHAR *b = pgbuf;
+    text(ID_TITLE, TX(S_V4_TITLE));
+    wsprintfW(b, TX(S_V4_BODY), wz.ver, DYNARUN_TESTED_VERSION);
+    text(ID_BODY, b);
+    SetWindowTextW(H(ID_CHECK), TX(S_V4_CHECK));
+    vis(ID_CHECK, TRUE);
+    buttons4(TX(S_V4_INSTALL_FIX), TX(S_V4_ORIGINAL_ONLY), TX(S_CANCEL), NULL);
+    EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    SetFocus(H(ID_CHECK));
 }
 
 static void enter_license(void)
@@ -101,6 +128,7 @@ static void enter_license(void)
     EnableWindow(H(ID_PRIMARY), SendMessageW(H(ID_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
     SetFocus(H(ID_CHECK));                       // the disabled "Install" button cannot hold the keyboard focus
     if (wz.note[0]) status(wz.note, TRUE);
+    else ver_notice();
 }
 
 // The progress callback of the worker (the downloads, the extraction, the driver check). It only posts; the percentage it compares with is the worker's own
@@ -201,20 +229,25 @@ static void fmt_size(WCHAR *o, ULONGLONG n)
     wsprintfW(o, TX(S_BYTES_MB), v, v / 1048576, v % 1048576 / 104858);
 }
 
-// Shown on the license page so the user can compare with what Dyna Pro provides. Display only: nothing here blocks the install.
+// Shown on the check page so the user can compare with what Dyna Pro provides. Display only: nothing here blocks the install. The identity of the setup comes
+// first (where it is from, the MSI's ProductVersion and Manufacturer), then the file: path, size, SHA-256 (and the same of the Setup.msi inside a zip).
+// The SHA-256 of the MSI that will be installed (the file itself, or the Setup.msi inside the zip) is kept in wz.msi_hex and handed to the elevated stage.
 static void build_info(void)
 {
     WCHAR hex[65], hex2[65], ver[64], mfr[128], sz[80]; ULONGLONG size = 0, size2 = 0; BOOL same = !lstrcmpiW(wz.pkg, wz.msi), okp, okm = FALSE;
     HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
     okp = pkg_sha256(wz.pkg, hex, &size);
     if (!same) okm = pkg_sha256(wz.msi, hex2, &size2);
-    msi_info(wz.msi, ver, mfr, 64);
+    msi_info(wz.msi, ver, ARRAYSIZE(ver), mfr, ARRAYSIZE(mfr));
     SetCursor(old);
+    lstrcpyW(wz.msi_hex, same ? (okp ? hex : L"") : (okm ? hex2 : L""));        // the hash of the file that is going to be installed: what the elevated stage is held to
     wz.info[0] = 0;
-    lstrcatW(wz.info, TX(S_SOURCE)); 
+    lstrcatW(wz.info, TX(S_SOURCE));
     lstrcatW(wz.info, wz.pkg_ours ? TX(S_DOWNLOADED_NOW_FROM_DYNAPRO_CO)
                      : wz.pkg_found ? TX(S_FOUND_ON_THIS_COMPUTER_NOT)
                      : TX(S_CHOSEN_BY_YOU));
+    lstrcatW(wz.info, TX(S_PRODUCT_VERSION)); lstrcatW(wz.info, ver[0] ? ver : L"?");
+    lstrcatW(wz.info, TX(S_MANUFACTURER)); lstrcatW(wz.info, mfr[0] ? mfr : L"?");
     lstrcatW(wz.info, TX(S_FILE)); lstrcatW(wz.info, wz.pkg);
     fmt_size(sz, size);
     lstrcatW(wz.info, TX(S_SIZE)); lstrcatW(wz.info, sz);
@@ -224,13 +257,15 @@ static void build_info(void)
         lstrcatW(wz.info, TX(S_SETUP_MSI_INSIDE_THE_FILE)); lstrcatW(wz.info, sz);
         lstrcatW(wz.info, L"\r\nSHA-256:\r\n"); lstrcatW(wz.info, okm ? hex2 : L"?");
     }
-    lstrcatW(wz.info, L"\r\n\r\nMSI ProductVersion:  "); lstrcatW(wz.info, ver[0] ? ver : L"?");
-    lstrcatW(wz.info, L"\r\nManufacturer:  "); lstrcatW(wz.info, mfr[0] ? mfr : L"?");
 }
 
 static void after_extract(void)
 {
-    if (msi_check(wz.msi, wz.ver, 64) != MSI_DYNARUN) { not_dynarun(); return; }
+    WCHAR l[160];
+    if (msi_check(wz.msi, wz.ver, ARRAYSIZE(wz.ver)) != MSI_DYNARUN) { not_dynarun(); return; }
+    wz.verclass = dynarun_ver_class(wz.ver);                 // the version gate: the check page notices, the V4 page, the license page follow from it
+    if (wz.flow == FLOW_MSI_ONLY) wz.flow = FLOW_MAIN;       // a new package is a new decision
+    wsprintfW(l, L"setup version %s: class %d (0 unreadable, 1 tested, 2 other, 3 V4 or later)", wz.ver[0] ? wz.ver : L"?", wz.verclass); user_log(l);
     release(wz.rtf);
     wz.rtf = msi_license_rtf(wz.msi);
     wz.nolicense = !wz.rtf;
@@ -242,7 +277,6 @@ static void after_extract(void)
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
     } else                                       // never install without the user accepting Dyna Pro's terms
         SetWindowTextW(H(ID_RICH), TX(S_DYNARUN_V3_IS_LICENSED_TO));
-    SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
     set_page(P_CHECK);
 }
 
@@ -359,7 +393,7 @@ static void jd_extract(int job, int rc)
     (void)job;
     if (rc == PK_OK) { after_extract(); return; }
     drop_msi();                                      // a failed or cancelled extraction leaves no decrypted copy
-    if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); return; }
+    if (rc == PK_CANCEL) { end_wizard(); return; }
     if (wz.pkg_found && rc == PK_FORMAT) {            // a copy found on this computer that is damaged (not a usable zip): not offered again; a password or disk problem keeps its own page
         WCHAR nm[100];
         lstrcpynW(nm, file_name(wz.pkg), 100);
@@ -386,8 +420,30 @@ static void pri_password(void)
     start_job(JOB_EXTRACT, P_EXTRACT);
 }
 
-static void pri_check(void) { set_page(P_LICENSE); }
-static void pri_license(void) { go_install(JOB_INSTALL_ALL); }
+static void pri_check(void) { set_page(wz.verclass == VER_V4PLUS ? P_VER4 : P_LICENSE); }
+
+// The V4 page: "Install the fix anyway" goes on to the license as for any version; "Install original software only" does too, but the install is Dyna Pro's MSI alone
+// (FLOW_MSI_ONLY: no fix, no shortcuts, no pin, no sign-in start, no USB driver: the driver step belongs to the fix and was made for V3's unsigned FTDI driver).
+static void pri_ver4(void) { set_page(P_LICENSE); }
+static void sec_ver4(BOOL button)
+{
+    if (!button) { on_close(); return; }                    // Esc
+    user_log(L"V4 or later: the user chose to install only Dyna Pro's original software");
+    wz.flow = FLOW_MSI_ONLY; wz.drv = FALSE; wz.opts.autostart_later = FALSE;
+    set_page(P_LICENSE);
+}
+
+// "Download it" on the check page of a copy found on this computer: the same acquire flow, but the download (nothing found here is taken). The user's own file is not touched.
+static void thr_check(void)
+{
+    if (!wz.pkg_found) return;
+    user_log(L"the user chose the download from the Dyna Pro website instead of the copy found on this computer");
+    drop_msi();                                              // our decrypted copy of it, if it was a zip
+    wz.pkg_found = FALSE; wz.acq_fresh = TRUE;
+    acq_start(&ACQ_SETUP);
+}
+
+static void pri_license(void) { go_install(FLOWS[wz.flow].license_job); }     // the install job of the flow (FLOWS[], wizard.c)
 
 static void pri_fetch(void)                                                               // "Pause" / "Resume"
 {

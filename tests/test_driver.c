@@ -780,6 +780,82 @@ static void *read_wizard(DWORD *n)
     return all;
 }
 
+// The definition of the function that starts with `sig` (a declaration, which has a ';' after the signature, is skipped): *end is its closing brace in
+// column 0, or the end of the line for a one-line function. NULL when there is none. (The sources have LF or CRLF line ends, depending on the checkout.)
+static char *fn_body(char *t, const char *sig, char **end)
+{
+    char *a = t; size_t n = strlen(sig);
+    while ((a = strstr(a, sig)) != NULL) {
+        char *q = a + n, *le;
+        while (*q == ' ') q++;
+        if (*q == '\r' || *q == '\n' || *q == '{' || *q == '/') {      // the end of the line, the body, or a comment after the signature
+            le = strchr(a, '\n');
+            *end = le && memchr(a, '{', (size_t)(le - a)) ? le : strstr(a, "\n}");
+            return *end ? a : NULL;
+        }
+        a += n;
+    }
+    *end = NULL;
+    return NULL;
+}
+static BOOL in_range(char *a, char *end, const char *s) { char *p = a ? strstr(a, s) : NULL; return p && p < end; }
+static int count_in(char *a, char *end, const char *s) { int n = 0; char *p = a; while (a && (p = strstr(p, s)) != NULL && p < end) { n++; p += lstrlenA(s); } return n; }
+
+// Source guards for the wizard's behaviour that only a window can show (the VM checklist covers the window itself).
+static void test_wizard_rules(char *t)
+{
+    char *a, *end, *e2;
+    // 1. the accept box is shared by the V4 page and the license page: every page starts with it unticked, so a license is never pre-accepted
+    a = fn_body(t, "static void set_page(int p)", &end);
+    CHECK(a && in_range(a, end, "BM_SETCHECK, BST_UNCHECKED") && strstr(a, "BM_SETCHECK, BST_UNCHECKED") < strstr(a, "PAGES[p].enter()"), L"wizard: set_page unticks the accept box before any page is built");
+    a = fn_body(t, "static void enter_ver4(void)", &end);
+    CHECK(a && !in_range(a, end, "BM_SETCHECK, BST_CHECKED"), L"wizard: the V4 page does not tick the box");
+    a = fn_body(t, "static void enter_license(void)", &end);
+    CHECK(a && !in_range(a, end, "BM_SETCHECK, BST_CHECKED"), L"wizard: the license page does not tick the box");
+    // 2. FLOW_MSI_ONLY ends on its own page whose primary button only ends the wizard (it used to be Done's "Close", which started DynaRun)
+    a = strstr(t, "[P_MSI_DONE]"); end = a ? strchr(a, '\n') : NULL;
+    CHECK(a && end && in_range(a, end, "enter_msi_done") && in_range(a, end, "end_wizard") && !in_range(a, end, "pri_done"), L"wizard: the MSI-only finish page's primary button just ends the wizard");
+    a = strstr(t, "[P_DONE]"); end = a ? strchr(a, '\n') : NULL;
+    CHECK(a && end && in_range(a, end, "enter_done") && in_range(a, end, "pri_done"), L"wizard: the normal Done page still starts DynaRun");
+    a = fn_body(t, "static void pri_done(void)", &end);
+    CHECK(a && in_range(a, end, "start_dynarun()"), L"wizard: pri_done starts DynaRun");
+    a = fn_body(t, "static void enter_done(void)", &end);
+    CHECK(a && !in_range(a, end, "FLOW_MSI_ONLY"), L"wizard: the Done page has no MSI-only branch (the flow table picks the page)");
+    a = strstr(t, "[FLOW_MSI_ONLY]"); end = a ? strchr(a, '\n') : NULL;
+    CHECK(a && end && in_range(a, end, "JOB_INSTALL_MSI") && in_range(a, end, "P_MSI_DONE"), L"wizard: FLOWS[] gives FLOW_MSI_ONLY its install job and its finish page");
+    a = fn_body(t, "static void jd_install(int job, int rc)", &end);
+    CHECK(a && in_range(a, end, "FLOWS[wz.flow].done_page") && !in_range(a, end, "set_page(P_DONE)"), L"wizard: the page after an install comes from FLOWS[]");
+    a = fn_body(t, "static void pri_license(void)", &end);
+    CHECK(a && end && in_range(a, end, "FLOWS[wz.flow].license_job") && !in_range(a, end, "FLOW_MSI_ONLY"), L"wizard: the license page's install job comes from FLOWS[]");
+    // 3. the foreground rule: keep_up follows the foreground window before it looks at whether the wizard has it, and says nothing about other programs
+    a = fn_body(t, "static void keep_up(HWND h)", &end);
+    CHECK(a && in_range(a, end, "last = fg;") && strstr(a, "last = fg;") < strstr(a, "fg == h"), L"wizard: keep_up updates `last` before the early return for the wizard's own window");
+    CHECK(a && !in_range(a, end, "belongs to") && !in_range(a, end, "%s") && !in_range(a, end, "wsprintfW"), L"wizard: keep_up logs no other program's name");
+    CHECK(a && in_range(a, end, "an unrelated window has the foreground"), L"wizard: keep_up logs a generic line for an unrelated foreground window");
+    // 4. the alert: only when the wizard is waiting for a click after the job's own handler has run
+    a = fn_body(t, "static void job_done(int job, int rc)", &end);
+    e2 = a ? strstr(a, "JOBS[job].on_done") : NULL;
+    CHECK(a && e2 && in_range(a, end, "waiting_for_user()") && strstr(a, "waiting_for_user()") > e2 && in_range(a, end, "alert_user()"), L"wizard: job_done alerts only if waiting_for_user() after on_done ran");
+    a = fn_body(t, "static BOOL waiting_for_user(void)", &end);
+    CHECK(a && in_range(a, end, "!wz.busy") && in_range(a, end, "!wz.closing") && in_range(a, end, "IsWindow(g_hwnd)") && in_range(a, end, "P_DRV_REBOOT"), L"wizard: waiting_for_user: no job running, not closing, not the automatic restart");
+    // 5. the tray icon goes on every way out: the window ends in one place, which clears it first
+    a = fn_body(t, "static void end_wizard(void)", &end);
+    CHECK(a && end && in_range(a, end, "alert_clear()") && in_range(a, end, "DestroyWindow(g_hwnd)") && strstr(a, "alert_clear()") < strstr(a, "DestroyWindow(g_hwnd)"), L"wizard: end_wizard clears the tray icon, then destroys the window");
+    CHECK(count_in(t, t + lstrlenA(t), "DestroyWindow(g_hwnd)") == 1, L"wizard: DestroyWindow(g_hwnd) is called in end_wizard only");
+    a = strstr(t, "case WM_DESTROY:"); end = a ? strchr(a, '\n') : NULL;
+    CHECK(a && end && in_range(a, end, "alert_clear()"), L"wizard: WM_DESTROY clears the tray icon too");
+    // 6. the MSI's SHA-256 shown on the check page is what the elevated stage is held to
+    a = fn_body(t, "static void build_info(void)", &end);
+    CHECK(a && in_range(a, end, "wz.msi_hex") && in_range(a, end, "msi_info(wz.msi, ver, ARRAYSIZE(ver), mfr, ARRAYSIZE(mfr))"), L"wizard: build_info keeps the shown SHA-256 in wz.msi_hex and passes the real buffer sizes to msi_info");
+    CHECK(strstr(t, "install_msi_only(&g_in.opts, g_in.msi, g_in.msi_hex)") && strstr(t, "g_in.msi, g_in.msi_hex, g_in.drvzip") && strstr(t, "install_all(&g_in.opts, &g_out.instres, g_in.msi, g_in.msi_hex)"), L"wizard: the install jobs hand the shown SHA-256 to the elevated stage");
+    CHECK(strstr(t, "CopyMemory(g_in.msi_hex, wz.msi_hex"), L"wizard: the job gets its own copy of the shown SHA-256");
+    // 7. table instead of aliases
+    CHECK(!strstr(t, "thr_cancel"), L"wizard: no thr_cancel alias (the V4 page's third button is on_close)");
+    a = strstr(t, "[P_VER4]"); end = a ? strchr(a, '\n') : NULL;
+    CHECK(a && end && in_range(a, end, "sec_ver4") && in_range(a, end, "on_close"), L"wizard: the V4 page's Cancel is on_close in the table");
+    CHECK(strstr(t, "Set by sec_ver4 (the V4 page)") != NULL && strstr(t, "skip_driver, sec_ver4") != NULL, L"wizard: the flow comment names sec_ver4 as where FLOW_MSI_ONLY is set");
+}
+
 static void test_job_table(void)
 {
     char *t, *a, *end, *c, *next; DWORD n = 0; BYTE *f = (BYTE *)read_wizard(&n); int jobs = 0, rows = 0;
@@ -829,6 +905,16 @@ static void test_job_table(void)
     CHECK(a && end && c < end, L"job_done takes back the \"close DynaRun\" consent of the job that has ended");
     for (c = t, jobs = 0; (c = strstr(c, "wz.opts.close = TRUE")) != NULL; c += 20) jobs++;
     CHECK(jobs == 1 && strstr(t, "wz.opts.close = TRUE; wz.close_asked = TRUE"), L"the wizard sets wz.opts.close only together with wz.close_asked");
+    // the check page's details start with the identity of the setup (source, MSI version, manufacturer), then the file (path, size, SHA-256)
+    a = strstr(t, "static void build_info(void)"); end = a ? strstr(a + 10, "\nstatic ") : NULL;
+    if (a && end) {
+        char *p1 = strstr(a, "TX(S_SOURCE)"), *p2 = strstr(a, "TX(S_PRODUCT_VERSION)"), *p3 = strstr(a, "TX(S_MANUFACTURER)"), *p4 = strstr(a, "TX(S_FILE)"), *p5 = strstr(a, "TX(S_SIZE)"), *p6 = strstr(a, "SHA-256");
+        CHECK(p1 && p2 && p3 && p4 && p5 && p6 && p6 < end, L"build_info writes all of the lines");
+        CHECK(p1 && p2 && p3 && p4 && p5 && p6 && p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5 && p5 < p6, L"build_info: source, ProductVersion and Manufacturer come before path, size and SHA-256");
+    } else CHECK(FALSE, L"build_info is in the wizard source");
+    // the version gate has one constant for the tested version and one function that classifies
+    CHECK(strstr(t, "dynarun_ver_class(wz.ver)") != NULL && strstr(t, "3.26.0\"") == NULL, L"the wizard classifies with dynarun_ver_class and has no copy of the tested version");
+    test_wizard_rules(t);
     release(f);
 }
 
@@ -890,6 +976,36 @@ static void test_hint(void)
     CHECK(ver_compare(L"3.26.0", L"3.25.9") > 0 && ver_compare(L"3.25.9", L"3.26.0") < 0 && ver_compare(L"3.26.0", L"3.26.0") == 0, L"version compare: ordinary cases");
     CHECK(ver_compare(L"3.26", L"3.26.0") == 0 && ver_compare(L"3.26.1", L"3.26.0") > 0 && ver_compare(L"10.0.0", L"9.9.9") > 0 && ver_compare(L"3.26.0.1", L"3.26.0") > 0, L"version compare: missing parts, numbers not text, four parts");
     CHECK(ver_compare(L"abc", L"3.26.0") == 0 && ver_compare(L"3.26.0", L"") == 0 && ver_compare(L"", L"") == 0, L"version compare: what is not a version says nothing");
+    // the class of an MSI ProductVersion (the wizard's version gate)
+    CHECK(dynarun_ver_class(L"3.26.0") == VER_TESTED && dynarun_ver_class(L"3.26") == VER_TESTED, L"version class: the tested version (a missing part counts as 0)");
+    CHECK(dynarun_ver_class(L"3.25.0") == VER_UNTESTED && dynarun_ver_class(L"3.25.9") == VER_UNTESTED && dynarun_ver_class(L"3.27.0") == VER_UNTESTED
+          && dynarun_ver_class(L"3.26.1") == VER_UNTESTED && dynarun_ver_class(L"3.26.0.1") == VER_UNTESTED && dynarun_ver_class(L"3.9.9") == VER_UNTESTED, L"version class: another 3.x is untested");
+    CHECK(dynarun_ver_class(L"4.0.0") == VER_V4PLUS && dynarun_ver_class(L"4") == VER_V4PLUS && dynarun_ver_class(L"10.1.2") == VER_V4PLUS && dynarun_ver_class(L"4.0.0.0") == VER_V4PLUS, L"version class: 4 and later (numbers, not text: 10 > 4)");
+    CHECK(dynarun_ver_class(L"2.9.9") == VER_UNTESTED && dynarun_ver_class(L"0.0.1") == VER_UNTESTED, L"version class: below 3 is untested too");
+    CHECK(dynarun_ver_class(L"") == VER_UNKNOWN && dynarun_ver_class(L"abc") == VER_UNKNOWN && dynarun_ver_class(L"v4.0.0") == VER_UNKNOWN && dynarun_ver_class(L".") == VER_UNKNOWN
+          && dynarun_ver_class(L" 3.26.0") == VER_UNKNOWN && dynarun_ver_class(NULL) == VER_UNKNOWN, L"version class: not a version is unknown");
+    CHECK(dynarun_ver_class(L"3.26.0 beta") == VER_TESTED && dynarun_ver_class(L"4.0.0-rc1") == VER_V4PLUS, L"version class: a suffix after the numbers does not matter");
+    CHECK(dynarun_ver_class(L"4.0.0.0.5") == VER_V4PLUS && dynarun_ver_class(L"1.2.3.4.5.6.7") == VER_UNTESTED && dynarun_ver_class(L"5.1.2.3.4.5") == VER_V4PLUS, L"version class: more than four parts: the first four decide, nothing overruns");
+    CHECK(dynarun_ver_class(L"99999999999999999999") == VER_V4PLUS && dynarun_ver_class(L"3.99999999999999999999.1") == VER_UNTESTED && dynarun_ver_class(L"3.26.4294967295") == VER_UNTESTED
+          && dynarun_ver_class(L"4294967296.0") == VER_V4PLUS, L"version class: a huge part does not wrap around (it stays huge)");
+    CHECK(dynarun_ver_class(L"0004.0.0") == VER_V4PLUS && dynarun_ver_class(L"03.026.000") == VER_TESTED, L"version class: leading zeros are numbers");
+    CHECK(dynarun_ver_class(L"3..26") == VER_UNTESTED && dynarun_ver_class(L"3.") == VER_UNTESTED && dynarun_ver_class(L"4.") == VER_V4PLUS && dynarun_ver_class(L".4.0.0") == VER_UNKNOWN, L"version class: a dot without a digit ends the version");
+    CHECK(ver_compare(L"3.26.0.0.7", L"3.26.0.0.2") == 0 && ver_compare(L"3.26.0.1.0", L"3.26.0") > 0, L"version compare: only four parts are compared");
+    // the ANSI text of an MSI property as screen / log text (msi_text): always terminated, cut to the buffer, no control characters
+    { WCHAR o[8]; int i;
+      msi_text("3.26.0", o, 8); CHECK(!lstrcmpW(o, L"3.26.0"), L"msi text: a short value is copied");
+      { WCHAR c[16]; msi_text("a\r\nb\tc\x1f" "d", c, 16); CHECK(!lstrcmpW(c, L"a  b c d"), L"msi text: control characters become spaces"); }
+      msi_text("0123456789", o, 5); CHECK(!lstrcmpW(o, L"0123") && o[4] == 0, L"msi text: cut to the buffer, terminated");
+      msi_text("0123456", o, 8); CHECK(!lstrcmpW(o, L"0123456"), L"msi text: exactly fits with its terminator");
+      msi_text("01234567", o, 8); CHECK(!lstrcmpW(o, L"0123456") && o[7] == 0, L"msi text: one character too many: the last one is cut, still terminated");
+      msi_text("abc", o, 1); CHECK(o[0] == 0, L"msi text: a buffer of one character gets the empty string");
+      o[0] = L'x'; msi_text("abc", o, 0); CHECK(o[0] == L'x', L"msi text: no buffer, nothing is written");
+      msi_text(NULL, o, 8); CHECK(o[0] == 0, L"msi text: NULL gives the empty string");
+      msi_text("", o, 8); CHECK(o[0] == 0, L"msi text: an empty value");
+      for (i = 0; i < 8; i++) o[i] = L'Z';
+      msi_text("\x01\x02", o, 8); CHECK(!lstrcmpW(o, L"  ") && o[2] == 0, L"msi text: only control characters: spaces, terminated");
+      { char big[400]; WCHAR w[64]; for (i = 0; i < 399; i++) big[i] = (char)(i % 40 == 3 ? '\n' : 'x'); big[399] = 0;
+        msi_text(big, w, 64); CHECK(lstrlenW(w) == 63 && w[63] == 0 && !wcschr(w, L'\n'), L"msi text: a 399 character value in a 64 character buffer is cut and clean"); } }
     // the page
     CHECK(pkg_page_version(PAGE, (DWORD)strlen(PAGE), v, 40) && !lstrcmpW(v, L"3.26.0"), L"page: the version of the Dyna Run V3 Software row is found (not the manual, not the script)");
     { static const char P2[] = "<p>The latest release of Dyna Run V3 control software Version 3.27.1 has been released.</p><td>Dyna Pro USB Drivers 1.2MB</td>";

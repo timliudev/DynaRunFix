@@ -37,6 +37,8 @@ enum {
     S_DONE, S_EVERYTHING_IS_INSTALLED_FROM_NOW, S_DYNARUN_WILL_START_AUTOMATICALLY_WHEN, S_IF_DYNARUN_S_SCREEN_EVER, S_SOMETHING_WENT_WRONG,
     S_NOTHING_WAS_INSTALLED_WINDOWS_NEEDS_2, S_THE_INSTALLATION_DID_NOT_FINISH, S_LOOKING_FOR_ON_THIS_COMPUTER, S_CHECKING_THE_DRIVER,
     S_CHECKING_THE_DRIVER_2, S_DYNARUN_IS_CLOSED, S_DYNARUNFIX_SETUP,
+    S_PRODUCT_VERSION, S_MANUFACTURER, S_DOWNLOAD_INSTEAD, S_FOUND_LOCAL_HINT, S_VER_UNKNOWN_NOTICE, S_VER_UNTESTED_NOTICE, S_V4_TITLE, S_V4_BODY, S_V4_CHECK,
+    S_V4_INSTALL_FIX, S_V4_ORIGINAL_ONLY, S_MSI_DONE_TITLE, S_MSI_DONE_BODY, S_NOTIFY_TEXT,
     S_COUNT };
 
 typedef struct { const WCHAR *en, *zh; } ui_str;
@@ -125,8 +127,8 @@ static const ui_str UI_STR[S_COUNT] = {
                           L"你選擇的檔案" },
     [S_FILE] = { L"\r\n\r\nFile:\r\n",
                  L"\r\n\r\n檔案路徑：\r\n" },
-    [S_SIZE] = { L"\r\n\r\nSize:  ",
-                 L"\r\n\r\n大小：" },
+    [S_SIZE] = { L"\r\nSize:  ",
+                 L"\r\n大小：" },
     [S_SETUP_MSI_INSIDE_THE_FILE] = { L"\r\n\r\nSetup.msi inside the file, size:  ",
                                       L"\r\n\r\n檔案裡的 Setup.msi，大小：" },
     [S_DYNARUN_V3_IS_LICENSED_TO] = { L"DynaRun V3 is licensed to you by Dyna Pro Dynamometers Ltd under their end-user license agreement "
@@ -448,5 +450,45 @@ static const ui_str UI_STR[S_COUNT] = {
                               L"DynaRun 已關閉。" },
     [S_DYNARUNFIX_SETUP] = { L"DynaRunFix Setup %s",
                              L"DynaRunFix 安裝程式 %s" },
+    // the check page, the version gate (acquire.h), the alert (layout.h)
+    [S_PRODUCT_VERSION] = { L"\r\nMSI ProductVersion:  ",
+                            L"\r\nMSI 產品版本 (ProductVersion)：" },
+    [S_MANUFACTURER] = { L"\r\nManufacturer:  ",
+                         L"\r\n製造商 (Manufacturer)：" },
+    [S_DOWNLOAD_INSTEAD] = { L"Download it",
+                             L"改從官網下載" },
+    [S_FOUND_LOCAL_HINT] = { L"\n\nThis file was found on this computer. \"Download it\" gets a fresh copy from the Dyna Pro website instead.",
+                             L"\n\n這個檔案是在這台電腦上找到的。若想改用官網上的檔案，請按「改從官網下載」。" },
+    [S_VER_UNKNOWN_NOTICE] = { L"The version of this setup could not be read, so it is not known whether DynaRunFix fits it. The install goes on; if something does not work, "
+                               L"please report it at https://github.com/timliudev/DynaRunFix/issues",
+                               L"讀不到這個安裝檔的版本，所以不確定 DynaRunFix 是否適用。安裝會繼續；如果有狀況，請到 https://github.com/timliudev/DynaRunFix/issues 回報。" },
+    [S_VER_UNTESTED_NOTICE] = { L"This setup is version %s. DynaRunFix was tested only with %s: you can install it, but there may be additional problems. "
+                                L"If a test goes wrong, please open an issue on GitHub (https://github.com/timliudev/DynaRunFix/issues).",
+                                L"這個安裝檔的版本是 %s。只在 %s 測試過，可以安裝，但可能有額外問題；如果測試有狀況請到 GitHub 開 issue (https://github.com/timliudev/DynaRunFix/issues)。" },
+    [S_V4_TITLE] = { L"This is DynaRun V4 or later",
+                     L"這是 DynaRun V4（或更新版本）" },
+    [S_V4_BODY] = { L"This setup is version %s. DynaRunFix was made for DynaRun V3 (tested with %s), which is a Visual Basic 6 program. "
+                    L"V4 and later may be built for Windows 10/11 and may not need the fix at all.\n\n"
+                    L"We suggest: click \"Install original software only\" first and try Dyna Pro's software as it is. Only if it shows the old problems, "
+                    L"run this setup again and add the fix.\n\n"
+                    L"\"Install the fix anyway\" installs Dyna Pro's software and the fix; it was never tested with this version.",
+                    L"這個安裝檔的版本是 %s。DynaRunFix 是為 DynaRun V3（以 %s 測試）做的，V3 是 Visual Basic 6 程式；"
+                    L"V4 以後可能已改為支援 Windows 10/11 的程式，也許根本不需要這個修正。\n\n"
+                    L"建議：先按「僅安裝原版軟體」，直接試用 Dyna Pro 的軟體；只有出現舊的問題時，再執行本程式補裝修正。\n\n"
+                    L"「仍要安裝修正」會安裝 Dyna Pro 的軟體並加上修正，這個版本從未測試過。" },
+    [S_V4_CHECK] = { L"I &understand that DynaRunFix has not been tested with this version",
+                     L"我了解 DynaRunFix 未在此版本測試過(&U)" },
+    [S_V4_INSTALL_FIX] = { L"Install the fix anyway",
+                           L"仍要安裝修正" },
+    [S_V4_ORIGINAL_ONLY] = { L"Install original software only",
+                             L"僅安裝原版軟體" },
+    [S_MSI_DONE_TITLE] = { L"Dyna Pro's software is installed",
+                           L"原版軟體已安裝" },
+    [S_MSI_DONE_BODY] = { L"Only Dyna Pro's own software was installed. The fix, the shortcuts, the taskbar pin, the start at sign-in and the USB driver of DynaRunFix were not.\n\n"
+                          L"Start it from the Start menu and try it. If it shows the old problems, run this setup again: it then offers to install the fix.",
+                          L"只安裝了 Dyna Pro 的原版軟體，DynaRunFix 的修正、捷徑、工作列釘選、開機自動啟動與 USB 驅動程式都沒有安裝。\n\n"
+                          L"請從開始功能表啟動並試用；如果出現舊的問題，再執行一次本程式，它會提供安裝修正。" },
+    [S_NOTIFY_TEXT] = { L"Please come back to DynaRunFix Setup: %s",
+                        L"請回到 DynaRunFix 安裝程式：%s" },
 };
 #define TX(id) T(UI_STR[id].en, UI_STR[id].zh)
