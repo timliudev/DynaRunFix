@@ -33,8 +33,8 @@ Its installer can also set up DynaRun V3 and the Dyna Pro USB driver; it does no
 
 ## Use
 
-Start DynaRun with its usual **DynaRun V3** icon (the shortcuts now go through the fix). On the very first start Windows asks once more
-for permission for Dyna Pro's configuration helper: click **Yes**. Uninstall from *Programs and Features* / *Installed apps*; it asks
+Start DynaRun with its usual **DynaRun V3** icon (the shortcuts now go through the fix). Since v1.8.0 the very first start no longer asks
+for permission: Dyna Pro's configuration helper runs without elevation and DynaRun restarts by itself. Uninstall from *Programs and Features* / *Installed apps*; it asks
 whether to remove the fix only or DynaRun V3 too.
 
 ## More
@@ -75,7 +75,7 @@ MIT, see [LICENSE](https://github.com/timliudev/DynaRunFix/blob/main/LICENSE). T
 
 ### 使用
 
-照常點 **DynaRun V3** 圖示啟動(捷徑現在會經過修正)。第一次啟動時,Windows 會再問一次是否允許 Dyna Pro 的設定程式變更:按**是**。
+照常點 **DynaRun V3** 圖示啟動(捷徑現在會經過修正)。從 v1.8.0 起,第一次啟動不再詢問權限:Dyna Pro 的設定程式不提升權限執行,DynaRun 會自動重新啟動。
 解除安裝請用「程式和功能」/「已安裝的應用程式」;它會問只移除修正,還是連 DynaRun V3 一起移除。
 
 ### 更多
