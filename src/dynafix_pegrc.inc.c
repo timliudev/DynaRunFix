@@ -222,9 +222,11 @@ static void peg_check(void)
 }
 
 // The launcher starts DynaRun with "RunAsInvoker" appended to __COMPAT_LAYER (so that DynaRun itself never runs elevated). That
-// environment variable is inherited by DynaRun's own child processes, e.g. its first-start Setup helper, for which Windows would
-// otherwise ask for elevation; so here the word is taken out again (what was there before stays; the variable is removed when
-// nothing else is left). The launcher process itself (which loads this dll too) is left alone.
+// environment variable is inherited by DynaRun's own child processes; DynaRun is started that way only so that it never runs
+// elevated itself, and its other children should not silently lose a UAC prompt they need, so here the word is taken out again
+// (what was there before stays; the variable is removed when nothing else is left). The first-start Setup helper, the one child
+// that is wanted without elevation, gets the layer for its own start only (shexec_as_invoker in dynafix.c). The launcher process
+// itself (which loads this dll too) is left alone.
 // no CRT in this DLL: stop newer MSVC from turning the copy loops below into memcpy calls
 #pragma optimize("", off)
 static void clear_runasinvoker(void)

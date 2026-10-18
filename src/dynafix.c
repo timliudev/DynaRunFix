@@ -403,15 +403,38 @@ static BOOL is_setup_helper(const char *file)
     return setup_helper_match(file, dirs, 3);
 }
 
+typedef BOOL (WINAPI *sx_t)(SHELLEXECUTEINFOA *);
+
+// ShellExecuteExA for the setup helper WITHOUT elevation. Windows' installer detection (the file names say "Setup") would ask for administrator permission for
+// the helper, which only writes HKCU\Software\DynaPro (docs\FIRST_START.md). The layer "RunAsInvoker" in __COMPAT_LAYER makes Windows start it as the user
+// that runs DynaRun, as DynaRunFix's launcher does for DynaRun itself. The variable is set for the one call and put back at once (the child takes its
+// environment when it is created, inside the call); it is not left in DynaRun's environment, whose other child processes are not changed (see clear_runasinvoker).
+// The process environment is shared, so a program that DynaRun's other threads start in those few milliseconds would get the layer too; DynaRun starts nothing
+// else at that moment (it is waiting on the form's OK), and g_helper_busy keeps a second helper out.
+static BOOL shexec_as_invoker(sx_t sx, SHELLEXECUTEINFOA *se)
+{
+    char old[512], nw[560]; DWORD n, err; BOOL ok;
+    n = GetEnvironmentVariableA("__COMPAT_LAYER", old, sizeof(old));
+    if (n >= sizeof(old) || !df_compat_with_invoker(n ? old : NULL, nw, sizeof(nw))) {
+        logf("setup helper: __COMPAT_LAYER is too long to add RunAsInvoker, started the usual way %u %u %u\r\n", 0, 0, 0);
+        return sx(se);
+    }
+    SetEnvironmentVariableA("__COMPAT_LAYER", nw);
+    ok = sx(se); err = GetLastError();
+    SetEnvironmentVariableA("__COMPAT_LAYER", n ? old : NULL);
+    SetLastError(err);
+    if (ok) logf("setup helper started without elevation (RunAsInvoker) %u %u %u\r\n", 0, 0, 0);
+    return ok;
+}
+
 static LONG g_helper_busy;   // 1 while the setup helper is being waited for (the message loop below can bring a second request)
 
 static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR params, LPCSTR dir, INT show)
 {
     typedef HINSTANCE (WINAPI *se_t)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
-    typedef BOOL (WINAPI *sx_t)(SHELLEXECUTEINFOA *);
     int i;
     // First-time setup helper (System Data\Setup_<n>.exe): run it to the end with the message loop
-    // running, then restart DynaRun. A declined UAC prompt is reported to DynaRun as access denied.
+    // running, then restart DynaRun. It is started without elevation (shexec_as_invoker): no UAC prompt.
     // Only that exact file qualifies (see is_setup_helper); everything else goes straight to ShellExecuteA.
     if (is_setup_helper(file))
         do {
@@ -440,7 +463,7 @@ static HINSTANCE WINAPI H_ShellExecuteA(HWND w, LPCSTR verb, LPCSTR file, LPCSTR
             { volatile char *z = (volatile char *)&se; for (i = 0; i < (int)sizeof(se); i++) z[i] = 0; }
             se.cbSize = sizeof(se); se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC; se.hwnd = w;
             se.lpVerb = verb; se.lpFile = file; se.lpParameters = params; se.lpDirectory = dir; se.nShow = show;
-            if (!sx(&se)) { logf("setup helper %s did not start: error %u %u\r\n", (DWORD)(UINT_PTR)file, GetLastError(), 0); InterlockedExchange(&g_helper_busy, 0); return (HINSTANCE)(UINT_PTR)SE_ERR_ACCESSDENIED; }
+            if (!shexec_as_invoker(sx, &se)) { logf("setup helper %s did not start: error %u %u\r\n", (DWORD)(UINT_PTR)file, GetLastError(), 0); InterlockedExchange(&g_helper_busy, 0); return (HINSTANCE)(UINT_PTR)SE_ERR_ACCESSDENIED; }
             logf("setup helper %s started, waiting for it %u %u\r\n", (DWORD)(UINT_PTR)file, 0, 0);
             if (se.hProcess) {
                 while (!quit && MsgWaitForMultipleObjects(1, &se.hProcess, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)

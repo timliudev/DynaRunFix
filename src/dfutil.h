@@ -37,4 +37,36 @@ static int df_is_dynapro(const char *mod, DWORD n, DWORD size)
     return !lstrcmpiA(mod + n - 11, name);
 }
 
+// The value for __COMPAT_LAYER that makes a program started with it run as the invoking user (no UAC prompt, also for a program that Windows' installer
+// detection or a manifest would elevate): `old` (the current value, NULL or "" when the variable is not set) with the layer "RunAsInvoker" added as a word, not
+// again when it is there already (any case). Returns the length written to out (cch characters with the terminator), or 0 when it does not fit.
+// No CRT in dynafix.dll: stop newer MSVC from turning the copy loop into a memcpy call.
+#pragma optimize("", off)
+static int df_compat_with_invoker(const char *old, char *out, int cch)
+{
+    static const char add[] = "RunAsInvoker";
+    const char *p = old ? old : "", *q; int n = 0, i, has = 0;
+    for (q = p; *q; ) {
+        const char *e; int len;
+        while (*q == ' ') q++;
+        if (!*q) break;
+        for (e = q; *e && *e != ' '; e++);
+        len = (int)(e - q);
+        if (len == 12) {
+            int c, eq = 1;
+            for (c = 0; c < 12; c++) { char x = q[c], y = add[c]; if (x >= 'A' && x <= 'Z') x += 32; if (y >= 'A' && y <= 'Z') y += 32; if (x != y) eq = 0; }
+            if (eq) has = 1;
+        }
+        q = e;
+    }
+    for (i = 0; p[i]; i++) { if (n + 1 >= cch) return 0; out[n++] = p[i]; }
+    if (!has) {
+        if (n && out[n - 1] != ' ') { if (n + 1 >= cch) return 0; out[n++] = ' '; }
+        for (i = 0; add[i]; i++) { if (n + 1 >= cch) return 0; out[n++] = add[i]; }
+    }
+    out[n] = 0;
+    return n;
+}
+#pragma optimize("", on)
+
 #endif

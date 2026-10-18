@@ -63,6 +63,21 @@ int main(void)
     CHECK(!df_is_dynapro("C:\\x\\dynapro.dll", 16, 16), "path cut to the buffer size (n == size): not terminated, not matched");
     CHECK(!df_is_dynapro("xdynapro.dll", lstrlenA("xdynapro.dll"), 260), "bare xdynapro.dll");
     CHECK(df_is_dynapro("D:/tools/dynapro.dll", lstrlenA("D:/tools/dynapro.dll"), 260), "forward slash");
+    // __COMPAT_LAYER with RunAsInvoker added (the setup helper's start without elevation)
+    { char o[64]; int n;
+      n = df_compat_with_invoker(NULL, o, sizeof(o)); CHECK(n == 12 && !lstrcmpA(o, "RunAsInvoker"), "invoker: not set -> just the layer");
+      n = df_compat_with_invoker("", o, sizeof(o)); CHECK(n == 12 && !lstrcmpA(o, "RunAsInvoker"), "invoker: empty -> just the layer");
+      n = df_compat_with_invoker("WIN7RTM", o, sizeof(o)); CHECK(n == 20 && !lstrcmpA(o, "WIN7RTM RunAsInvoker"), "invoker: appended after the layers there");
+      n = df_compat_with_invoker("RunAsInvoker", o, sizeof(o)); CHECK(n == 12 && !lstrcmpA(o, "RunAsInvoker"), "invoker: already there, not added again");
+      n = df_compat_with_invoker("~ runasinvoker WIN7RTM", o, sizeof(o)); CHECK(n == (int)lstrlenA("~ runasinvoker WIN7RTM") && !lstrcmpA(o, "~ runasinvoker WIN7RTM"), "invoker: already there in any case, as a word");
+      n = df_compat_with_invoker("NotRunAsInvoker", o, sizeof(o)); CHECK(!lstrcmpA(o, "NotRunAsInvoker RunAsInvoker"), "invoker: a longer name that ends in it is another layer");
+      n = df_compat_with_invoker("RunAsInvokerX", o, sizeof(o)); CHECK(!lstrcmpA(o, "RunAsInvokerX RunAsInvoker"), "invoker: a longer name that starts with it is another layer");
+      n = df_compat_with_invoker("WIN7RTM ", o, sizeof(o)); CHECK(!lstrcmpA(o, "WIN7RTM RunAsInvoker"), "invoker: a trailing space gives no double space");
+      CHECK(df_compat_with_invoker(NULL, o, 12) == 0, "invoker: does not fit (no room for the terminator): 0");
+      CHECK(df_compat_with_invoker(NULL, o, 13) == 12 && !o[12], "invoker: fits exactly with the terminator");
+      CHECK(df_compat_with_invoker("WIN7RTM", o, 20) == 0, "invoker: the appended layer does not fit: 0");
+      CHECK(df_compat_with_invoker("WIN7RTM", o, 21) == 20, "invoker: the appended layer fits exactly");
+      CHECK(df_compat_with_invoker("0123456789012345678901234567890123456789012345678901234567890123456789", o, sizeof(o)) == 0, "invoker: the old value alone does not fit: 0"); }
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
