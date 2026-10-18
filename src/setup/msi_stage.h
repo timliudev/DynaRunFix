@@ -62,9 +62,18 @@ static BOOL stage_msi(const WCHAR *msi, WCHAR *dir, WCHAR *staged)
     return TRUE;
 }
 
+// Is the staged copy the file the user was shown? Its SHA-256 (the wizard's check page) must equal sha. The copy is in the administrators-only folder, so
+// nobody can change it between this check and msiexec; the user's own file (a folder they can write) could have been replaced after the check page.
+static BOOL staged_is_shown(const WCHAR *staged, const WCHAR *sha)
+{
+    WCHAR hex[65];
+    return hex64_ok(sha) && pkg_sha256(staged, hex, NULL) && !lstrcmpiW(hex, sha);
+}
+
 // Elevated: Dyna Pro's MSI alone (staged, checked, run), nothing of DynaRunFix. 0 when it is installed, else RC_* (the failure was reported to the user).
+// sha: the SHA-256 of the MSI as the wizard's check page showed it (64 hex digits); the staged copy must have it, else RC_MSI_FAILED and nothing is run.
 // what: names the stage in the log of still_running.
-static int msi_staged_run(const install_opts *o, const WCHAR *sid, const WCHAR *msi, const WCHAR *what)
+static int msi_staged_run(const install_opts *o, const WCHAR *sid, const WCHAR *msi, const WCHAR *sha, const WCHAR *what)
 {
     static WCHAR me[200], txt[300], dir[MAX_PATH], staged[MAX_PATH]; int rc;
     if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return RC_OVER_SHOULDER;
@@ -78,6 +87,12 @@ static int msi_staged_run(const install_opts *o, const WCHAR *sid, const WCHAR *
     if (msi_check(staged, NULL, 0) != MSI_DYNARUN) {            // the check of the copy that is going to be run
         drop_admin_dir(dir); stage_unlock();
         msg(TS(ST_THIS_IS_NOT_THE_DYNARUN), MB_ICONERROR);
+        return RC_MSI_FAILED;
+    }
+    if (!staged_is_shown(staged, sha)) {                        // not the file that was shown on the check page (or no hash was given)
+        user_log(L"the staged setup does not have the SHA-256 shown on the check page: not run");
+        drop_admin_dir(dir); stage_unlock();
+        msg(TS(ST_THE_DYNARUN_V3_SETUP_DIFFERS), MB_ICONERROR);
         return RC_MSI_FAILED;
     }
     rc = run_msiexec(staged);
@@ -94,12 +109,12 @@ static int msi_staged_run(const install_opts *o, const WCHAR *sid, const WCHAR *
     return 0;
 }
 
-static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *msi)
+static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *msi, const WCHAR *sha)
 {
-    int rc = msi_staged_run(o, sid, msi, L"full install");
+    int rc = msi_staged_run(o, sid, msi, sha, L"full install");
     if (rc) return rc;
     if (!locate_dynarun()) { msg(TS(ST_DYNARUN_V3_WAS_INSTALLED_BUT), MB_ICONERROR); return RC_NO_DYNARUN; }
     return machine_install(o, sid);
 }
 
-static int machine_msi_only(const install_opts *o, const WCHAR *sid, const WCHAR *msi) { return msi_staged_run(o, sid, msi, L"install of Dyna Pro's setup only"); }
+static int machine_msi_only(const install_opts *o, const WCHAR *sid, const WCHAR *msi, const WCHAR *sha) { return msi_staged_run(o, sid, msi, sha, L"install of Dyna Pro's setup only"); }

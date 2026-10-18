@@ -54,7 +54,7 @@ int pkg_extract_checked(const zipent *e, const char *pw, const WCHAR *out, DWORD
 BOOL zip_password_plausible(const zipent *e, const char *pw);
 int zip_extract(const zipent *e, const char *pw, const WCHAR *out, progress_fn cb, volatile LONG *cancel);
 BOOL pkg_sha256(const WCHAR *path, WCHAR *hex, ULONGLONG *size);   // lower-case hex (65 WCHARs) and size of a file, read-only
-void msi_info(const WCHAR *msi, WCHAR *version, WCHAR *manufacturer, int cch);   // ProductVersion / Manufacturer (Windows Installer API, read-only; "" when absent)
+void msi_info(const WCHAR *msi, WCHAR *version, int vcch, WCHAR *manufacturer, int mcch);   // ProductVersion / Manufacturer (Windows Installer API, read-only; "" when absent), each cut to its buffer, control characters as spaces (msi_text)
 char *msi_license_rtf(const WCHAR *msi);    // RTF of the setup's license page (heap) or NULL
 // The DynaRun V3 version the fix was tested with, and how a ProductVersion stands to it (the wizard's notices and the V4 page follow from the class).
 #define DYNARUN_TESTED_VERSION L"3.26.0"

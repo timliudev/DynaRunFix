@@ -1192,6 +1192,25 @@ static BOOL names_dynarun(const char *s)          // "Dyna Run V3", "DynaRun 4",
     return FALSE;
 }
 
+// A Property value of the MSI (ANSI text, written by whoever made the file) as text for the screen and the log: out[cch], always NUL-terminated, cut when it does
+// not fit, empty when the conversion fails; control characters (below a space) become spaces so the value cannot break the lines of the info box or the log.
+void msi_text(const char *s, WCHAR *out, int cch)
+{
+    int n, i;
+    if (!out || cch <= 0) return;
+    out[0] = 0;
+    if (!s) return;
+    n = MultiByteToWideChar(CP_ACP, 0, s, -1, out, cch);
+    if (n > 0) n--;                                          // the terminator came with it
+    else {                                                   // does not fit (or cannot be converted): the part that fits, if that converts
+        int len = lstrlenA(s);
+        if (len > cch - 1) len = cch - 1;
+        n = len > 0 ? MultiByteToWideChar(CP_ACP, 0, s, len, out, cch - 1) : 0;
+    }
+    out[n] = 0;
+    for (i = 0; i < n; i++) if (out[i] < 0x20) out[i] = L' ';
+}
+
 int msi_check(const WCHAR *msi, WCHAR *version, int cch)
 {
     MSIHANDLE db; char *code, *name, *ver; int r;
@@ -1202,7 +1221,7 @@ int msi_check(const WCHAR *msi, WCHAR *version, int cch)
     ver = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'ProductVersion'", NULL);
     MsiCloseHandle(db);
     r = code && !lstrcmpiA(code, DYNARUN_UPGRADE_CODE) && names_dynarun(name) ? MSI_DYNARUN : MSI_OTHER;
-    if (version && ver) MultiByteToWideChar(CP_ACP, 0, ver, -1, version, cch);
+    if (version && ver) msi_text(ver, version, cch);
     release(code); release(name); release(ver);
     return r;
 }
@@ -1230,16 +1249,17 @@ BOOL pkg_sha256(const WCHAR *path, WCHAR *hex, ULONGLONG *size)
 }
 
 // ProductVersion and Manufacturer from the MSI's Property table (display only; nothing is decided on them).
-void msi_info(const WCHAR *msi, WCHAR *version, WCHAR *manufacturer, int cch)
+void msi_info(const WCHAR *msi, WCHAR *version, int vcch, WCHAR *manufacturer, int mcch)
 {
     MSIHANDLE db; char *ver, *mfr;
-    version[0] = manufacturer[0] = 0;
+    if (vcch > 0) version[0] = 0;
+    if (mcch > 0) manufacturer[0] = 0;
     if (MsiOpenDatabaseW(msi, (LPCWSTR)MSIDBOPEN_READONLY, &db)) return;
     ver = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'ProductVersion'", NULL);
     mfr = query1(db, L"SELECT `Property`, `Value` FROM `Property` WHERE `Property` = 'Manufacturer'", NULL);
     MsiCloseHandle(db);
-    if (ver) MultiByteToWideChar(CP_ACP, 0, ver, -1, version, cch);
-    if (mfr) MultiByteToWideChar(CP_ACP, 0, mfr, -1, manufacturer, cch);
+    msi_text(ver, version, vcch);
+    msi_text(mfr, manufacturer, mcch);
     release(ver); release(mfr);
 }
 

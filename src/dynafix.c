@@ -413,17 +413,20 @@ typedef BOOL (WINAPI *sx_t)(SHELLEXECUTEINFOA *);
 // else at that moment (it is waiting on the form's OK), and g_helper_busy keeps a second helper out.
 static BOOL shexec_as_invoker(sx_t sx, SHELLEXECUTEINFOA *se)
 {
-    char old[512], nw[560]; DWORD n, err; BOOL ok;
+    char old[512], nw[560]; DWORD n, err; BOOL ok, was_set;
+    old[0] = 0;
+    SetLastError(0);
     n = GetEnvironmentVariableA("__COMPAT_LAYER", old, sizeof(old));
+    was_set = n != 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND;       // n == 0 is both "not set" and "set to an empty value": put back exactly what was there
     if (n >= sizeof(old) || !df_compat_with_invoker(n ? old : NULL, nw, sizeof(nw))) {
-        logf("setup helper: __COMPAT_LAYER is too long to add RunAsInvoker, started the usual way %u %u %u\r\n", 0, 0, 0);
+        logf("setup helper: __COMPAT_LAYER is too long to add RunAsInvoker, started the usual way\r\n", 0, 0, 0);
         return sx(se);
     }
     SetEnvironmentVariableA("__COMPAT_LAYER", nw);
     ok = sx(se); err = GetLastError();
-    SetEnvironmentVariableA("__COMPAT_LAYER", n ? old : NULL);
+    SetEnvironmentVariableA("__COMPAT_LAYER", was_set ? old : NULL);     // NULL removes it; an empty value stays an empty value
     SetLastError(err);
-    if (ok) logf("setup helper started without elevation (RunAsInvoker) %u %u %u\r\n", 0, 0, 0);
+    if (ok) logf("setup helper started without elevation (RunAsInvoker)\r\n", 0, 0, 0);
     return ok;
 }
 

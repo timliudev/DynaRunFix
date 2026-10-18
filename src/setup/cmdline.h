@@ -21,7 +21,8 @@ static const WCHAR *unverified_value(int argc, WCHAR **argv, int i)
 
 // The switches of the command line, at any position (tests/test_hardening.c and test_driver.c lock the rules). c->opts is set to the defaults
 // (install_opts_default), then quiet, close, keep are set and pin, autostart cleared by what the command line says;
-// c->pin: /pin seen; c->dzip, c->daccept, c->daccept4: the values of /with-driver and /unverified (only from argv[4] on, after the verb, the SID and the path).
+// c->pin: /pin seen; c->dzip, c->daccept, c->daccept4: the values of /with-driver and /unverified (only from argv[4] on, after the verb, the SID and the path);
+// c->msisha: the value of /msi-sha256 (from argv[4] on), kept only when it is exactly 64 hexadecimal digits (hex64_ok), else NULL; the last valid one wins.
 // /with-driver and /unverified take the next argument whatever it is; an /unverified value that is not 64 characters long is dropped. daccept is the last
 // valid /unverified at index >= 4 (the install stage's rule), daccept4 the one at index 4 (the driver prep's rule); they differ when
 //  - a valid /unverified comes later (argv[5] on, e.g. after /quiet): daccept has it, daccept4 is NULL;
@@ -31,7 +32,7 @@ static void cmd_parse(cmdline *c)
 {
     int i; const WCHAR *v;
     install_opts_default(&c->opts);
-    c->pin = FALSE; c->dzip = c->daccept = c->daccept4 = NULL;
+    c->pin = FALSE; c->dzip = c->daccept = c->daccept4 = c->msisha = NULL;
     for (i = 1; i < c->argc; i++) {
         WCHAR *a = c->argv[i];
         if (!lstrcmpiW(a, L"/quiet")) c->opts.quiet = TRUE;
@@ -45,6 +46,7 @@ static void cmd_parse(cmdline *c)
             if ((v = unverified_value(c->argc, c->argv, i)) != NULL) { c->daccept = v; if (i == 4) c->daccept4 = v; }
             i++;
         }
+        else if (i >= 4 && !lstrcmpiW(a, L"/msi-sha256") && i + 1 < c->argc) { if (hex64_ok(c->argv[i + 1])) c->msisha = c->argv[i + 1]; i++; }
     }
 }
 
@@ -60,19 +62,19 @@ static int cmd_machine(cmdline *c)                  // /machine <sid> <DynaRun e
     return rc;
 }
 
-static int cmd_full(cmdline *c)                     // /full <sid> <msi> [/with-driver ...]: the same, with the DynaRun MSI first
+static int cmd_full(cmdline *c)                     // /full <sid> <msi> /msi-sha256 <sha256> [/with-driver ...]: the same, with the DynaRun MSI first
 {
     int rc;
     CoInitialize(NULL);
-    rc = machine_full(&c->opts, c->argv[2], c->argv[3]);
+    rc = machine_full(&c->opts, c->argv[2], c->argv[3], c->msisha);
     if (!rc && c->dzip) rc = driver_prep_stage(c->argv[2], c->dzip, c->daccept);
     return rc;
 }
 
-static int cmd_msi_only(cmdline *c)                 // /msi-only <sid> <msi>: the elevated stage that installs Dyna Pro's setup and nothing else
+static int cmd_msi_only(cmdline *c)                 // /msi-only <sid> <msi> /msi-sha256 <sha256>: the elevated stage that installs Dyna Pro's setup and nothing else
 {
     CoInitialize(NULL);
-    return machine_msi_only(&c->opts, c->argv[2], c->argv[3]);
+    return machine_msi_only(&c->opts, c->argv[2], c->argv[3], c->msisha);
 }
 
 static int cmd_unmachine(cmdline *c)                // /unmachine [<sid>]: the elevated uninstall stage
@@ -89,10 +91,11 @@ static int cmd_offer(cmdline *c) { (void)c; return update_offer(); }
 
 // min_args: the verb is only taken with that many arguments (the program counts); with fewer, the command line is no verb and the wizard (or /quiet install) runs.
 // The elevated driver verbs take 2 and check their own arguments (a /driver-prep without them is an error exit, not the wizard).
+// needs_msi_sha: the verb runs a Dyna Pro MSI, so it is taken only with a valid /msi-sha256 (64 hex digits: what the user saw on the check page); verb_run refuses it otherwise.
 static const verb VERBS[] = {
     { L"/machine", 4, cmd_machine },
-    { L"/full", 4, cmd_full },
-    { L"/msi-only", 4, cmd_msi_only },
+    { L"/full", 4, cmd_full, TRUE },
+    { L"/msi-only", 4, cmd_msi_only, TRUE },
     { L"/unmachine", 2, cmd_unmachine },
     { L"/driver", 2, cmd_driver },                  // driver.c
     { L"/driver-continue", 2, cmd_driver_continue },
@@ -115,9 +118,12 @@ static const verb *verb_find(int argc, WCHAR **argv)
 }
 
 // Runs the verb of the command line: its exit code, or DRV_NOVERB when argv[1] is none (the caller then installs or opens the wizard).
+// A verb that needs the setup's SHA-256 and does not get a valid one is not run: RC_FAIL (nothing was changed).
 static int verb_run(cmdline *c)
 {
     const verb *v = verb_find(c->argc, c->argv);
-    return v ? v->run(c) : DRV_NOVERB;
+    if (!v) return DRV_NOVERB;
+    if (v->needs_msi_sha && !c->msisha) { user_log(L"refused: the verb needs /msi-sha256 with 64 hexadecimal digits"); return RC_FAIL; }
+    return v->run(c);
 }
 

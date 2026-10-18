@@ -19,12 +19,13 @@
 #include "drf_package.h"
 #include "drf_driver.h"
 #include "version.h"
+#include "install_chain.h"
 
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 
 enum { ID_TITLE = 100, ID_BODY, ID_EDIT, ID_RICH, ID_CHECK, ID_PROG, ID_STATUS, ID_EXTRA, ID_SECOND, ID_PRIMARY, ID_KEEPUP, ID_PIN, ID_AUTO, ID_DRV, ID_IMG, ID_INFO, ID_THIRD };
-enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_VER4, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_ERROR,
+enum { P_HELLO, P_FETCH, P_FAIL, P_PASSWORD, P_EXTRACT, P_CHECK, P_VER4, P_LICENSE, P_RUNNING, P_INSTALL, P_DONE, P_MSI_DONE, P_ERROR,
        P_DRV_INTRO, P_DRV_PRESS7, P_DRV_HASH, P_DRV_BDE, P_DRV_PREP, P_DRV_REBOOT, P_DRV_RETRY, P_DRV_WARN, P_DRV_INSTALL, P_DRV_DONE, P_DRV_ERROR,   // driver.c
        P_COUNT };
 enum { JOB_ACQUIRE, JOB_EXTRACT, JOB_INSTALL_ALL, JOB_INSTALL_FIX, JOB_INSTALL_MSI, JOB_DRV_PREP, JOB_DRV_INSTALL, JOB_DRV_CANCEL, JOB_COUNT };   // the order is not used anywhere: JOBS[] says what each job is
@@ -49,8 +50,8 @@ static const acq_desc ACQ_DRIVER = { L"the Dyna Pro USB driver", L"驅動程式"
 #define ACQ_NAME(d) T((d)->name_en, (d)->name_zh)
 
 // Which way through the pages this run takes. One value; it replaces the three flags (the driver ticked on the first page, the driver-only first page, the
-// /driver and /driver-continue command line) whose combinations were never all possible. It changes only in start (wizard), go_install, skip_driver and the
-// "Reinstall the fix..." link.
+// /driver and /driver-continue command line) whose combinations were never all possible. It changes only in start (wizard), go_install, skip_driver, sec_ver4 (the V4 page)
+// and the "Reinstall the fix..." link; after_extract takes FLOW_MSI_ONLY back.
 //   FLOW_MAIN              the fix (and, when DynaRun is not installed, DynaRun itself): the first page, no driver in it. The default.
 //   FLOW_MAIN_WITH_DRIVER  the driver is ticked on the first page: its package is fetched and checked BEFORE the install, and the one elevated stage installs the
 //                          fix and prepares the driver (one UAC prompt). The user can still skip it (back to FLOW_MAIN).
@@ -58,8 +59,21 @@ static const acq_desc ACQ_DRIVER = { L"the Dyna Pro USB driver", L"驅動程式"
 //                          driver is missing (the first page offers just that, and "Reinstall the fix..." turns it into FLOW_MAIN).
 //   FLOW_DRIVER_CONTINUE   /driver-continue, the sign-in task after the restart: the driver pages that follow the restart.
 //   FLOW_MSI_ONLY          the setup is DynaRun V4 or later and the user chose "Install original software only": Dyna Pro's MSI alone, no fix, no shortcuts, no driver.
-//                          Set by the V4 page; after_extract takes it back (a new package is a new decision).
+//                          Set by sec_ver4 (the V4 page); after_extract takes it back (a new package is a new decision). Its install job and its finish page
+//                          (P_MSI_DONE: only "Close") are the row of FLOWS[] below.
 enum { FLOW_MAIN, FLOW_MAIN_WITH_DRIVER, FLOW_DRIVER_ONLY, FLOW_DRIVER_CONTINUE, FLOW_MSI_ONLY };
+
+// One row per flow, indexed by the FLOW_* value: what differs between the ways through the pages where the main flow reaches them.
+//   license_job  the install job the license page's "Install" starts (go_install; the driver flows never come to that page)
+//   done_page    the page that follows an install that finished (jd_install)
+typedef struct { int license_job, done_page; } flow_desc;
+static const flow_desc FLOWS[] = {
+    [FLOW_MAIN]             = { JOB_INSTALL_ALL, P_DONE },
+    [FLOW_MAIN_WITH_DRIVER] = { JOB_INSTALL_ALL, P_DONE },
+    [FLOW_DRIVER_ONLY]      = { JOB_INSTALL_ALL, P_DONE },
+    [FLOW_DRIVER_CONTINUE]  = { JOB_INSTALL_ALL, P_DONE },
+    [FLOW_MSI_ONLY]         = { JOB_INSTALL_MSI, P_MSI_DONE },
+};
 
 // Everything the wizard knows about the run, in one place. OWNED BY THE UI THREAD: only the window procedure and what it calls read or write it.
 // A worker thread never touches it: what a job needs is copied into g_in by start_job, what it produces is written to g_out, and job_done merges
@@ -82,6 +96,7 @@ typedef struct {
     zipent zip;
     char pw[256];
     char *rtf;
+    WCHAR msi_hex[65];                                      // SHA-256 of wz.msi as the check page shows it ("" = could not be read); the elevated stage checks its copy against it
     WCHAR info[2200];                                       // what the check page shows about the package (source, MSI version/manufacturer, path, size, SHA-256)
     DWORD neterr, total;
     BOOL paused, pause_req;                                 // download paused (worker ended, .part kept) / pause asked, worker still stopping
@@ -112,7 +127,7 @@ typedef struct {
     install_opts opts;                                      // the options the job runs with
     int flow;
     const acq_desc *acq; BOOL acq_local_ok;
-    WCHAR msi[MAX_PATH];
+    WCHAR msi[MAX_PATH], msi_hex[65];                       // msi_hex: the SHA-256 the user saw for it
     zipent zip;
     char pw[256];                                           // the worker wipes it after the extraction (the UI's copy is wiped by start_job)
     WCHAR drvzip[MAX_PATH]; BOOL drv_allow; WCHAR drv_hex[65];   // the driver zip, and the SHA-256 the user accepted for it

@@ -77,7 +77,12 @@ int main(void)
       CHECK(df_compat_with_invoker(NULL, o, 13) == 12 && !o[12], "invoker: fits exactly with the terminator");
       CHECK(df_compat_with_invoker("WIN7RTM", o, 20) == 0, "invoker: the appended layer does not fit: 0");
       CHECK(df_compat_with_invoker("WIN7RTM", o, 21) == 20, "invoker: the appended layer fits exactly");
-      CHECK(df_compat_with_invoker("0123456789012345678901234567890123456789012345678901234567890123456789", o, sizeof(o)) == 0, "invoker: the old value alone does not fit: 0"); }
+      CHECK(df_compat_with_invoker("0123456789012345678901234567890123456789012345678901234567890123456789", o, sizeof(o)) == 0, "invoker: the old value alone does not fit: 0");
+      n = df_compat_with_invoker("WIN7RTM\tWINXPSP3", o, sizeof(o)); CHECK(!lstrcmpA(o, "WIN7RTM\tWINXPSP3 RunAsInvoker"), "invoker: words are separated by tabs too");
+      n = df_compat_with_invoker("WIN7RTM\trunasinvoker", o, sizeof(o)); CHECK(n == (int)lstrlenA("WIN7RTM\trunasinvoker") && !lstrcmpA(o, "WIN7RTM\trunasinvoker"), "invoker: already there after a tab, not added again");
+      n = df_compat_with_invoker("RunAsInvoker\tWIN7RTM", o, sizeof(o)); CHECK(n == (int)lstrlenA("RunAsInvoker\tWIN7RTM"), "invoker: already there before a tab, not added again");
+      n = df_compat_with_invoker("WIN7RTM\t", o, sizeof(o)); CHECK(!lstrcmpA(o, "WIN7RTM\tRunAsInvoker"), "invoker: a trailing tab gives no extra blank");
+      n = df_compat_with_invoker("\t \t", o, sizeof(o)); CHECK(n == (int)lstrlenA("\t \t") + 12 + 0 && o[n - 1] == 'r', "invoker: only blanks: kept, the layer follows"); }
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

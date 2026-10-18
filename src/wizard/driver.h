@@ -365,7 +365,7 @@ static void jd_drv_install(int job, int rc)
 static void jd_drv_cancel(int job, int rc)
 {
     (void)job; (void)rc;
-    DestroyWindow(g_hwnd);                           // cancelled (or not allowed to: nothing else can be done from here)
+    end_wizard();                                    // cancelled (or not allowed to: nothing else can be done from here)
 }
 
 static void pri_drv_intro(void) { acq_start(&ACQ_DRIVER); }

@@ -422,27 +422,18 @@ static const WCHAR *owner_name(HWND w, WCHAR *buf, DWORD n)
     return name;
 }
 
-// The programs whose windows belong to the install chain: the UAC prompt (consent.exe), Dyna Pro's setup (msiexec.exe, whose progress window says "Please wait
-// while Windows configures ..."), the driver install (drvinst.exe / pnputil.exe / dpinst.exe: the red Windows Security warning) and the elevated stage of this
-// setup itself (its message boxes; the copy made for a network drive is called DynaRunFix-Setup-<n>.exe).
-static BOOL in_install_chain(const WCHAR *n)
-{
-    static const WCHAR *const names[] = { L"msiexec.exe", L"consent.exe", L"drvinst.exe", L"pnputil.exe", L"dpinst.exe", NULL };
-    int i;
-    for (i = 0; names[i]; i++) if (!lstrcmpiW(n, names[i])) return TRUE;
-    return CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, n, 16, L"DynaRunFix-Setup", 16) == CSTR_EQUAL;
-}
-
 // While the elevated part installs (every 300 ms): the window of the install chain that has the foreground (the UAC prompt, msiexec's progress window, the
 // driver warning) stays frontmost and the wizard is put directly behind it, above everything else: not topmost, so the user can still switch to another
-// program. A foreground window of an unrelated program is left alone (the user chose it) and what owns it is logged once per change. Explorer, which
-// Windows activates after the prompt and which would cover the wizard, is put behind the wizard once per change.
+// program. A foreground window of an unrelated program is left alone (the user chose it); that it is there is logged once per change, without saying whose it
+// is (another program's name is none of the log's business). Explorer, which Windows activates after the prompt and which would cover the wizard, is put
+// behind the wizard once per change. A change is also the user coming back to the wizard and leaving it again: `last` follows the foreground window on every
+// round, so an Explorer that covers the wizard after the user has been there is a change.
 static void keep_up(HWND h)
 {
-    static WCHAR b[MAX_PATH], l[MAX_PATH + 80]; static HWND last;
-    const WCHAR *n; HWND fg = GetForegroundWindow(); DWORD pid = 0; BOOL changed;
+    static WCHAR b[MAX_PATH]; static HWND last;
+    const WCHAR *n; HWND fg = GetForegroundWindow(); DWORD pid = 0; BOOL changed = fg != last;
+    last = fg;
     if (!fg || fg == h || IsIconic(h)) return;
-    changed = fg != last; last = fg;
     GetWindowThreadProcessId(fg, &pid);
     if (pid == GetCurrentProcessId()) return;
     n = owner_name(fg, b, MAX_PATH);
@@ -453,7 +444,6 @@ static void keep_up(HWND h)
         SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     } else if (changed) {
-        wsprintfW(l, L"install: the foreground window belongs to %s (not part of the install, left alone)", n[0] ? n : L"(unknown)");
-        user_log(l);
+        user_log(L"install: an unrelated window has the foreground (not part of the install, left alone)");
     }
 }

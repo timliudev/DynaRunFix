@@ -231,14 +231,16 @@ static void fmt_size(WCHAR *o, ULONGLONG n)
 
 // Shown on the check page so the user can compare with what Dyna Pro provides. Display only: nothing here blocks the install. The identity of the setup comes
 // first (where it is from, the MSI's ProductVersion and Manufacturer), then the file: path, size, SHA-256 (and the same of the Setup.msi inside a zip).
+// The SHA-256 of the MSI that will be installed (the file itself, or the Setup.msi inside the zip) is kept in wz.msi_hex and handed to the elevated stage.
 static void build_info(void)
 {
     WCHAR hex[65], hex2[65], ver[64], mfr[128], sz[80]; ULONGLONG size = 0, size2 = 0; BOOL same = !lstrcmpiW(wz.pkg, wz.msi), okp, okm = FALSE;
     HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
     okp = pkg_sha256(wz.pkg, hex, &size);
     if (!same) okm = pkg_sha256(wz.msi, hex2, &size2);
-    msi_info(wz.msi, ver, mfr, 64);
+    msi_info(wz.msi, ver, ARRAYSIZE(ver), mfr, ARRAYSIZE(mfr));
     SetCursor(old);
+    lstrcpyW(wz.msi_hex, same ? (okp ? hex : L"") : (okm ? hex2 : L""));        // the hash of the file that is going to be installed: what the elevated stage is held to
     wz.info[0] = 0;
     lstrcatW(wz.info, TX(S_SOURCE));
     lstrcatW(wz.info, wz.pkg_ours ? TX(S_DOWNLOADED_NOW_FROM_DYNAPRO_CO)
@@ -260,7 +262,7 @@ static void build_info(void)
 static void after_extract(void)
 {
     WCHAR l[160];
-    if (msi_check(wz.msi, wz.ver, 64) != MSI_DYNARUN) { not_dynarun(); return; }
+    if (msi_check(wz.msi, wz.ver, ARRAYSIZE(wz.ver)) != MSI_DYNARUN) { not_dynarun(); return; }
     wz.verclass = dynarun_ver_class(wz.ver);                 // the version gate: the check page notices, the V4 page, the license page follow from it
     if (wz.flow == FLOW_MSI_ONLY) wz.flow = FLOW_MAIN;       // a new package is a new decision
     wsprintfW(l, L"setup version %s: class %d (0 unreadable, 1 tested, 2 other, 3 V4 or later)", wz.ver[0] ? wz.ver : L"?", wz.verclass); user_log(l);
@@ -275,7 +277,6 @@ static void after_extract(void)
         SendMessageW(H(ID_RICH), EM_STREAMIN, SF_RTF, (LPARAM)&es);
     } else                                       // never install without the user accepting Dyna Pro's terms
         SetWindowTextW(H(ID_RICH), TX(S_DYNARUN_V3_IS_LICENSED_TO));
-    SendMessageW(H(ID_CHECK), BM_SETCHECK, BST_UNCHECKED, 0);
     set_page(P_CHECK);
 }
 
@@ -392,7 +393,7 @@ static void jd_extract(int job, int rc)
     (void)job;
     if (rc == PK_OK) { after_extract(); return; }
     drop_msi();                                      // a failed or cancelled extraction leaves no decrypted copy
-    if (rc == PK_CANCEL) { DestroyWindow(g_hwnd); return; }
+    if (rc == PK_CANCEL) { end_wizard(); return; }
     if (wz.pkg_found && rc == PK_FORMAT) {            // a copy found on this computer that is damaged (not a usable zip): not offered again; a password or disk problem keeps its own page
         WCHAR nm[100];
         lstrcpynW(nm, file_name(wz.pkg), 100);
@@ -431,7 +432,6 @@ static void sec_ver4(BOOL button)
     wz.flow = FLOW_MSI_ONLY; wz.drv = FALSE; wz.opts.autostart_later = FALSE;
     set_page(P_LICENSE);
 }
-static void thr_cancel(void) { on_close(); }
 
 // "Download it" on the check page of a copy found on this computer: the same acquire flow, but the download (nothing found here is taken). The user's own file is not touched.
 static void thr_check(void)
@@ -443,7 +443,7 @@ static void thr_check(void)
     acq_start(&ACQ_SETUP);
 }
 
-static void pri_license(void) { if (wz.flow == FLOW_MSI_ONLY) install(JOB_INSTALL_MSI); else go_install(JOB_INSTALL_ALL); }
+static void pri_license(void) { go_install(FLOWS[wz.flow].license_job); }     // the install job of the flow (FLOWS[], wizard.c)
 
 static void pri_fetch(void)                                                               // "Pause" / "Resume"
 {
