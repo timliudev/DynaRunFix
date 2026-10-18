@@ -62,12 +62,14 @@ static BOOL stage_msi(const WCHAR *msi, WCHAR *dir, WCHAR *staged)
     return TRUE;
 }
 
-static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *msi)
+// Elevated: Dyna Pro's MSI alone (staged, checked, run), nothing of DynaRunFix. 0 when it is installed, else RC_* (the failure was reported to the user).
+// what: names the stage in the log of still_running.
+static int msi_staged_run(const install_opts *o, const WCHAR *sid, const WCHAR *msi, const WCHAR *what)
 {
     static WCHAR me[200], txt[300], dir[MAX_PATH], staged[MAX_PATH]; int rc;
     if (!user_sid(me, 200) || lstrcmpiW(me, sid)) return RC_OVER_SHOULDER;
     if (!stage_lock()) { error2(o, busy_text(), NULL); return RC_FAIL; }
-    if (still_running(o, L"full install")) { stage_unlock(); return RC_RUNNING; }
+    if (still_running(o, what)) { stage_unlock(); return RC_RUNNING; }
     if (!stage_msi(msi, dir, staged)) {
         stage_unlock();
         msg(TS(ST_THE_DYNARUN_V3_SETUP_COULD), MB_ICONERROR);
@@ -89,7 +91,15 @@ static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *ms
         msg(txt, MB_ICONERROR);
         return RC_MSI_FAILED;
     }
+    return 0;
+}
+
+static int machine_full(const install_opts *o, const WCHAR *sid, const WCHAR *msi)
+{
+    int rc = msi_staged_run(o, sid, msi, L"full install");
+    if (rc) return rc;
     if (!locate_dynarun()) { msg(TS(ST_DYNARUN_V3_WAS_INSTALLED_BUT), MB_ICONERROR); return RC_NO_DYNARUN; }
     return machine_install(o, sid);
 }
 
+static int machine_msi_only(const install_opts *o, const WCHAR *sid, const WCHAR *msi) { return msi_staged_run(o, sid, msi, L"install of Dyna Pro's setup only"); }

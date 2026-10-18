@@ -543,6 +543,17 @@ int ver_compare(const WCHAR *a, const WCHAR *b)
     return 0;
 }
 
+// How the MSI's ProductVersion stands to what DynaRunFix was tested with (DYNARUN_TESTED_VERSION). The one place that decides it; the wizard only asks.
+// A text that does not start with a version is VER_UNKNOWN; 4.x and later (possibly not Visual Basic 6 any more) is VER_V4PLUS; exactly the tested version
+// (a missing part counts as 0) is VER_TESTED; anything else below 4 (3.25.x, 3.26.1, 2.x ...) is VER_UNTESTED.
+int dynarun_ver_class(const WCHAR *ver)
+{
+    DWORD v[4];
+    if (!ver || !ver_parts(ver, v)) return VER_UNKNOWN;
+    if (v[0] >= 4) return VER_V4PLUS;
+    return ver_compare(ver, DYNARUN_TESTED_VERSION) == 0 ? VER_TESTED : VER_UNTESTED;
+}
+
 static char lc(char c) { return c >= 'A' && c <= 'Z' ? (char)(c + 32) : c; }
 static BOOL starts_ci(const char *p, const char *lower) { int i; for (i = 0; lower[i]; i++) if (lc(p[i]) != lower[i]) return FALSE; return TRUE; }
 

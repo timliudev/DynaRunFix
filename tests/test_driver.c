@@ -890,6 +890,15 @@ static void test_hint(void)
     CHECK(ver_compare(L"3.26.0", L"3.25.9") > 0 && ver_compare(L"3.25.9", L"3.26.0") < 0 && ver_compare(L"3.26.0", L"3.26.0") == 0, L"version compare: ordinary cases");
     CHECK(ver_compare(L"3.26", L"3.26.0") == 0 && ver_compare(L"3.26.1", L"3.26.0") > 0 && ver_compare(L"10.0.0", L"9.9.9") > 0 && ver_compare(L"3.26.0.1", L"3.26.0") > 0, L"version compare: missing parts, numbers not text, four parts");
     CHECK(ver_compare(L"abc", L"3.26.0") == 0 && ver_compare(L"3.26.0", L"") == 0 && ver_compare(L"", L"") == 0, L"version compare: what is not a version says nothing");
+    // the class of an MSI ProductVersion (the wizard's version gate)
+    CHECK(dynarun_ver_class(L"3.26.0") == VER_TESTED && dynarun_ver_class(L"3.26") == VER_TESTED, L"version class: the tested version (a missing part counts as 0)");
+    CHECK(dynarun_ver_class(L"3.25.0") == VER_UNTESTED && dynarun_ver_class(L"3.25.9") == VER_UNTESTED && dynarun_ver_class(L"3.27.0") == VER_UNTESTED
+          && dynarun_ver_class(L"3.26.1") == VER_UNTESTED && dynarun_ver_class(L"3.26.0.1") == VER_UNTESTED && dynarun_ver_class(L"3.9.9") == VER_UNTESTED, L"version class: another 3.x is untested");
+    CHECK(dynarun_ver_class(L"4.0.0") == VER_V4PLUS && dynarun_ver_class(L"4") == VER_V4PLUS && dynarun_ver_class(L"10.1.2") == VER_V4PLUS && dynarun_ver_class(L"4.0.0.0") == VER_V4PLUS, L"version class: 4 and later (numbers, not text: 10 > 4)");
+    CHECK(dynarun_ver_class(L"2.9.9") == VER_UNTESTED && dynarun_ver_class(L"0.0.1") == VER_UNTESTED, L"version class: below 3 is untested too");
+    CHECK(dynarun_ver_class(L"") == VER_UNKNOWN && dynarun_ver_class(L"abc") == VER_UNKNOWN && dynarun_ver_class(L"v4.0.0") == VER_UNKNOWN && dynarun_ver_class(L".") == VER_UNKNOWN
+          && dynarun_ver_class(L" 3.26.0") == VER_UNKNOWN && dynarun_ver_class(NULL) == VER_UNKNOWN, L"version class: not a version is unknown");
+    CHECK(dynarun_ver_class(L"3.26.0 beta") == VER_TESTED && dynarun_ver_class(L"4.0.0-rc1") == VER_V4PLUS, L"version class: a suffix after the numbers does not matter");
     // the page
     CHECK(pkg_page_version(PAGE, (DWORD)strlen(PAGE), v, 40) && !lstrcmpW(v, L"3.26.0"), L"page: the version of the Dyna Run V3 Software row is found (not the manual, not the script)");
     { static const char P2[] = "<p>The latest release of Dyna Run V3 control software Version 3.27.1 has been released.</p><td>Dyna Pro USB Drivers 1.2MB</td>";

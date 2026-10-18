@@ -118,3 +118,24 @@ int install_all_driver(const install_opts *o, install_result *res, const WCHAR *
 
 int install_all(const install_opts *o, install_result *res, const WCHAR *msi) { return install_all_driver(o, res, msi, NULL, NULL); }
 
+// Dyna Pro's setup alone (a DynaRun that is not the tested V3, see dynarun_ver_class): the MSI in the elevated stage, no fix, no shortcuts, no driver. RC_OK, RC_CANCEL, RC_*.
+int install_msi_only(const install_opts *o, const WCHAR *msi)
+{
+    static WCHAR sid[200], args[2 * MAX_PATH + 40]; int rc;
+    if (!user_sid(sid, 200)) return RC_FAIL;
+    if (running_early(o, L"install of Dyna Pro's setup only (before elevation)")) return RC_RUNNING;
+    CoInitialize(NULL);
+    pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
+    if (is_admin()) rc = machine_msi_only(o, sid, msi);
+    else {
+        wsprintfW(args, L"/msi-only %s \"%s\"", sid, msi);
+        rc = run_elevated(args, NULL, o);
+    }
+    if (rc == RC_OVER_SHOULDER) {                      // over-the-shoulder elevation: the setup as this user
+        rc = run_msiexec(msi);
+        if (rc == ERROR_INSTALL_USEREXIT) return RC_CANCEL;
+        return rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED ? RC_MSI_FAILED : RC_OK;
+    }
+    return rc;
+}
+

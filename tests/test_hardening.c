@@ -923,6 +923,8 @@ static void test_verb_table(void)
     WCHAR *n1[] = { L"s" }; WCHAR *q2[] = { L"s", L"/quiet" }; WCHAR *p2[] = { L"s", L"driver" }; WCHAR *o2[] = { L"s", L"/offer" };
     CHECK(verb_find(3, m3) == NULL && verb_find(4, m4) != NULL, L"verbs: /machine needs argc >= 4");
     CHECK(verb_find(3, f3) == NULL && verb_find(4, f4) != NULL, L"verbs: /full needs argc >= 4");
+    { WCHAR *i3[] = { L"s", L"/msi-only", L"S-1" }; WCHAR *i4[] = { L"s", L"/MSI-ONLY", L"S-1", L"m" };
+      CHECK(verb_find(3, i3) == NULL && verb_find(4, i4) != NULL, L"verbs: /msi-only needs argc >= 4"); }
     CHECK(verb_find(2, u2) != NULL && verb_find(2, d2) != NULL && verb_find(2, o2) != NULL, L"verbs: /unmachine, /driver-prep, /offer need the verb only");
     CHECK(verb_find(2, x2) == NULL && verb_find(2, q2) == NULL && verb_find(2, p2) == NULL && verb_find(1, n1) == NULL, L"verbs: exact match only, no verb without argv[1]");
 }

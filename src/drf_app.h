@@ -53,6 +53,7 @@ BOOL locate_dynarun(void);                  // fills g_exe from the registry or 
 void start_dynarun(void);                  // the wizard's "Start DynaRun": through our shortcut, like a double click
 int install_fix(const install_opts *o, install_result *res);                      // DynaRun is installed: elevated stage + user shortcuts. RC_OK, RC_CANCEL
 int install_all(const install_opts *o, install_result *res, const WCHAR *msi);          // runs the DynaRun MSI, then install_fix's work. RC_OK, RC_CANCEL
+int install_msi_only(const install_opts *o, const WCHAR *msi);          // Dyna Pro's MSI alone (a DynaRun that is not the tested V3): no fix, no shortcuts, no driver. RC_OK, RC_CANCEL, RC_*
 // The same, and the driver's preparation (driver_prep) in the SAME elevated stage: one UAC prompt for both. zip/accept as for driver_prep.
 // RC_OK; RC_CANCEL; another small code: the fix failed (the driver was not touched); >= DRV_E_HASH: the fix is installed, the driver step gave this code (DRV_E_*, DRV_W_BDE).
 int install_fix_driver(const install_opts *o, install_result *res, const WCHAR *zip, const WCHAR *accept);

@@ -69,6 +69,12 @@ static int cmd_full(cmdline *c)                     // /full <sid> <msi> [/with-
     return rc;
 }
 
+static int cmd_msi_only(cmdline *c)                 // /msi-only <sid> <msi>: the elevated stage that installs Dyna Pro's setup and nothing else
+{
+    CoInitialize(NULL);
+    return machine_msi_only(&c->opts, c->argv[2], c->argv[3]);
+}
+
 static int cmd_unmachine(cmdline *c)                // /unmachine [<sid>]: the elevated uninstall stage
 {
     reg_str(HKEY_LOCAL_MACHINE, APPKEY, L"DynaRunExe", g_exe, MAX_PATH, 0);
@@ -86,6 +92,7 @@ static int cmd_offer(cmdline *c) { (void)c; return update_offer(); }
 static const verb VERBS[] = {
     { L"/machine", 4, cmd_machine },
     { L"/full", 4, cmd_full },
+    { L"/msi-only", 4, cmd_msi_only },
     { L"/unmachine", 2, cmd_unmachine },
     { L"/driver", 2, cmd_driver },                  // driver.c
     { L"/driver-continue", 2, cmd_driver_continue },
