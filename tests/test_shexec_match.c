@@ -2,6 +2,7 @@
 // (The exe name must not contain "setup": Windows installer detection would demand elevation.)
 #include <stdio.h>
 #include "../src/setup_match.h"
+#include "../src/install_chain.h"
 
 static int g_fail, g_run;
 
@@ -95,6 +96,23 @@ int main(void)
         const char *d[1] = { "C:\\" };
         g_run++;
         if (!setup_helper_match("C:\\Setup_5.exe", d, 1) || setup_helper_match("C:\\x\\Setup_5.exe", d, 1)) { g_fail++; puts("FAIL: root folder"); }
+    }
+    {   // in_install_chain (src\install_chain.h): the programs whose windows the wizard stays behind while the elevated part works
+        static const struct { const WCHAR *name; BOOL want; } t[] = {
+            { L"msiexec.exe", TRUE }, { L"MSIEXEC.EXE", TRUE }, { L"consent.exe", TRUE }, { L"drvinst.exe", TRUE }, { L"pnputil.exe", TRUE }, { L"dpinst.exe", TRUE },
+            { L"DynaRunFix-Setup.exe", TRUE }, { L"dynarunfix-setup.exe", TRUE }, { L"DynaRunFix-Setup-1234-5678-9.exe", TRUE }, { L"DynaRunFix-Setup", TRUE },
+            { L"explorer.exe", FALSE }, { L"chrome.exe", FALSE }, { L"", FALSE }, { L"a", FALSE },
+            { L"msiexec", FALSE }, { L"msiexec.exe.bak", FALSE }, { L"xmsiexec.exe", FALSE }, { L"consent.exe ", FALSE },
+            { L"DynaRunFix-Setu", FALSE }, { L"DynaRunFix-Setu.exe", FALSE }, { L"DynaRunFix.exe", FALSE }, { L"xDynaRunFix-Setup.exe", FALSE },
+            { L"DynaRunFix-Launcher.exe", FALSE }, { L"DynaRun V3.exe", FALSE },
+        };
+        int i;
+        for (i = 0; i < (int)(sizeof(t) / sizeof(t[0])); i++) {
+            g_run++;
+            if (in_install_chain(t[i].name) != t[i].want) { g_fail++; printf("FAIL: in_install_chain(%ls) want %d\n", t[i].name, t[i].want); }
+        }
+        g_run++;
+        if (in_install_chain(NULL)) { g_fail++; puts("FAIL: in_install_chain(NULL)"); }
     }
     printf("%d checks, %d failed\n", g_run, g_fail);
     return g_fail ? 1 : 0;

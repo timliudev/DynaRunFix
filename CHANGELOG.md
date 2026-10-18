@@ -2,6 +2,29 @@
 
 [繁體中文在下方](#更新紀錄)
 
+## v1.8.0 — 2026-10-18
+
+Added (setup wizard):
+
+- **Version check of Dyna Pro's setup.** The MSI's ProductVersion is classified in one function (`dynarun_ver_class`) against one constant (3.26.0, the tested version); the UpgradeCode and product name check stays.
+  - 3.26.0: as before.
+  - Another 3.x (or older): a notice on the *Check the installer* and license pages: tested only with 3.26.0, there may be additional problems, please open an issue at <https://github.com/timliudev/DynaRunFix/issues>; the install goes on.
+  - Version not readable: a notice, the install goes on.
+  - **4 or later** (possibly no longer Visual Basic 6, perhaps native Windows 10/11): a page after *Check the installer* explains that the fix may not be needed and suggests installing Dyna Pro's software alone first. Layout like the license page: the check box *I understand that DynaRunFix has not been tested with this version* enables *Install the fix anyway* (right-most); *Install original software only* installs Dyna Pro's MSI alone (the same staged and checked copy, one administrator prompt, new elevated verb `/msi-only`): no fix, no shortcut changes, no taskbar pin, no sign-in start and no USB driver (the driver step belongs to the fix and was made for V3's driver); *Cancel*. The finish page of *Install original software only* (*Dyna Pro's software is installed*) has *Close* only, which just closes the wizard (it does not start DynaRun). The accept check box starts unticked on every page, also when the license page comes back after the administrator prompt was declined, so a license is never pre-accepted.
+- **Download instead of the copy found on this computer.** For a setup found on the computer, the *Check the installer* page has *Download it* (the existing download flow, nothing found locally is taken). The user's own file is not touched.
+- **Flash and notification.** One helper flashes the taskbar button and shows a Windows notification (a temporary tray icon) when a background step (download, extraction, install, driver step) has ended, the wizard is not the foreground window and the wizard now waits for a click. Not when the wizard goes on to the next step by itself (the extraction right after the download, the driver step right after the install), not while the window is closing, not on the page that restarts the computer by itself, and not when the wizard is in front. At the sign-in start after the restart it is called once, when the wizard opens. The tray icon goes after 10 seconds, when the wizard is activated, and on every way the wizard ends.
+
+Changed:
+
+- **First start without a UAC prompt.** Dyna Pro's first-start helper `System Data\Setup_<n>.exe` (exact full-path match as before) is started with `RunAsInvoker` in `__COMPAT_LAYER` for that one call (set and restored around `ShellExecuteExA`), so Windows' installer detection no longer asks for administrator permission. It only writes `HKCU\Software\DynaPro`. Waiting, restoring the language and `/restart` are unchanged; the log says `setup helper started without elevation (RunAsInvoker)`. This replaces the v1.4.0 behaviour that kept the prompt on purpose; DynaRun's other child processes still do not get `RunAsInvoker`.
+- **The *Check the installer* page:** the source, the MSI's ProductVersion and Manufacturer come first, then path, size and SHA-256; the box uses the same smaller font as the license text and is sized to its text, so the page grows to fit it without scrolling (as far as the screen allows).
+- **Window order during the install:** the wizard keeps itself directly behind the foreground window of the install chain (msiexec's progress window, the UAC prompt, the driver warning, the elevated stage), above everything else but not topmost, so the user can switch programs; an unrelated program in the foreground is left alone and the log says once per change that an unrelated window has the foreground (not whose it is: other programs' names are not logged); Explorer is put behind the wizard once per change, also when it covers the wizard again after the user has been in the wizard (before: on every timer tick). The programs of the install chain are matched by whole name, and the setup's own name by a prefix with a length check.
+- **After the restart** the driver pages that wait for a click (*Last step*, *7 was not pressed*) are topmost so that start-up windows do not cover them. The page that runs the driver install is not (Windows' own warning dialog has to stay visible there).
+- **The setup you checked is the setup that is installed.** The SHA-256 shown on the *Check the installer* page (of the MSI that will run: the file itself, or the Setup.msi inside the zip) is handed to the elevated stage as `/msi-sha256 <64 hex digits>`. `/full` and `/msi-only` are marked in the verb table as needing it and are refused (exit code 1, nothing runs) without a valid one (exactly 64 hexadecimal digits). The stage computes the SHA-256 of its administrators-only copy and, if it differs, shows the message *The DynaRun V3 setup could not be matched with the SHA-256 shown ...* and stops with exit code 4 (`RC_MSI_FAILED`) before `msiexec` runs. This closes the gap between the check page and the staged copy, because the file lives in a folder the user can write. A setup whose hash could not be read (shown as `?`) is not installed.
+- **Values read from the MSI** (ProductVersion, Manufacturer): the conversion is checked, the text is always terminated and cut to its buffer (64 and 128 characters; `msi_info` now takes both sizes), and control characters become spaces before the text is shown in the info box, used for the version gate or logged.
+- Fix: `dynafix.dll` puts `__COMPAT_LAYER` back exactly as it was around the helper's start: a variable that was not set is removed again, one that was set to an empty value stays empty. The words of the value are separated by spaces and tabs. The two log lines no longer carry placeholder numbers.
+- Internal: `machine_full` shares its MSI staging and run with the new `/msi-only` stage; `df_compat_with_invoker` (pure, tested) builds the `__COMPAT_LAYER` value; `in_install_chain` is a pure function in `src\install_chain.h` (tested); the wizard's flow differences (the license page's install job, the finish page, the page to return to after a declined prompt) are rows of `FLOWS[]` and `JOBS[]` instead of `if (wz.flow ...)` branches, and the MSI-only finish page is a page of its own (`P_MSI_DONE`).
+
 ## v1.7.2 — 2026-10-18
 
 Internal refactor (no intended behaviour change; see Fixed): `setup.c` is split into topic files in `src\setup\` and `wizard.c` into flow files in `src\wizard\` (each still one compilation unit), `setup.h` is now an umbrella over the `drf_*.h` module headers, the result codes have names in `src\errors.h` (values unchanged), the install options travel in `install_opts` instead of globals, the setup and driver stages share one command-line verb table, the wizard uses a page table and a job table, the launcher and the update check share `src\applog.h` (log lock, clock, value names, verbs), and `dynafix.c` is split into `dynafix_*.inc.c`. Test-only code (COM promotion, whole-zip extraction) moved out of the shipped sources into `tests\`.
@@ -259,7 +282,7 @@ Changed and fixed (after a review of v1.4.0):
   - First start: only option buttons that are clearly read as green (picked) are written; when `dynafix.dll` cannot read DynaRun's
     option buttons (or is unsure what it sees) it writes **nothing** and only logs it (before, it could write feature flags the user had not chosen).
   - `dynafix.dll` clears `__COMPAT_LAYER` for DynaRun's own process so a `RunAsInvoker` set by the launcher does not suppress
-    the one-time UAC prompt of Dyna Pro's configuration helper; the graph language redirect is always a resource-only load and
+    the one-time UAC prompt of Dyna Pro's configuration helper (superseded in v1.8.0: the helper is now started without elevation); the graph language redirect is always a resource-only load and
     is refused if the elevation state cannot be determined.
   - `dynafix.log` no longer contains absolute addresses of other modules' import slots, only module and API names, and the launcher and the dll do not follow links (symbolic links, junctions) when opening it.
   - The manifest's version is `1.0.0.0`; the installer's product version is `1.4.0`.
@@ -509,7 +532,30 @@ Changed and fixed (after a review of v1.4.0):
 
 ## 更新紀錄
 
-### v1.7.2 — 2026-10-18
+### v1.8.0 — 2026-10-18
+
+新增(安裝精靈):
+
+- **檢查 Dyna Pro 安裝檔的版本。** MSI 的 ProductVersion 由同一個函式(`dynarun_ver_class`)對照同一個常數(3.26.0,測試過的版本)分類;升級代碼與產品名稱的檢查照舊。
+  - 3.26.0:照舊。
+  - 其他 3.x(或更舊):「確認安裝檔」頁與授權合約頁顯示提示——只在 3.26.0 測試過、可能有額外問題、請到 <https://github.com/timliudev/DynaRunFix/issues> 開 issue;安裝繼續。
+  - 讀不到版本:顯示提示,安裝繼續。
+  - **4 以上**(可能已不是 Visual Basic 6,也許是原生 Windows 10/11):「確認安裝檔」之後多一頁,說明可能不需要修正,並建議先單獨安裝 Dyna Pro 的軟體。版面與授權合約頁相同:勾選「我了解 DynaRunFix 未在此版本測試過」才能按最右邊的「仍要安裝修正」;「僅安裝原版軟體」只安裝 Dyna Pro 的 MSI(同樣是暫存並檢查過的副本、一次系統管理員確認,新的提升權限動詞 `/msi-only`):不裝修正、不改捷徑、不釘選工作列、不設開機自動啟動,也不裝 USB 驅動程式(驅動程式步驟屬於修正,是為 V3 的驅動程式而設);另有「取消」。「僅安裝原版軟體」的結束頁(「Dyna Pro 的軟體已安裝」)只有「關閉」,按下去只會關閉精靈(不會啟動 DynaRun)。接受用的核取方塊在每一頁開始時都是未勾選,從被拒絕的系統管理員確認回到授權合約頁時也一樣,所以授權合約絕不會被預先接受。
+- **改用官網下載,不用電腦上找到的檔案。** 在這台電腦上找到安裝檔時,「確認安裝檔」頁多一個「改從官網下載」(走原本的下載流程,不再採用電腦上找到的檔案)。使用者自己的檔案不會被動到。
+- **閃爍與通知。** 同一個函式負責:背景步驟(下載、解壓縮、安裝、驅動程式步驟)結束、精靈不是前景視窗,而且精靈現在等待使用者點擊時,讓工作列按鈕閃爍並顯示 Windows 通知(暫時的系統匣圖示)。精靈自己接著做下一個步驟時(下載後馬上解壓縮、安裝後馬上做驅動程式步驟)、視窗正在關閉時、自動重新開機的那一頁,以及精靈已在前景時,都不會通知。重新開機後登入時的繼續,在精靈開啟時通知一次。系統匣圖示在 10 秒後、精靈被啟用時,以及精靈以任何方式結束時移除。
+
+變更:
+
+- **第一次啟動不再出現 UAC 提示。** Dyna Pro 的首次啟動設定程式 `System Data\Setup_<編號>.exe`(仍然只接受完整路徑吻合)在那一次呼叫的 `__COMPAT_LAYER` 加上 `RunAsInvoker`(圍繞 `ShellExecuteExA` 設定並還原),Windows 的安裝程式偵測就不會再要求系統管理員權限。它只寫入 `HKCU\Software\DynaPro`。等待、寫回語言與 `/restart` 不變;log 會寫 `setup helper started without elevation (RunAsInvoker)`。這取代 v1.4.0 刻意保留提示的做法;DynaRun 其他子行程仍不會拿到 `RunAsInvoker`。
+- **「確認安裝檔」頁:** 先顯示來源、MSI 的 ProductVersion 與 Manufacturer,再顯示路徑、大小與 SHA-256;文字框使用與授權合約文字相同的較小字型,並依文字量決定高度,頁面會(在螢幕允許的範圍內)長高到不需捲動。
+- **安裝期間的視窗順序:** 精靈讓自己緊貼在安裝流程中取得前景的視窗(msiexec 進度視窗、UAC 提示、驅動程式警告、提升權限的階段)後面,在其他視窗之上但不置頂,使用者仍可切換程式;前景是無關的程式時不干擾,並在前景改變時於 log 記錄一次「有無關的視窗在前景」(不記錄是誰的:不寫其他程式的名稱);Explorer 在前景改變時被放到精靈後面一次,使用者回到精靈之後 Explorer 再度蓋住精靈時也一樣(以前是每個計時週期都處理)。安裝流程中的程式以完整名稱比對,安裝程式自己的名稱以前綴比對並檢查長度。
+- **重新開機後**等待點擊的驅動程式頁面(「最後一步」、「沒有按 7」)會置頂,開機啟動的視窗不會蓋住它。執行驅動程式安裝的頁面不置頂(Windows 自己的警告對話框必須看得到)。
+- **檢查過的安裝檔就是被安裝的安裝檔。** 「確認安裝檔」頁顯示的 SHA-256(將要執行的 MSI:檔案本身,或 zip 裡的 Setup.msi)以 `/msi-sha256 <64 個十六進位字元>` 傳給提升權限的階段。動詞表標記 `/full` 與 `/msi-only` 需要它,沒有有效值(剛好 64 個十六進位字元)就拒絕執行(結束代碼 1、什麼都不做)。該階段計算它那份只有系統管理員能用的副本的 SHA-256,不同就顯示「DynaRun V3 安裝檔和「確認安裝檔」頁面顯示的 SHA-256 對不起來 ...」並以結束代碼 4(`RC_MSI_FAILED`)結束,不會執行 `msiexec`。這補上「確認安裝檔」頁到暫存副本之間的空隙(檔案放在使用者可寫的資料夾)。讀不到雜湊(顯示為 `?`)的安裝檔不會被安裝。
+- **從 MSI 讀到的值**(ProductVersion、Manufacturer):檢查轉換結果、一律補上結尾、依緩衝區截斷(64 與 128 個字元;`msi_info` 現在分別接收兩個大小),控制字元換成空白,之後才顯示在資訊框、用於版本判斷或寫入 log。
+- 修正:`dynafix.dll` 在啟動設定程式前後把 `__COMPAT_LAYER` 還原成原來的樣子:原本沒有設定的變數會再移除,原本設成空值的維持空值。值裡的字以空白與 Tab 分隔。兩行 log 不再帶沒有意義的數字。
+- 內部:`machine_full` 與新的 `/msi-only` 階段共用 MSI 暫存與執行;純函式 `df_compat_with_invoker`(有測試)組出 `__COMPAT_LAYER` 的值;`in_install_chain` 是 `src\install_chain.h` 裡的純函式(有測試);精靈各流程的差異(授權頁的安裝工作、結束頁、被拒絕後要回到的頁面)改成 `FLOWS[]` 與 `JOBS[]` 的欄位,不再是 `if (wz.flow ...)` 分支,「僅安裝原版軟體」的結束頁是獨立的一頁(`P_MSI_DONE`)。
+
+## v1.7.2 — 2026-10-18
 
 內部重構(不打算改變行為;見「修正」):`setup.c` 依主題拆成 `src\setup\` 內的檔案、`wizard.c` 拆成 `src\wizard\` 內的流程檔(仍是單一編譯單元);`setup.h` 改為 `drf_*.h` 模組標頭的總入口;結果碼在 `src\errors.h` 命名(數值不變);安裝選項以 `install_opts` 傳遞而非全域變數;安裝程式與驅動程式階段共用一張命令列動詞表;精靈改用頁面表與工作表;啟動器與更新檢查共用 `src\applog.h`(log 鎖、時鐘、值名稱、動詞);`dynafix.c` 拆成 `dynafix_*.inc.c`。僅供測試的程式碼(COM 登錄提升、整包 zip 解壓)移出正式原始碼,放到 `tests\`。
 
@@ -687,7 +733,7 @@ Changed and fixed (after a review of v1.4.0):
   - 下載:每一次轉址都檢查 HTTPS 與主機(更新下載只能轉址到 GitHub 自己的主機)、使用 TLS 1.2 以上(Windows 7 需要 KB3140245)、大小上限 300 MB、提前中斷的下載不會被當成完成。系統程式庫只從系統資料夾(System32)載入。
   - 精靈取消或失敗時,會從 `%TEMP%\DynaRunFix` 刪除已解密的 Dyna Pro `Setup.msi`。
   - 首次啟動:只有明確讀到是綠色(已勾選)的選項按鈕才會寫入;`dynafix.dll` 讀不到 DynaRun 的選項按鈕(或無法確定看到的內容)時**什麼都不寫**,只記 log(以前可能寫入使用者沒有選的功能旗標)。
-  - `dynafix.dll` 在 DynaRun 自己的行程中清除 `__COMPAT_LAYER`,使啟動器設的 `RunAsInvoker` 不會讓 Dyna Pro 設定程式的一次性 UAC 提示消失;
+  - `dynafix.dll` 在 DynaRun 自己的行程中清除 `__COMPAT_LAYER`,使啟動器設的 `RunAsInvoker` 不會讓 Dyna Pro 設定程式的一次性 UAC 提示消失(v1.8.0 起已取代:設定程式改為不提升權限啟動);
     圖表語言的導向一律只載入資源,而且無法判斷是否提升權限時一律拒絕。
   - `dynafix.log` 不再記錄其他模組匯入表欄位的絕對位址,只記模組與 API 名稱;啟動器與 dll 開啟它時也不跟隨連結(符號連結、連接點)。
   - manifest 的版本是 `1.0.0.0`;安裝程式的產品版本是 `1.4.0`。

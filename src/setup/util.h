@@ -24,6 +24,15 @@ const PfnDliHook __pfnDliNotifyHook2 = dll_hook;
 
 /* ---------- small helpers (no C runtime) ---------- */
 
+// A SHA-256 as the command line and the wizard carry it: exactly 64 hexadecimal digits (any case), nothing else.
+static BOOL hex64_ok(const WCHAR *s)
+{
+    int i;
+    if (!s) return FALSE;
+    for (i = 0; i < 64; i++) if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') || (s[i] >= 'A' && s[i] <= 'F'))) return FALSE;
+    return s[64] == 0;
+}
+
 void zero(void *p, SIZE_T n) { volatile char *z = (volatile char *)p; while (n--) *z++ = 0; }
 void install_opts_default(install_opts *o) { zero(o, sizeof(*o)); o->pin = TRUE; o->autostart = TRUE; }
 void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }

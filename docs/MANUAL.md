@@ -84,6 +84,13 @@ whenever DynaRun starts its first-time setup helper (normally only on the very f
 
 ## What's new
 
+v1.8.0 (released 2026-10-18):
+- New: a version check of Dyna Pro's setup. 3.26.0 (the tested version) installs as before; another 3.x, or a version that cannot be read, shows a notice (tested only with 3.26.0, report problems at [GitHub issues](https://github.com/timliudev/DynaRunFix/issues)) and the install goes on; **DynaRun 4 or later** gets its own page that explains it may not need the fix and offers *Install original software only* (Dyna Pro's setup alone: no fix, no driver) next to *Install the fix anyway*.
+- Changed: the *Check the installer* page shows the source, the MSI's version and manufacturer first, in a smaller font, and fits without scrolling; for a setup found on this computer, *Download it* takes the file from Dyna Pro's website instead.
+- Changed: **the first start no longer asks for permission** (no UAC prompt) for Dyna Pro's configuration helper `Setup_<n>.exe`: it only writes `HKCU\Software\DynaPro`, so it is started without elevation.
+- Changed (setup wizard): while Dyna Pro's setup installs, the wizard stays directly behind msiexec's progress window (not always on top); after the restart the driver pages that wait for a click are kept on top of start-up windows (not while the driver installs, so Windows' warning stays visible); when a background step ends, the wizard is not in front and it now waits for a click, its taskbar button flashes and Windows shows a notification.
+- Changed (security): the SHA-256 shown on the *Check the installer* page is handed to the elevated step, which does not run Dyna Pro's setup if its own copy has another SHA-256; the version and manufacturer read from the MSI are cleaned (control characters) and cut before they are shown or logged.
+
 v1.7.2 (released 2026-10-18):
 - Fix: a very long `%APPDATA%` path (about 200 characters or more) no longer overflows a buffer in the shortcut and taskbar pin code; the folder that does not fit is skipped.
 - Fix: the setup wizard ignores a "job finished" window message that its own worker thread did not send (it could crash the wizard). Also: "Close DynaRun and install" applies to one install only, and a failed driver preparation removes the staged driver files. The rest is an internal source reorganisation without intended changes; see the [changelog](../CHANGELOG.md).
@@ -119,9 +126,19 @@ All versions: [CHANGELOG.md](../CHANGELOG.md).
    [Dyna Pro's website](https://dynapro.co.uk/Software_Release.htm) (or uses a
    DynaRun setup zip or `Setup.msi` already in *Downloads*, on the desktop, in *Documents* or next to the
    installer), asks for the **setup password you got
-   from Dyna Pro**, shows a *Check the installer* page (where the file came from, its full path, size, SHA-256 and the MSI's version and manufacturer, in a box you can copy from), then Dyna Pro's license (read from the setup and shown by DynaRunFix itself) and installs DynaRun V3 and the fix only after you accept it (if the
-   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead).
+   from Dyna Pro**, shows a *Check the installer* page (a box you can copy from, in a smaller font so that all of it fits without scrolling: first where the file came from, the MSI's version and manufacturer, then the file's full path, size and SHA-256; for a setup found on this computer the page also has *Download it*, which gets the file from Dyna Pro's website instead), then Dyna Pro's license (read from the setup and shown by DynaRunFix itself) and installs DynaRun V3 and the fix only after you accept it (if the
+   license cannot be read from the setup, you must confirm that you accept Dyna Pro's license terms instead). The SHA-256 on that page is also what the install is held to: the elevated step (`/full`, `/msi-only`, which take it as `/msi-sha256 <64 hex digits>` and are refused without it) copies the MSI into an administrators-only folder, computes the SHA-256 of that copy and stops with an error, running nothing, if it is not the one you were shown (the file in your folder could have been replaced after the page). A setup whose SHA-256 could not be read (shown as `?`) is not installed.
    If DynaRun V3 is already installed, it only installs the fix. If DynaRun V3 is installed in a folder the setup does not find, the first page has *Installed elsewhere...* to point it at `DynaRun V3.exe`. Windows asks once for permission: click **Yes**. That one prompt is for the whole install; when the driver is ticked too it covers the driver's preparation as well (the driver pages come before the install, see below).
+   **Version check.** The MSI's ProductVersion is classified in one place (`dynarun_ver_class` in `src\package.c`; the UpgradeCode and product name check stays). Exactly 3.26.0, the version the fix was tested with: nothing changes.
+   Another 3.x (or older): a notice on the *Check the installer* and license pages says it was tested only with 3.26.0, that there may be additional problems, and where to report them (<https://github.com/timliudev/DynaRunFix/issues>); the install goes on.
+   A version that cannot be read: a notice too, the install goes on. Version 4 or later (possibly no longer a Visual Basic 6 program, perhaps native Windows 10/11, so it may not need the fix): after *Check the installer* a page says so and
+   suggests installing Dyna Pro's software alone first and trying it. *Install the fix anyway* (right-most) stays disabled until *I understand that DynaRunFix has not been tested with this version* is ticked. *Install original software only*
+   goes on to the license page and then installs Dyna Pro's setup alone (one administrator prompt, the same checked copy of the MSI): no fix, no change of shortcuts, no taskbar pin, no start at sign-in, and **no USB driver**
+   (the driver step belongs to the fix: it exists for V3's unsigned FTDI driver and was never checked with V4; the driver box of the first page is ignored). Its last page, *Dyna Pro's software is installed*, has *Close* only, which just closes the wizard (it does not start DynaRun). If V4 then shows the old problems, run this setup again: it finds the installed DynaRun and offers the fix.
+   The check box of the V4 page and of the license page starts unticked every time the page is shown, also when you come back to it after declining the administrator prompt.
+   **Windows and notifications.** While the elevated install runs, the wizard keeps itself directly behind the window of the install that has the foreground (the UAC prompt, Dyna Pro's progress window "Please wait while Windows configures ...", the driver warning), above all other windows,
+   but never always-on-top: you can switch to another program, and a program you switched to is left alone (the log says only that an unrelated window has the foreground, not whose it is). **Alert.** When a background step (download, extraction, install, driver step) has ended and the wizard now waits for your click, and it is not the window in front, its taskbar button flashes
+   and Windows shows a notification (a temporary tray icon; it goes after 10 seconds, when you return, or when the wizard ends). Nothing happens when the wizard starts the next step by itself (for example the extraction right after the download), while its window is closing, on the page that restarts the computer by itself, or when the wizard is in front; after the restart the sign-in start calls you once, when the wizard opens. After the restart the driver pages that wait for your click (*Last step*, *7 was not pressed*) are kept on top of the programs that start with Windows; they stop being on top when you click *Install*, so that Windows' red warning is not hidden.
    A download that is interrupted is retried by itself (after 1, 2, 4, 8 and 15 seconds; the count starts over whenever data arrived), the page shows
    the first error of the failed attempts, the *Pause* button stops it cleanly and *Resume* (or, after an error, *Continue download*) carries on from
    the part that is already there; *Open website* and *Choose file...* remain as ways around it. When Windows says the computer is not connected to a
@@ -134,8 +151,8 @@ All versions: [CHANGELOG.md](../CHANGELOG.md).
    whether a newer DynaRun V3 is published (the page names the version next to the download link: 3.26.0 today; if it ever stops naming one, the zip on
    the site is asked for its first byte, nothing more is downloaded, and its ETag / length / date are compared with those of the last completed download) and, if so, shows a line and *Download new version*. It is only a hint: nothing is downloaded or
    installed unless you click it, a failed check says nothing, and each result is one line in the setup's log (`%TEMP%\DynaRunFix-setup.log`; `setup.log` in the install folder when run as administrator).
-3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) Windows asks
-   once more for permission for Dyna Pro's configuration helper: click **Yes**; DynaRun then restarts by itself.
+3. Start DynaRun with its usual **DynaRun V3** icon. On the very first start (system selection) pick your model and click OK; DynaRun then restarts by itself.
+   Windows no longer asks for permission here (before v1.8.0 it asked once for Dyna Pro's configuration helper).
 
    First time on this PC? The Dyna Pro USB driver is needed too. On Windows 10/11 the setup wizard can install it (the check box on its first
    page; it downloads the driver, restarts the computer once, you press **7** in the menu that appears and choose *Install this driver
@@ -202,7 +219,7 @@ Windows XP, 7, 10 and 11 are supported (the driver option needs Windows 10 or 11
 - `/uninstall`: uninstalls (also what *Programs and Features* runs); with `/quiet` it asks nothing and removes only the fix (DynaRun V3 stays), a running DynaRun is closed only if `/close` is also given, and files that are in use are removed at the next restart; `/notaskbar`, `/noautostart`: leave out the taskbar pin and the start with Windows (below); `/keep`: leave the pin, the start at sign-in and the desktop shortcut as they are (what an update uses).
 - `/driver`: opens the driver pages of the wizard directly (download, restart, install), without installing DynaRun or the fix; this is what the Start menu shortcut runs.
 - `/driver-cancel`: takes back a started driver installation (the scheduled task, the one-time boot option and the BitLocker suspension); it installs and removes no driver. It must be run from an administrator command prompt: otherwise it exits with code 1 and does nothing.
-- Internal (do not run them by hand): `/driver-continue` (what the scheduled task `DynaRunFix-DriverContinue` starts after the restart), `/driver-prep`, `/driver-install`, `/machine`, `/full`, `/unmachine`, `/checkupdate`, `/update`, `/offer`.
+- Internal (do not run them by hand): `/driver-continue` (what the scheduled task `DynaRunFix-DriverContinue` starts after the restart), `/driver-prep`, `/driver-install`, `/machine`, `/full`, `/msi-only`, `/unmachine`, `/checkupdate`, `/update`, `/offer`. `/full` and `/msi-only` also need `/msi-sha256 <64 hexadecimal digits>` after the MSI path (the SHA-256 the wizard showed); without a valid value they exit with code 1 and run nothing.
 
 Exit codes of the setup:
 
@@ -309,7 +326,8 @@ the token was non-elevated, or the compatibility setting was ignored, a one-time
 (English or Traditional Chinese; answer *No* to *Show this notice again next time?* to switch it off). If a DynaRun that
 is already running was started with more rights than the launcher has, the launcher asks you to close it and start it again through DynaRunFix.
 The compatibility variable `__COMPAT_LAYER=RunAsInvoker` that the launcher sets for DynaRun is removed again by `dynafix.dll` inside DynaRun's
-process, so that Dyna Pro's configuration helper, which DynaRun starts on the first start, still asks for permission as it normally does.
+process, so that DynaRun's other child processes are not changed. The one exception is Dyna Pro's configuration helper `Setup_<n>.exe` of the first start: `dynafix.dll` starts it with `RunAsInvoker`
+for that one start only (the variable is set for the call and put back), so Windows' installer detection does not raise a permission prompt for it; it only writes `HKCU\Software\DynaPro`.
 Do not run `DynaRun V3.exe` itself as administrator, see [below](#run-as-administrator-is-not-needed).
 
 ### Installing the Dyna Pro USB driver
@@ -356,8 +374,8 @@ Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25.dll import of Po
   and before installing it
   checks that the file identifies itself as the DynaRun V3 setup (Windows Installer upgrade code and product name). Dyna Pro
   does not sign its setup and does not publish checksums, so **DynaRunFix cannot prove that the file is exactly what Dyna Pro
-  released**. Use only files you got from Dyna Pro's official site. On its *Check the installer* page (just before the license page) the installer shows the file's full
-  path, size, SHA-256 and the MSI's version and manufacturer, so you can compare them with whatever Dyna Pro gives you; it does
+  released**. Use only files you got from Dyna Pro's official site. On its *Check the installer* page (just before the license page) the installer shows where the file came from,
+  the MSI's version and manufacturer, and the file's full path, size and SHA-256, so you can compare them with whatever Dyna Pro gives you; it does
   not block anything based on them.
 - **DynaRunFix's own updates:** the installer is checked against the SHA-256 that GitHub lists for the release file. Each
   release's notes include `SHA256SUMS.txt` (also attached to the release), and the release files carry a build provenance
@@ -375,14 +393,14 @@ Check `%TEMP%\dynafix.log`: it should contain `patched THBRes25.dll import of Po
 ## First-time setup
 
 On its first start DynaRun asks for the language, then for the dyno model and optional features
-("Dyna Pro系統選擇"). After **OK** Windows asks once for permission for `Setup_<nnn>.exe`, Dyna Pro's per-model
-configuration helper: click **Yes**. DynaRun then restarts by itself with the chosen model, language and optional
+("Dyna Pro系統選擇"). After **OK** DynaRun starts `Setup_<nnn>.exe`, Dyna Pro's per-model configuration helper; Windows' installer detection would ask for
+permission for it, so `dynafix.dll` starts it without elevation (since v1.8.0 there is no prompt; the helper only writes `HKCU\Software\DynaPro`, see [FIRST_START](FIRST_START.md)). DynaRun then restarts by itself with the chosen model, language and optional
 features (climate monitor, water cooler, cooling fans, AFR analyser).
 
 Without the fix DynaRun 3.26.0 hangs at this point on every Windows version, XP included: after the helper has
 run, the selection window stays and one CPU core runs at 100 %. After a forced restart the language is English
 and the optional features are off (the helper leaves the language value in the registry as `English` and the features' enable flags as `0`). `dynafix.dll` wraps DynaRun's `ShellExecuteA` call in memory:
-it waits for the helper, puts the chosen language back, switches on the picked features with the same values
+it starts the helper without elevation (`__COMPAT_LAYER` gets `RunAsInvoker` for that one call; the log says `setup helper started without elevation (RunAsInvoker)`), waits for it, puts the chosen language back, switches on the picked features with the same values
 *Engineering mode → System configuration → Save and exit* writes, and restarts DynaRun through
 `DynaRunFix.exe /restart <pid>`. Each step is logged to `%TEMP%\dynafix.log` (the log never contains module or import addresses, and a symbolic link or junction in its place is not followed; every line starts with the date and time; a line is at most 1000 characters, longer ones end in `...`). `dynafix.dll` and the launcher can write to it at the same time: they take turns through a named lock (`Local\DynaRunFix.dynafix.log`), so lines are never mixed up, but their lines are interleaved. The size is checked only when the dll or the launcher starts: above 10 MB the file is cut to its newest 8 MB, from a full line on.
 
@@ -675,7 +693,7 @@ different foreign hook after the chain is set is left unpatched and logged rathe
 kernel32/kernelbase/gdi32/gdi32full/user32 and `api-ms-win-*` API sets match; a module without an import name table falls back to
 the old address match. `dynafix.log` shows `patched ... (by name)`, `... already held a hook: chained onto it`,
 `... not patched: ...` for each slot that could not be patched, and a per-module `import patch <module> [<table>]: N patched, M failed` line.
-`tests\build-shexec-tests.cmd` builds and runs the unit tests (the first-start helper path matching, `src\setup_match.h`; the `DYNAFIX_*` switch and `dynapro.dll` name parsing, `src\dfutil.h`; parts of the launcher); it exits with 0 if all pass. `tests\build-tests.cmd` builds the log test harness and
+`tests\build-shexec-tests.cmd` builds and runs the unit tests (the first-start helper path matching, `src\setup_match.h`; the `DYNAFIX_*` switch and `dynapro.dll` name parsing and the `RunAsInvoker` layer word, `src\dfutil.h`; parts of the launcher); it exits with 0 if all pass. `tests\build-tests.cmd` builds the log test harness and
 `tests\build-hardening-tests.cmd` builds and runs the installer hardening tests, and `tests\build-driver-tests.cmd` the driver tests (see `tests\README.md`).
 Diagnostic `DYNAFIX_STATS=1`: every 5 s `dynafix.log` gets one `stats(5s)` line (only when something happened) with the form
 `WM_SIZE` count, how many were duplicates, how many THBResize `0x591` messages were passed on or skipped and how many forms were
@@ -771,6 +789,13 @@ DynaRun 執行中不會裁剪,所以單次執行期間檔案可能超過 10 MB;�
 log 只記模組與 API 名稱、不含模組或匯入位址(可能出現視窗與 GDI 控制代碼的值),寫入時不跟隨符號連結或連接點,但可能含有檔案路徑與視窗標題,貼到網路上之前請先檢查。同一個 dll 也修正[首次設定](#首次設定)與 [OneDrive 檔案打不開](#部分-dpr-打不開file-run-properties-全空沒有曲線)的問題。
 
 ### 更新內容
+v1.8.0(2026-10-18 發行):
+- 新增:檢查 Dyna Pro 安裝檔的版本。3.26.0(測試過的版本)照舊安裝;其他 3.x 或讀不到版本時會顯示提示(只在 3.26.0 測試過,有問題請到 [GitHub issues](https://github.com/timliudev/DynaRunFix/issues) 回報),安裝繼續;**DynaRun 4 以上**有獨立的頁面,說明它可能不需要修正,並提供「僅安裝原版軟體」(只安裝 Dyna Pro 的安裝檔:不裝修正、不裝驅動程式)與「仍要安裝修正」。
+- 變更:「確認安裝檔」頁先顯示來源、MSI 的版本與製造商,字型較小、不需捲動就能看完;在這台電腦上找到的安裝檔,可按「改從官網下載」改用 Dyna Pro 官網的檔案。
+- 變更:**第一次啟動不再詢問是否允許變更**(沒有 UAC 提示):Dyna Pro 的設定程式 `Setup_<編號>.exe` 只寫入 `HKCU\Software\DynaPro`,所以改為不提升權限啟動。
+- 變更(安裝精靈):Dyna Pro 的安裝程式執行時,精靈會緊貼在 msiexec 進度視窗後面(不是永遠在最上層);重新開機後等待點擊的驅動程式頁面會蓋過開機啟動的視窗(驅動程式安裝中則不會,Windows 的警告才看得到);背景步驟結束、精靈不在最前面而且現在等你點擊時,工作列按鈕會閃爍,並顯示 Windows 通知。
+- 變更(安全性):「確認安裝檔」頁顯示的 SHA-256 會傳給提升權限的步驟,該步驟自己的副本 SHA-256 不同時就不會執行 Dyna Pro 的安裝檔;從 MSI 讀到的版本與製造商會先清掉控制字元並截斷,才顯示或寫入 log。
+
 v1.7.2(2026-10-18 發行):
 - 修正:%APPDATA% 路徑非常長(約 200 個字元以上)時,捷徑與工作列釘選程式碼不再造成緩衝區溢位;放不下的資料夾會被略過。
 - 修正:安裝精靈會忽略不是它自己的工作執行緒送出的「工作完成」視窗訊息(先前可能使精靈當機)。另外:「關閉 DynaRun 並安裝」只對一次安裝有效,驅動程式準備失敗時會移除已放置的驅動程式檔。其餘是內部原始碼整理,不打算改變行為;見[更新紀錄](../CHANGELOG.md)。
@@ -802,14 +827,24 @@ v1.6.0(2026-10-17 發行):
 
 2. 照畫面操作。還沒安裝 DynaRun V3 時，會從 [Dyna Pro 官網](https://dynapro.co.uk/Software_Release.htm)下載安裝檔
    （「下載」、桌面、「文件」或安裝程式旁邊已經有 DynaRun 安裝檔 zip 或 `Setup.msi` 就直接用），請你輸入 **Dyna Pro 給的安裝密碼**，
-   先顯示「確認安裝檔」頁（檔案的來源、完整路徑、大小、SHA-256，以及 MSI 的版本與製造商，放在可以複製文字的框裡），再顯示 Dyna Pro 的授權合約（取自安裝檔，由 DynaRunFix 自己顯示），你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。已經裝好 DynaRun V3 時，只會安裝修正。DynaRun V3 裝在安裝程式找不到的資料夾時，第一頁有「已裝在其他位置…」可以指定 `DynaRun V3.exe`。
+   先顯示「確認安裝檔」頁（可以複製文字的框，字型較小、不需捲動就能看完：先是檔案的來源、MSI 的版本與製造商，再是檔案的完整路徑、大小與 SHA-256；在這台電腦上找到的安裝檔，頁面另有「改從官網下載」，改用 Dyna Pro 官網的檔案），再顯示 Dyna Pro 的授權合約（取自安裝檔，由 DynaRunFix 自己顯示），你接受後才安裝 DynaRun V3 和修正（安裝檔裡的合約讀不出來時，必須勾選同意 Dyna Pro 的授權條款才能繼續）。該頁顯示的 SHA-256 也是安裝時要符合的值：提升權限的步驟（`/full`、`/msi-only`，以 `/msi-sha256 <64 個十六進位字元>` 取得它，沒有就拒絕執行）把 MSI 複製到只有系統管理員能用的資料夾，計算那份副本的 SHA-256，和你看到的不同就顯示錯誤並結束，什麼都不執行（你資料夾裡的檔案可能在顯示該頁之後被換掉）。讀不到 SHA-256（顯示為 `?`）的安裝檔不會被安裝。已經裝好 DynaRun V3 時，只會安裝修正。DynaRun V3 裝在安裝程式找不到的資料夾時，第一頁有「已裝在其他位置…」可以指定 `DynaRun V3.exe`。
    Windows 會詢問一次是否允許變更，請按 **是**。這是整個安裝只問的一次；同時勾選驅動程式時，它也涵蓋驅動程式的準備（驅動程式的頁面會排在安裝之前，見下方）。
+   **版本檢查。** 安裝檔 MSI 的 ProductVersion 只在一個地方分類(`src\package.c` 的 `dynarun_ver_class`;升級代碼與產品名稱的檢查照舊)。剛好是 3.26.0(修正測試過的版本):沒有任何變化。
+   其他 3.x(或更舊):「確認安裝檔」頁與授權合約頁會顯示提示——只在 3.26.0 測試過、可能有額外問題、請到 <https://github.com/timliudev/DynaRunFix/issues> 回報;安裝繼續。
+   讀不到版本:同樣顯示提示,安裝繼續。4 以上(可能已不是 Visual Basic 6 程式,也許是原生 Windows 10/11,所以可能不需要修正):「確認安裝檔」之後會有一頁說明,並建議先單獨安裝 Dyna Pro 的軟體試用。
+   必須勾選「我了解 DynaRunFix 未在此版本測試過」,最右邊的「仍要安裝修正」才能按。「僅安裝原版軟體」會先到授權合約頁,再只安裝 Dyna Pro 的安裝檔(一次系統管理員確認,同樣是檢查過的 MSI 副本):
+   不裝修正、不改捷徑、不釘選工作列、不設開機自動啟動,也**不裝 USB 驅動程式**(驅動程式步驟屬於修正:它是為 V3 未簽章的 FTDI 驅動程式而設,沒有以 V4 檢查過;第一頁的驅動程式核取方塊會被忽略)。
+   它的最後一頁「Dyna Pro 的軟體已安裝」只有「關閉」,按下去只會關閉精靈(不會啟動 DynaRun)。之後如果 V4 出現舊的問題,再執行一次本程式:它會找到已安裝的 DynaRun 並提供安裝修正。
+   V4 頁與授權合約頁的核取方塊,每次顯示該頁時都是未勾選,從被拒絕的系統管理員確認回到該頁時也一樣。
+   **視窗順序與通知。** 提升權限的安裝進行時,精靈會讓自己緊貼在目前取得前景、屬於安裝流程的視窗後面(UAC 提示、Dyna Pro 的進度視窗「Please wait while Windows configures ...」、驅動程式警告),並在其他視窗之上,
+   但不是永遠在最上層:你可以切換到別的程式,切過去的程式不會被干擾。背景步驟(下載、解壓縮、安裝、驅動程式步驟)結束、精靈現在等你點擊,而它不是最前面的視窗時,工作列按鈕會閃爍,
+   並顯示 Windows 通知(暫時的系統匣圖示;10 秒後、你回來時,或精靈結束時消失)。精靈自己接著做下一個步驟時(例如下載後馬上解壓縮)、視窗正在關閉時、自動重新開機的那一頁,以及精靈在最前面時,都不會通知;重新開機後登入時的繼續,會在精靈開啟時通知一次。切過去的程式不會被干擾(log 只會寫「有無關的視窗在前景」,不寫是誰的)。重新開機後等待你點擊的驅動程式頁面(「最後一步」、「沒有按 7」)會蓋過開機啟動的程式;按下「安裝」後就不再置頂,Windows 的紅色警告才不會被擋住。
    下載中斷時會自動重試（依序等 1、2、4、8、15 秒；只要有資料進來就重新計數），頁面會顯示失敗過程中的第一個錯誤；「暫停」會乾淨地停止，
    「繼續」（錯誤之後是「繼續下載」）會從已經下載的部分接續；「開啟官網」與「選擇檔案…」仍然可用。Windows 說電腦完全沒有連上網路時，錯誤頁會立刻出現（不用等重試）；主機不回應時 10 秒就放棄。驅動程式走同樣的頁面（先找電腦上現有的，再下載）；它的「選擇檔案…」可以選 zip，或已解開它的資料夾裡的 ftdibus.inf。
    精靈第一頁最多有三個核取方塊:釘選到工作列、開機時自動啟動 DynaRun,以及(Windows 10/11 且尚未安裝驅動程式時)**同時安裝 Dyna Pro USB 驅動程式（需重新開機一次）**(見下方)。
    DynaRun V3 和這個版本的修正都已安裝、只缺驅動程式時，第一頁只提供驅動程式（以及「重新安裝修正…」）。DynaRun V3 已安裝且電腦有網路時，第一頁還會在背景詢問 Dyna Pro 軟體頁面有沒有新版 DynaRun V3（那一頁在下載連結旁寫著版本，目前是 3.26.0；萬一不再寫版本，就向網站上的 zip 要第一個位元組（不會再下載其他內容），把它的 ETag / 長度 / 日期和上次完成的下載比對），有的話會顯示一行說明與「下載新版」。這只是提示：不按就不會下載或安裝任何東西，檢查失敗也不說什麼，每個結果在安裝程式的記錄檔（`%TEMP%\DynaRunFix-setup.log`；以系統管理員身分執行時是安裝資料夾裡的 `setup.log`）裡是一行。
-3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，Windows 會再問一次是否允許 Dyna Pro 的設定程式變更，
-   請按 **是**，DynaRun 會自己重新啟動。
+3. 以後照常點 **DynaRun V3** 圖示啟動。第一次啟動（選擇系統）時，選好機型按 OK，DynaRun 會自己重新啟動。
+   Windows 不會再詢問是否允許變更(v1.8.0 之前會為 Dyna Pro 的設定程式問一次)。
 
    這台電腦第一次連接 Dyna Pro?還需要 Dyna Pro USB 驅動程式。Windows 10/11 上可以由安裝精靈安裝(精靈第一頁的核取方塊:它會下載驅動程式、重新開機一次,
    你在出現的選單按 **7**、並兩次選擇「仍然安裝此驅動程式軟體」,登入後它會自動繼續);之後也可以用開始功能表捷徑「安裝 Dyna Pro USB 驅動程式」或
@@ -853,7 +888,7 @@ DynaRun 的 exe 與程式內容不會被改動（捷徑檔會備份並還原；�
 - `/uninstall`：解除安裝（「程式和功能」執行的也是它）；加上 `/quiet` 時不問任何問題、只移除修正（DynaRun V3 保留），執行中的 DynaRun 只有同時加 `/close` 才會被關閉，使用中的檔案在下次重新啟動時移除；`/notaskbar`、`/noautostart`：不釘選到工作列、不在開機時啟動（見下方）；`/keep`：讓釘選、開機自動啟動和桌面捷徑維持原樣（更新時使用）。
 - `/driver`：直接開啟精靈的驅動程式頁面（下載、重新開機、安裝），不安裝 DynaRun 或修正；開始功能表捷徑執行的就是它。
 - `/driver-cancel`：撤回已開始的驅動程式安裝（排程工作、一次性開機選項與 BitLocker 暫停）；它不安裝也不移除驅動程式。必須在以系統管理員身分開啟的命令提示字元中執行，否則以結束代碼 1 結束，什麼都不做。
-- 內部使用（請勿手動執行）：`/driver-continue`（重新開機後排程工作 `DynaRunFix-DriverContinue` 啟動的）、`/driver-prep`、`/driver-install`、`/machine`、`/full`、`/unmachine`、`/checkupdate`、`/update`、`/offer`。
+- 內部使用（請勿手動執行）：`/driver-continue`（重新開機後排程工作 `DynaRunFix-DriverContinue` 啟動的）、`/driver-prep`、`/driver-install`、`/machine`、`/full`、`/msi-only`、`/unmachine`、`/checkupdate`、`/update`、`/offer`。`/full` 與 `/msi-only` 在 MSI 路徑之後還需要 `/msi-sha256 <64 個十六進位字元>`(精靈顯示過的 SHA-256);沒有有效值就以結束代碼 1 結束,什麼都不執行。
 
 安裝程式的結束代碼：
 
@@ -912,7 +947,8 @@ Windows Installer 自己做不到，會出現錯誤 1305。不會改變檔案內
 殼層的 token 本身已提升時（UAC 關閉，或使用內建的 Administrator：平常的桌面就是完整系統管理員），啟動器沿用它繼續執行並寫入 `dynafix.log`，沒有什麼需要放掉；此時 `dynafix.dll` 會略過圖表語言的轉向（見下方）。
 只有完全取不到殼層 token 時，啟動器才會顯示訊息、不啟動 DynaRun。token 是一般權限，或相容性設定被忽略時，會顯示一次性通知（英文或繁體中文；對「下次還要顯示這個通知嗎？」回答「否」即可關閉）。
 如果已經在執行的 DynaRun 是以高於啟動器的權限啟動的，啟動器會請你關閉它，再透過 DynaRunFix 重新啟動。
-啟動器為 DynaRun 設的相容性變數 `__COMPAT_LAYER=RunAsInvoker`，會由 `dynafix.dll` 在 DynaRun 行程內再清除，使首次啟動時 DynaRun 所啟動的 Dyna Pro 設定程式仍照常詢問是否允許變更。
+啟動器為 DynaRun 設的相容性變數 `__COMPAT_LAYER=RunAsInvoker`，會由 `dynafix.dll` 在 DynaRun 行程內再清除，DynaRun 的其他子行程不受影響。唯一的例外是首次啟動的 Dyna Pro 設定程式 `Setup_<編號>.exe`：`dynafix.dll` 只在啟動它的那一次呼叫加上 `RunAsInvoker`
+（呼叫前設定、呼叫後立刻還原），Windows 的安裝程式偵測就不會對它要求權限；它只寫入 `HKCU\Software\DynaPro`。
 請不要直接以系統管理員身分執行 `DynaRun V3.exe`，見[下方](#不需要以系統管理員身分執行)。
 
 #### 安裝 Dyna Pro USB 驅動程式
@@ -953,8 +989,8 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest 與 `LICE
 - **DynaRun V3 安裝檔(Dyna Pro 的檔案):** DynaRunFix 只透過 HTTPS 從 `dynapro.co.uk` 下載(憑證無效時會拒絕；每一次重新導向都會再檢查是否仍是 HTTPS 與 `dynapro.co.uk`，導向到其他位置或明文 HTTP 都會被拒絕)，
   使用 TLS 1.2 以上(Windows 7 需要更新 KB3140245)，大小上限 300 MB，
   安裝前會檢查檔案自稱是 DynaRun V3 的安裝檔(Windows Installer 的升級代碼與產品名稱)。Dyna Pro 的安裝檔沒有數位簽章,也沒有公布雜湊值,
-  所以 **DynaRunFix 無法證明檔案與 Dyna Pro 發布的完全一致**。請只使用從 Dyna Pro 官方網站取得的檔案。「確認安裝檔」頁（授權合約頁之前）會顯示檔案的完整路徑、大小、SHA-256,
-  以及 MSI 的版本與製造商,讓你與 Dyna Pro 提供的資訊自行比對;安裝程式不會依此阻擋任何事。
+  所以 **DynaRunFix 無法證明檔案與 Dyna Pro 發布的完全一致**。請只使用從 Dyna Pro 官方網站取得的檔案。「確認安裝檔」頁（授權合約頁之前）會顯示檔案的來源、MSI 的版本與製造商,
+  以及檔案的完整路徑、大小與 SHA-256,讓你與 Dyna Pro 提供的資訊自行比對;安裝程式不會依此阻擋任何事。
 - **DynaRunFix 自己的更新:** 安裝檔會用 GitHub 為該版本檔案列出的 SHA-256 核對。每個版本的說明都附有 `SHA256SUMS.txt`(也作為檔案附在版本上),
   版本檔案並附有建置來源證明(由哪個儲存庫、哪個工作流程建置)。自行檢查下載的檔案:
   `gh attestation verify DynaRunFix-Setup.exe --repo timliudev/DynaRunFix`。這只能顯示檔案建置自何處,不代表檔案安全;安裝程式沒有程式碼簽章(見上方 SmartScreen 說明)。
@@ -962,8 +998,8 @@ Releases 的 zip 內含同樣的檔案（另外還有 `le\`、manifest 與 `LICE
   只會解開 Windows 要安裝的 18 個檔案,每個檔案的目的路徑都由程式自己的表格決定(不採用 zip 內的項目名稱),放進只有系統管理員能更改的新資料夾,並有大小上限;路徑上若有連結(link)會被拒絕。複製到那裡之後才比對它們的 SHA-256 與安裝程式內建的值,安裝的就是這些副本(安裝前再檢查一次)。檔案不同的套件,只有在警告頁上由你明確按「仍要安裝」後才會安裝,而且只對那一個 zip、那一次安裝有效。驅動程式本身不是 DynaRunFix 的:它是 Dyna Pro 的套件,DynaRunFix 不簽署也不更改它。
 
 ### 首次設定
-首次啟動時 DynaRun 會先問語言,再顯示「Dyna Pro系統選擇」(機型與選購功能)。按 **OK** 後 Windows 會詢問一次是否允許
-`Setup_<編號>.exe`(Dyna Pro 各機型的設定程式)變更,請按 **是**。之後 DynaRun 會自動以選好的機型、語言和選購功能
+首次啟動時 DynaRun 會先問語言,再顯示「Dyna Pro系統選擇」(機型與選購功能)。按 **OK** 後 DynaRun 會啟動
+`Setup_<編號>.exe`(Dyna Pro 各機型的設定程式);Windows 的安裝程式偵測本來會為它詢問是否允許變更,所以 `dynafix.dll` 以不提升權限的方式啟動它(v1.8.0 起沒有提示;它只寫入 `HKCU\Software\DynaPro`,見 [FIRST_START](FIRST_START.md))。之後 DynaRun 會自動以選好的機型、語言和選購功能
 (大氣監測、水冷、冷卻風扇、空燃比分析儀)重新啟動。
 
 沒有修正時,DynaRun 3.26.0 在任何 Windows 版本(包括 XP)都會卡在這裡:設定程式執行完後,選擇視窗不消失、CPU 一核 100%。
@@ -1170,7 +1206,7 @@ dynafix 所有的匯入掛鉤(字型、文字度量、檔案屬性、`GetProcAdd
 來自 kernel32/kernelbase/gdi32/gdi32full/user32 與 `api-ms-win-*` API 集合的匯入都會比對;沒有匯入名稱表的模組退回舊的位址比對。
 `dynafix.log` 會出現 `patched ... (by name)`、`... already held a hook: chained onto it`、無法修補的欄位的 `... not patched: ...`,以及每個模組一行 `import patch <module> [<table>]: N patched, M failed`。
 
-`tests\build-shexec-tests.cmd` 會建置並執行單元測試(首次啟動設定程式的路徑比對 `src\setup_match.h`、`DYNAFIX_*` 開關與 `dynapro.dll` 檔名的解析 `src\dfutil.h`、啟動器的部分功能),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試,`tests\build-driver-tests.cmd` 建置並執行驅動程式測試(見 `tests\README.md`)。
+`tests\build-shexec-tests.cmd` 會建置並執行單元測試(首次啟動設定程式的路徑比對 `src\setup_match.h`、`DYNAFIX_*` 開關、`dynapro.dll` 檔名的解析與 `RunAsInvoker` 相容層字詞 `src\dfutil.h`、啟動器的部分功能),全數通過時結束碼為 0。`tests\build-tests.cmd` 建置 log 測試程式，`tests\build-hardening-tests.cmd` 建置並執行安裝程式強化測試,`tests\build-driver-tests.cmd` 建置並執行驅動程式測試(見 `tests\README.md`)。
 診斷用的 `DYNAFIX_STATS=1`:每 5 秒 `dynafix.log` 會有一行 `stats(5s)`(只在有事發生時),內容是表單 `WM_SIZE` 的次數、其中重複的次數、THBResize `0x591` 訊息被放行或略過的次數,以及表單被顯示或隱藏的次數。
 啟動之後這些行就停止,表示防護已經結束了隱藏/顯示迴圈。
 

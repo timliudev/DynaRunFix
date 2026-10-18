@@ -70,6 +70,16 @@ static void add_driver_args(WCHAR *args, const WCHAR *zip, const WCHAR *accept) 
     if (accept && accept[0]) { lstrcatW(args, L" /unverified "); lstrcatW(args, accept); }
 }
 
+// The elevated stage that runs Dyna Pro's MSI gets the SHA-256 the user saw on the check page (/msi-sha256) and compares its staged copy with it.
+// A setup without a readable hash is not installed: msi_sha_usable tells the user and says FALSE before anything is started.
+static BOOL msi_sha_usable(const WCHAR *sha)
+{
+    if (hex64_ok(sha)) return TRUE;
+    msg(TS(ST_THE_DYNARUN_V3_SETUP_DIFFERS), MB_ICONERROR);
+    return FALSE;
+}
+static void add_msi_sha_arg(WCHAR *args, const WCHAR *sha) { lstrcatW(args, L" /msi-sha256 "); lstrcatW(args, sha); }
+
 int install_fix_driver(const install_opts *o, install_result *res, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
@@ -89,16 +99,18 @@ int install_fix_driver(const install_opts *o, install_result *res, const WCHAR *
 
 int install_fix(const install_opts *o, install_result *res) { return install_fix_driver(o, res, NULL, NULL); }
 
-int install_all_driver(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *zip, const WCHAR *accept)
+int install_all_driver(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *msi_sha, const WCHAR *zip, const WCHAR *accept)
 {
     static WCHAR sid[200], args[2 * MAX_PATH + 400]; int rc;
     if (!user_sid(sid, 200)) return RC_FAIL;
+    if (!msi_sha_usable(msi_sha)) return RC_MSI_FAILED;
     if (running_early(o, L"full install (before elevation)")) return RC_RUNNING;
     CoInitialize(NULL);
     pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
-    if (is_admin()) { rc = machine_full(o, sid, msi); if (!rc && zip) rc = driver_prep_stage(sid, zip, accept); }
+    if (is_admin()) { rc = machine_full(o, sid, msi, msi_sha); if (!rc && zip) rc = driver_prep_stage(sid, zip, accept); }
     else {
         wsprintfW(args, L"/full %s \"%s\"", sid, msi);
+        add_msi_sha_arg(args, msi_sha);
         add_driver_args(args, zip, accept);
         rc = run_elevated(args, NULL, o);
     }
@@ -116,5 +128,28 @@ int install_all_driver(const install_opts *o, install_result *res, const WCHAR *
     return rc;
 }
 
-int install_all(const install_opts *o, install_result *res, const WCHAR *msi) { return install_all_driver(o, res, msi, NULL, NULL); }
+int install_all(const install_opts *o, install_result *res, const WCHAR *msi, const WCHAR *msi_sha) { return install_all_driver(o, res, msi, msi_sha, NULL, NULL); }
+
+// Dyna Pro's setup alone (a DynaRun that is not the tested V3, see dynarun_ver_class): the MSI in the elevated stage, no fix, no shortcuts, no driver. RC_OK, RC_CANCEL, RC_*.
+int install_msi_only(const install_opts *o, const WCHAR *msi, const WCHAR *msi_sha)
+{
+    static WCHAR sid[200], args[2 * MAX_PATH + 160]; int rc;
+    if (!user_sid(sid, 200)) return RC_FAIL;
+    if (!msi_sha_usable(msi_sha)) return RC_MSI_FAILED;
+    if (running_early(o, L"install of Dyna Pro's setup only (before elevation)")) return RC_RUNNING;
+    CoInitialize(NULL);
+    pkg_prepare_documents(msi);         // as this user, before the SYSTEM-side install (error 1305 otherwise)
+    if (is_admin()) rc = machine_msi_only(o, sid, msi, msi_sha);
+    else {
+        wsprintfW(args, L"/msi-only %s \"%s\"", sid, msi);
+        add_msi_sha_arg(args, msi_sha);
+        rc = run_elevated(args, NULL, o);
+    }
+    if (rc == RC_OVER_SHOULDER) {                      // over-the-shoulder elevation: the setup as this user
+        rc = run_msiexec(msi);
+        if (rc == ERROR_INSTALL_USEREXIT) return RC_CANCEL;
+        return rc && rc != ERROR_SUCCESS_REBOOT_REQUIRED ? RC_MSI_FAILED : RC_OK;
+    }
+    return rc;
+}
 
